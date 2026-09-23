@@ -1,0 +1,73 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Micrófono: usado por speech_to_text para los comandos de voz del
+         modo de accesibilidad para personas ciegas (ver
+         lib/services/blind_narrator.dart). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Cámara: usada por el reconocimiento de señas con MediaPipe en la
+         pestaña "Traducir señas" (ver senas_core/INTEGRACION.md). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Internet: sin este permiso Android bloquea TODA conexión de red de
+         la app a nivel de sistema, incluida la del WebView del avatar 3D
+         (senas_core/assets/avatar_viewer/index.html), que necesita bajar
+         three.js/three-vrm de un CDN la primera vez que se abre "Aprender".
+         Sin este permiso el avatar se queda en blanco, sin ningún mensaje
+         de error visible, porque el bloqueo ocurre antes de que JavaScript
+         pueda avisar nada. senas_core sí lo tenía en su AndroidManifest.xml
+         propio (el de su app de ejemplo); a este, el de univoz, se le
+         quedó afuera al integrar. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="false" />
+    <application
+        android:label="univoz"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Requerido en Android 11+ para que speech_to_text pueda ver
+             el servicio de reconocimiento de voz del sistema. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+</manifest>

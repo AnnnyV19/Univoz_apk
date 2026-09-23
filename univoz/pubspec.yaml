@@ -1,0 +1,51 @@
+name: univoz
+description: "Aplicación de comunicación accesible UNIVOZ"
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  # Texto a voz para narrar las primeras pantallas a personas ciegas
+  # antes de que elijan su perfil (ver lib/services/blind_narrator.dart).
+  flutter_tts: ^4.0.0
+  # Reconocimiento de voz: cuando TalkBack está activo, el onboarding se
+  # controla con comandos hablados ("comenzar", "sí", "no", "salir") en
+  # vez de solo narrar la pantalla (ver lib/services/blind_narrator.dart).
+  speech_to_text: ^7.0.0
+  # Reconocimiento de señas (cámara + MediaPipe) y avatar 3D — ver
+  # ../senas_core y lib/screens/traducir_senas_screen.dart.
+  senas_core:
+    path: ../senas_core
+  # Pide el permiso de cámara antes de abrir el reconocedor/avatar.
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+# senas_core fija share_plus en ^7.2.2 (para su función de exportar
+# muestras). Esa versión puntual se compiló contra android-33 pero usa
+# androidx.fragment 1.7.1, que exige compileSdk >= 34 de quien la use —
+# eso rompe el build ("share_plus is currently compiled against
+# android-33"). 8.0.2 ya lo corrige, pero depende de package:web ^0.5.0,
+# que choca con speech_to_text (necesita package:web ^1.0.0) — por eso
+# hace falta 10.0.1+, que ya actualizó a package:web ^1.0.0. senas_core
+# solo llama a Share.shareXFiles(...), que sigue funcionando igual ahí.
+dependency_overrides:
+  share_plus: ^10.0.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    # Diccionario de señas y avatar 3D, de senas_core (copiados a
+    # univoz/assets/ junto a los originales de senas_core/assets/).
+    - assets/plantillas.json
+    - assets/avatar/
+    - assets/avatar_viewer/
