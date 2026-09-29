@@ -10,7 +10,13 @@ import re
 
 _ACENTOS = {
     "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u",
-    "ñ": "n",
+    # La ñ NO se reduce a n: en espanol distingue palabras enteras
+    # (ano/anio, cana/cania, campana/campania) y en LSM esas son senas
+    # distintas. Reducirla juntaria las dos en una sola fila de `signs`, con
+    # muestras contradictorias adentro. "nn" no puede chocar con ninguna
+    # palabra real porque en espanol no existe la doble ene.
+    # Tiene que seguir igual a aGlosa() en lib/muestras_locales.dart.
+    "ñ": "nn",
 }
 
 

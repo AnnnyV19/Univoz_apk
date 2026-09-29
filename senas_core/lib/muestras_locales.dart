@@ -268,6 +268,19 @@ String aGlosa(String palabra) {
       .toUpperCase();
 }
 
+/// Lo que se le muestra a la persona, a partir de la glosa y del español
+/// que escribió.
+///
+/// La glosa es un IDENTIFICADOR, no una etiqueta: existe para que la misma
+/// seña no termine partida en dos filas según cómo se escribió (CASA,
+/// COMO_ESTAS, NN para la ñ). En pantalla siempre va el español, que guarda
+/// los acentos y la ñ tal como los escribió la persona. La glosa queda como
+/// último recurso, para una seña vieja que no tenga español guardado.
+String paraMostrar(String gloss, String? espanol) {
+  final e = espanol?.trim() ?? '';
+  return e.isNotEmpty ? e : gloss;
+}
+
 class AlmacenMuestras extends ChangeNotifier {
   static final AlmacenMuestras instancia = AlmacenMuestras._();
   AlmacenMuestras._();

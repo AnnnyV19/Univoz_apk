@@ -36,6 +36,12 @@ def subir_video(local_path, nombre_remoto):
             endpoint,
             headers={
                 "Authorization": f"Bearer {key}",
+                # Las claves nuevas (sb_secret_...) necesitan ADEMAS la
+                # cabecera apikey. Sin ella el gateway intenta leer el token
+                # del Authorization como un JWT de los viejos y responde
+                # "Invalid Compact JWS" / AccessDenied -- un mensaje que
+                # suena a clave equivocada cuando la clave esta bien.
+                "apikey": key,
                 "Content-Type": "video/mp4",
                 "x-upsert": "true",
             },
