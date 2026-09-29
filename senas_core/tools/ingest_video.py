@@ -73,6 +73,7 @@ def ingest_un_video(
     espejo=False,
     generar_espejo=False,
     aprobar=False,
+    mascara=None,
 ):
     """El procesamiento real de un video: extraer, normalizar y guardar.
 
@@ -92,7 +93,7 @@ def ingest_un_video(
     Devuelve un dict: sample_id, sample_id_espejo (o None), quality_score,
     n_frames, frames_invalidos, fps, video_uri, video_subido (bool), estado.
     """
-    raw_frames, fps, n_frames = extractor.extraer(video_path)
+    raw_frames, fps, n_frames = extractor.extraer(video_path, mascara=mascara)
     if n_frames == 0:
         raise ValueError("el video no tiene frames legibles.")
 

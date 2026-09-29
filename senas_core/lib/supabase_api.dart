@@ -278,7 +278,15 @@ class SupabaseApi {
 
     final r = await _http.get(
       _uri('v_motion_v2_aprobadas', {
-        'select': 'sign_id,gloss,espanol,t_frames,frame_dim,data',
+        // norm_version TIENE que ir en el select aunque abajo ya se filtre
+        // con 'norm_version=eq.': PostgREST solo devuelve las columnas que
+        // se piden aca, y el chequeo de mas abajo compara
+        // m['norm_version'] != kNormVersion. Sin pedirla, ese valor llega
+        // siempre null, null nunca es igual a '2.0.0', y el bucle descarta
+        // TODAS las filas en silencio -- el diccionario bajaba vacio por
+        // muchas muestras aprobadas que hubiera en la base.
+        'select':
+            'sign_id,gloss,espanol,norm_version,t_frames,frame_dim,data',
         'norm_version': 'eq.$kNormVersion',
       }),
       headers: _cabeceras,

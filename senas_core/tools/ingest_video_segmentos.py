@@ -230,11 +230,32 @@ def main():
     ap.add_argument("--espejo", action="store_true", help="si el video quedo espejeado (modo selfie)")
     ap.add_argument("--aprobar", action="store_true")
     ap.add_argument("--generar-espejo", action="store_true", dest="generar_espejo")
+    ap.add_argument(
+        "--mascara",
+        help=(
+            "rectangulo a tapar antes de analizar, x0,y0,x1,y1 en fracciones "
+            "del cuadro (ej. 0.66,0.06,1.00,0.90). Para los videos de "
+            "diccionario que traen un recuadro chico con un segundo plano de "
+            "la misma persona: sin taparlo, el detector encuentra tambien la "
+            "mano de ese recuadro. tools/segmentar_video.py --solo-roi dibuja "
+            "el rectangulo sobre un fotograma para verificarlo antes."
+        ),
+    )
     ap.add_argument("--seco", action="store_true", help="muestra el plan (tiempos y glosas) sin descargar, recortar ni tocar la base")
     ap.add_argument("--csv-resumen", help="ademas de imprimir el resumen, lo escribe en este CSV")
     ap.add_argument("--pose-model", default=os.path.join(ASSETS, "pose_landmarker_lite.task"))
     ap.add_argument("--hand-model", default=os.path.join(ASSETS, "hand_landmarker.task"))
     args = ap.parse_args()
+
+    mascara = None
+    if args.mascara:
+        try:
+            mascara = tuple(float(v) for v in args.mascara.split(","))
+        except ValueError:
+            sys.exit("--mascara tiene que ser 4 numeros separados por comas")
+        if len(mascara) != 4 or not (0 <= mascara[0] < mascara[2] <= 1
+                                     and 0 <= mascara[1] < mascara[3] <= 1):
+            sys.exit("--mascara: 4 valores de 0 a 1, con x0<x1 y y0<y1")
 
     try:
         segmentos = leer_segmentos(args.segmentos, args.categoria)
@@ -286,6 +307,7 @@ def main():
                         es_estatica=args.es_estatica, usa_no_manuales=args.usa_no_manuales,
                         signer=args.signer, mano_dominante=args.mano_dominante,
                         espejo=args.espejo, generar_espejo=args.generar_espejo,
+                        mascara=mascara,
                         aprobar=args.aprobar,
                     )
                     conn.commit()

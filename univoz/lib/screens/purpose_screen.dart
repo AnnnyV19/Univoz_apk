@@ -5,7 +5,10 @@ import 'profile_selection_screen.dart';
 import 'other_person_profile_screen.dart';
 import 'main_shell_screen.dart';
 import 'traducir_senas_screen.dart';
+import 'univoz_shared_widgets.dart';
 import '../services/blind_narrator.dart';
+import '../services/conversation_profile.dart';
+import '../services/perfil_guardado.dart';
 
 /// Primera pregunta después de la bienvenida: ¿para qué quieres usar
 /// UNIVOZ? Si el usuario quiere comunicarse con alguien, lo mandamos a
@@ -138,9 +141,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
     _avanzarPorToque(() {
       switch (_selected!) {
         case CommunicationPurpose.comunicarse:
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const ProfileSelectionScreen()),
-          );
+          _irAComunicarse();
           break;
         case CommunicationPurpose.aprenderLsm:
           Navigator.of(context).pushReplacement(
@@ -159,6 +160,34 @@ class _PurposeScreenState extends State<PurposeScreen> {
           break;
       }
     });
+  }
+
+  /// "Comunicarme": si ya hay un perfil propio guardado en el teléfono,
+  /// se salta "Elige tu perfil" y va directo a elegir con quién. Lo que
+  /// eres se pregunta una vez; con quién hablas, cada conversación.
+  void _irAComunicarse() {
+    if (!PerfilGuardado.hayPerfil) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ProfileSelectionScreen()),
+      );
+      return;
+    }
+    // ProfileSelectionScreen.initState hacía este reinicio por nosotros.
+    // Al saltarla hay que dejar el estado equivalente a mano: el perfil
+    // propio tomado del disco, y los datos de la otra persona en limpio
+    // por si quedó algo de una conversación anterior de esta misma
+    // sesión.
+    PerfilGuardado.aplicar();
+    ConversationProfile.resetOtro();
+    // Mismo enganche que hace ProfileSelectionScreen al confirmar
+    // "ciego": sin esto, saltarse esa pantalla dejaría sin control por
+    // voz justo a quien lo necesita.
+    if (PerfilGuardado.tipo == ProfileType.ciego) {
+      BlindNarrator.activateManualBlindMode();
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),
+    );
   }
 
   /// Pide permiso de cámara antes de abrir el reconocedor de señas
@@ -209,6 +238,11 @@ class _PurposeScreenState extends State<PurposeScreen> {
                     tooltip: 'Regresar',
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
+                  // Acá se ve el perfil guardado antes de entrar a
+                  // "Comunicarme", que a partir de ahora ya no vuelve a
+                  // preguntarlo. Sin esto no habría forma de saber con
+                  // qué perfil va a arrancar la conversación.
+                  Flexible(child: MenuPerfil(onCambio: () => setState(() {}))),
                   const ExcludeSemantics(
                     child: Icon(Icons.favorite, color: Color(0xFFB84FCE)),
                   ),

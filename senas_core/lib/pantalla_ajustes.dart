@@ -312,7 +312,10 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(etiqueta),
+            // Expanded: la etiqueta puede ser larga y en pantalla angosta
+            // un Text suelto en un Row se sale del cuadro.
+            Expanded(child: Text(etiqueta)),
+            const SizedBox(width: 8),
             Text(valor.toStringAsFixed(2),
                 style: const TextStyle(fontWeight: FontWeight.bold)),
           ],

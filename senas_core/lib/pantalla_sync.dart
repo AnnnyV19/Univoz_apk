@@ -326,9 +326,15 @@ class _PantallaSyncState extends State<PantallaSync> {
               children: [
                 Icon(icono),
                 const SizedBox(width: 12),
-                Text(titulo,
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold)),
+                // Expanded, no Text suelto: dentro de un Row el texto pide su
+                // ancho natural y se sale del cuadro ("RIGHT OVERFLOWED BY N
+                // PIXELS") en cuanto el titulo es largo o la pantalla angosta.
+                // Con Expanded recibe el ancho que sobra y parte en dos lineas.
+                Expanded(
+                  child: Text(titulo,
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
               ],
             ),
             const SizedBox(height: 8),

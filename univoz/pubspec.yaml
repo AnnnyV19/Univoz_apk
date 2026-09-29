@@ -23,6 +23,19 @@ dependencies:
     path: ../senas_core
   # Pide el permiso de cámara antes de abrir el reconocedor/avatar.
   permission_handler: ^11.3.1
+  # Carpeta propia de la app donde se guarda el perfil de quien usa el
+  # teléfono (lib/services/perfil_guardado.dart). No es una dependencia
+  # nueva de verdad: senas_core ya la usa para muestras_locales.json, así
+  # que ya estaba en el árbol; esto solo la declara para poder importarla
+  # desde aquí sin depender de que llegue de forma transitiva.
+  path_provider: ^2.1.0
+  # Dibuja el QR con el perfil adentro (lib/screens/qr_perfil.dart). El
+  # codigo NO lleva una URL sino el dato mismo, por eso se lee sin
+  # internet -- ver lib/services/tarjeta_perfil.dart.
+  qr_flutter: ^4.1.0
+  # Lee el QR de la otra persona. Usa MLKit en Android y AVFoundation en
+  # iOS, todo en el dispositivo: no manda la imagen a ningun lado.
+  mobile_scanner: ^7.4.2
 
 dev_dependencies:
   flutter_test:

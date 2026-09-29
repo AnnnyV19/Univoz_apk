@@ -830,7 +830,14 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(e.value.gloss, style: const TextStyle(fontSize: 13)),
+                  // Expanded + ellipsis: una glosa larga (ME_AYUDAS_UN_POCO)
+                  // desbordaria el Row en pantalla angosta.
+                  Expanded(
+                    child: Text(e.value.gloss,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13)),
+                  ),
+                  const SizedBox(width: 8),
                   Text(e.key.toStringAsFixed(3),
                       style:
                           TextStyle(fontSize: 13, color: Colors.grey.shade700)),

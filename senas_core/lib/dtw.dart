@@ -256,3 +256,175 @@ class DtwClassifier {
     return Prediction(t1.gloss, t1.signId, t1.espanol, d1, margin, aceptada);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Diagnostico: descompone la distancia DTW en cuerpo y forma de cada mano.
+// Portado desde la rama de interfaz. Lo usa pantalla_practicar.dart para
+// decir QUE salio distinto, en vez de solo un numero. No lo usa el
+// clasificador: es explicacion, no decision.
+// ---------------------------------------------------------------------------
+class Diagnostico {
+  /// Que tan lejos estuvo la posicion/movimiento del CUERPO (hombros, codos,
+  /// munecas, caderas), normalizado por frame. Mismo peso relativo que usa
+  /// el clasificador, asi que un valor "alto" aca es comparable a lo que ya
+  /// se calibro para aceptar/rechazar.
+  final double cuerpo;
+
+  /// Distancia de la FORMA de cada mano (como estan dobladas los dedos),
+  /// null si esa mano no participa en la plantilla objetivo.
+  final double? formaIzq;
+  final double? formaDer;
+
+  /// Si la presencia de cada mano coincidio con lo esperado. true en
+  /// izqEsperadaPeroFalto/derEsperadaPeroFalto significa "la plantilla usa
+  /// esta mano y el intento no", y viceversa con izqSobra/derSobra.
+  final bool izqEsperadaPeroFalto;
+  final bool derEsperadaPeroFalto;
+  final bool izqSobra;
+  final bool derSobra;
+
+  const Diagnostico({
+    required this.cuerpo,
+    this.formaIzq,
+    this.formaDer,
+    required this.izqEsperadaPeroFalto,
+    required this.derEsperadaPeroFalto,
+    required this.izqSobra,
+    required this.derSobra,
+  });
+
+  /// Umbral por encima del cual una distancia de cuerpo/forma se considera
+  /// "no coincide". No es una ciencia exacta -- es del mismo orden que
+  /// maxDistance por defecto del clasificador, elegido porque cuerpo/forma
+  /// son componentes de esa misma distancia total.
+  static const double kUmbral = 0.30;
+
+  /// Mensaje en espanol explicando el problema mas grande encontrado, en
+  /// terminos que alguien practicando pueda entender y corregir. Nunca
+  /// vacio: si nada especifico destaca, da un mensaje generico.
+  String explicacion() {
+    if (izqEsperadaPeroFalto) {
+      return 'Esta se\u00f1a usa la mano izquierda y no la detecte. Fijate que se '
+          'vea bien en camara.';
+    }
+    if (derEsperadaPeroFalto) {
+      return 'Esta se\u00f1a usa la mano derecha y no la detecte. Fijate que se vea '
+          'bien en camara.';
+    }
+    if (izqSobra || derSobra) {
+      final lado = izqSobra ? 'izquierda' : 'derecha';
+      return 'Usaste la mano $lado de mas: esta se\u00f1a no la necesita.';
+    }
+
+    final candidatas = <MapEntry<String, double>>[
+      MapEntry('cuerpo', cuerpo),
+      if (formaIzq != null) MapEntry('formaIzq', formaIzq!),
+      if (formaDer != null) MapEntry('formaDer', formaDer!),
+    ]..sort((a, b) => b.value.compareTo(a.value));
+
+    final peor = candidatas.first;
+    if (peor.value < kUmbral) {
+      return 'Muy cerca. Sigue practicando el mismo movimiento.';
+    }
+    switch (peor.key) {
+      case 'cuerpo':
+        return 'La posicion o el movimiento del brazo no coincidieron. '
+            'Fijate donde empieza y termina la se\u00f1a respecto a tu cuerpo.';
+      case 'formaIzq':
+        return 'La forma de la mano izquierda (como doblas los dedos) no '
+            'coincidio con la se\u00f1a.';
+      case 'formaDer':
+        return 'La forma de la mano derecha (como doblas los dedos) no '
+            'coincidio con la se\u00f1a.';
+      default:
+        return 'No coincidio del todo. Segui practicando.';
+    }
+  }
+}
+
+/// Compara un intento contra UNA plantilla objetivo (no contra todo el
+/// diccionario) y descompone la distancia por componente, para poder
+/// explicarle a quien practica que fue lo que no coincidio.
+///
+/// A diferencia de dtwDistance, esto NO alinea con Dynamic Time Warping --
+/// ambas secuencias ya vienen remuestreadas a kTFrames (32) por
+/// resample(), asi que comparar frame a frame alcanza para dar una senal
+/// util sin la complejidad de reconstruir el camino de alineacion del DTW.
+/// Es deliberadamente mas simple que el clasificador: sirve para explicar,
+/// no para decidir si una sena entra al diccionario.
+Diagnostico diagnosticar(List<List<double>> intento, List<List<double>> objetivo) {
+  final n = math.min(intento.length, objetivo.length);
+  if (n == 0) {
+    return const Diagnostico(
+      cuerpo: 1.0,
+      izqEsperadaPeroFalto: false,
+      derEsperadaPeroFalto: false,
+      izqSobra: false,
+      derSobra: false,
+    );
+  }
+
+  double cuerpo = 0;
+  double formaIzqAcc = 0, formaDerAcc = 0;
+  int nIzq = 0, nDer = 0;
+  int izqObjPresente = 0, izqIntPresente = 0;
+  int derObjPresente = 0, derIntPresente = 0;
+
+  for (var k = 0; k < n; k++) {
+    final fa = intento[k];
+    final fb = objetivo[k];
+
+    var s = 0.0;
+    for (final i in kBodyDistDims) {
+      final d = fa[i] - fb[i];
+      s += d * d;
+    }
+    cuerpo += s / kNBody;
+
+    final presIzqInt = fa[kOffPresL] >= 0.5;
+    final presIzqObj = fb[kOffPresL] >= 0.5;
+    if (presIzqObj) izqObjPresente++;
+    if (presIzqInt) izqIntPresente++;
+    if (presIzqInt && presIzqObj) {
+      var t = 0.0;
+      for (var i = kOffShapeL; i < kOffShapeL + kNShape; i++) {
+        final d = fa[i] - fb[i];
+        t += d * d;
+      }
+      formaIzqAcc += t / kNShape;
+      nIzq++;
+    }
+
+    final presDerInt = fa[kOffPresR] >= 0.5;
+    final presDerObj = fb[kOffPresR] >= 0.5;
+    if (presDerObj) derObjPresente++;
+    if (presDerInt) derIntPresente++;
+    if (presDerInt && presDerObj) {
+      var t = 0.0;
+      for (var i = kOffShapeR; i < kOffShapeR + kNShape; i++) {
+        final d = fa[i] - fb[i];
+        t += d * d;
+      }
+      formaDerAcc += t / kNShape;
+      nDer++;
+    }
+  }
+
+  // Presencia esperada: la plantilla usa esa mano en mas de un cuarto de
+  // sus frames (evita falsos "falto la mano" por un frame suelto donde el
+  // detector parpadeo durante la grabacion original).
+  final izqEsperada = izqObjPresente > n ~/ 4;
+  final derEsperada = derObjPresente > n ~/ 4;
+  final izqDetectada = izqIntPresente > n ~/ 4;
+  final derDetectada = derIntPresente > n ~/ 4;
+
+  return Diagnostico(
+    cuerpo: math.sqrt(cuerpo / n),
+    formaIzq: nIzq > 0 ? math.sqrt(formaIzqAcc / nIzq) : null,
+    formaDer: nDer > 0 ? math.sqrt(formaDerAcc / nDer) : null,
+    izqEsperadaPeroFalto: izqEsperada && !izqDetectada,
+    derEsperadaPeroFalto: derEsperada && !derDetectada,
+    izqSobra: !izqEsperada && izqDetectada,
+    derSobra: !derEsperada && derDetectada,
+  );
+}
