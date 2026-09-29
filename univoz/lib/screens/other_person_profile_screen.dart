@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'profile_selection_screen.dart';
 import 'main_shell_screen.dart';
+import 'qr_perfil.dart';
+import 'univoz_shared_widgets.dart';
+import '../services/tarjeta_perfil.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 
@@ -107,6 +110,11 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   bool _scanning = false;
   ProfileType? _detectedProfile;
 
+  /// Tarjeta leida del QR. Cuando existe, ya sabemos TAMBIEN si la otra
+  /// persona conoce LSM y como se llama, asi que no hay que preguntarle
+  /// el refinamiento: se confirma y se entra directo a la conversacion.
+  TarjetaPerfil? _detectedTarjeta;
+
   ProfileType? _expandedProfile;
   int? _expandedOptionIndex;
   bool _selectedOyente = false;
@@ -118,6 +126,24 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   static const Color _comenzarColor = Color(0xFF8F84A6);
   static const Color _radioCardColor = Color(0xFF241B35);
   static const Color _radioAccent = Color(0xFFB388E8);
+
+  /// El perfil propio cambió desde el chip de arriba. Hay que redibujar
+  /// y limpiar lo que estuviera elegido: los perfiles que se ofrecen para
+  /// la otra persona dependen del propio (ver [_selectableProfiles]), así
+  /// que una selección hecha con el perfil anterior puede haber dejado de
+  /// ser una opción válida.
+  void _alCambiarMiPerfil() {
+    _scanTimer?.cancel();
+    ConversationProfile.resetOtro();
+    if (!mounted) return;
+    setState(() {
+      _expandedProfile = null;
+      _expandedOptionIndex = null;
+      _selectedOyente = false;
+      _detectedProfile = null;
+      _scanning = false;
+    });
+  }
 
   @override
   void initState() {
@@ -307,28 +333,54 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     }
   }
 
-  void _startScan() {
+  Future<void> _startScan() async {
     BlindNarrator.interruptFlow();
     setState(() {
       _scanning = true;
       _detectedProfile = null;
+      _detectedTarjeta = null;
       _expandedProfile = null;
       _selectedOyente = false;
     });
-    // TODO: reemplazar esta simulación por la detección real
-    // (Bluetooth / NFC / QR / lo que decida el backend).
-    _scanTimer = Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
-      setState(() {
-        _scanning = false;
-        _detectedProfile = ProfileType.sordo; // placeholder de ejemplo
-      });
+    final tarjeta = await Navigator.of(context).push<TarjetaPerfil>(
+      MaterialPageRoute(builder: (_) => const EscanearCodigoScreen()),
+    );
+    if (!mounted) return;
+    setState(() {
+      _scanning = false;
+      _detectedTarjeta = tarjeta;
+      _detectedProfile = tarjeta?.tipo;
     });
+    // tarjeta == null es salirse o no dar permiso de camara. No es un
+    // error que haya que anunciar: la cuadricula manual sigue ahi abajo
+    // y es el camino de siempre.
   }
 
   void _confirmDetected() {
     if (_detectedProfile == null) return;
     final ProfileType confirmed = _detectedProfile!;
+
+    // Con un codigo escaneado ya sabemos si conoce LSM, asi que
+    // preguntarselo seria redundante: se entra directo a la conversacion.
+    final tarjeta = _detectedTarjeta;
+    if (tarjeta != null) {
+      ConversationProfile.other = confirmed;
+      ConversationProfile.otherKnowsLsm = tarjeta.sabeLsm;
+      setState(() {
+        _detectedProfile = null;
+        _detectedTarjeta = null;
+      });
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => MainShellScreen(
+            initialIndex: 1,
+            modo: resolverComunicacionModo(),
+          ),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _expandedProfile = confirmed;
       _expandedOptionIndex = null;
@@ -338,7 +390,10 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   }
 
   void _rejectDetected() {
-    setState(() => _detectedProfile = null);
+    setState(() {
+      _detectedProfile = null;
+      _detectedTarjeta = null;
+    });
   }
 
   void _expandCard(ProfileType type) {
@@ -378,6 +433,11 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                     tooltip: 'Regresar',
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
+                  // El perfil propio se eligió en la pantalla anterior (o
+                  // venía guardado y esa pantalla ni se mostró). Acá es
+                  // donde se nota si está mal, así que tiene que poder
+                  // corregirse sin regresar.
+                  Flexible(child: MenuPerfil(onCambio: _alCambiarMiPerfil)),
                   const ExcludeSemantics(
                     child: Icon(Icons.favorite, color: Color(0xFFB84FCE)),
                   ),
@@ -395,7 +455,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Conecta su celular automáticamente o elige su perfil',
+                'Escanea su código o elige su perfil',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -488,6 +548,18 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
           _buildScanButton(),
           if (_detectedProfile != null) ...[
             const SizedBox(height: 14),
+            if (_detectedTarjeta != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Codigo leido: ${_detectedTarjeta!.resumen}',
+                  style: TextStyle(
+                    color: _grayText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             _buildDetectedCard(profileConfigs[_detectedProfile]!),
           ],
           const SizedBox(height: 20),
@@ -551,8 +623,8 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
             Expanded(
               child: Text(
                 _scanning
-                    ? 'Buscando celular cercano...'
-                    : 'Conectar celular automáticamente',
+                    ? 'Abriendo la cámara...'
+                    : 'Escanear su código',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 15,

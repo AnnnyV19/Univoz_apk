@@ -1,4 +1,4 @@
-import '../screens/profile_selection_screen.dart' show ProfileType;
+import 'perfiles.dart';
 
 /// Guarda, para el resto de la sesión de la app, el perfil de quien usa
 /// el teléfono y el de la persona con la que se está comunicando.
@@ -9,6 +9,11 @@ import '../screens/profile_selection_screen.dart' show ProfileType;
 /// personalizar las instrucciones y el comportamiento según la
 /// combinación exacta de perfiles (por ejemplo: una persona ciega
 /// hablando con una sorda, o una muda hablando con una oyente).
+///
+/// [mine] y [mineKnowsLsm] además se persisten en el teléfono (ver
+/// PerfilGuardado): son identidad y no hace falta volver a preguntarlos.
+/// [other] y [otherKnowsLsm] NO se persisten nunca: cambian en cada
+/// conversación.
 class ConversationProfile {
   ConversationProfile._();
 
@@ -30,14 +35,25 @@ class ConversationProfile {
   /// Mexicana (solo tiene sentido cuando [other] no es null).
   static bool otherKnowsLsm = false;
 
-  /// Reinicia todo a los valores iniciales. Se usa al regresar hasta el
-  /// principio del onboarding (por ejemplo, si alguien sale de una
-  /// conversación y empieza otra con un perfil distinto), para que no
-  /// queden pegados datos de la conversación anterior.
+  /// Reinicia todo a los valores iniciales, incluido el perfil propio. Lo
+  /// usa ProfileSelectionScreen al abrirse, porque ahí justamente se va a
+  /// volver a elegir quién eres.
+  ///
+  /// Ojo: esto NO borra el perfil persistido en disco. Para eso está
+  /// [PerfilGuardado.olvidar].
   static void reset() {
     mine = null;
     other = null;
     mineKnowsLsm = false;
+    otherKnowsLsm = false;
+  }
+
+  /// Limpia solo los datos de la OTRA persona, conservando el perfil
+  /// propio. Es el reinicio que corresponde cuando ya hay un perfil
+  /// guardado y se empieza una conversación nueva saltándose la
+  /// selección de perfil (ver PurposeScreen).
+  static void resetOtro() {
+    other = null;
     otherKnowsLsm = false;
   }
 }

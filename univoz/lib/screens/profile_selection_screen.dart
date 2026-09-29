@@ -2,6 +2,16 @@ import 'package:flutter/material.dart';
 import 'other_person_profile_screen.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
+import '../services/perfil_guardado.dart';
+import '../services/perfiles.dart';
+
+// ProfileType, ProfileConfig, RefinementConfig, profileConfigs y
+// refinementConfigs se mudaron a services/perfiles.dart: un servicio
+// (ConversationProfile, PerfilGuardado) no debe depender de una pantalla.
+// Se re-exportan desde aqui para que los
+// `import 'profile_selection_screen.dart' show ProfileType;` que ya
+// existen en otras pantallas sigan funcionando sin tocarlos.
+export '../services/perfiles.dart';
 
 // NOTA SOBRE ACCESIBILIDAD:
 // Cuando TalkBack está activo, PurposeScreen manda al usuario directo a
@@ -13,115 +23,31 @@ import '../services/conversation_profile.dart';
 // respuestas por voz que usa TalkBack para las pantallas siguientes
 // (ver _onContinue y BlindNarrator.activateManualBlindMode).
 
-/// Identifica cada perfil disponible en el flujo de onboarding.
-enum ProfileType { ciego, sordo, mudo, prestarCelular, oyente }
 
-/// Configuración visual y de contenido de cada tarjeta de perfil.
-class ProfileConfig {
-  final ProfileType type;
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final Color iconBgColor;
-  final Color cardColor;
-  final Color textColor;
+/// Para que se abrio esta pantalla. Cambia si el perfil elegido se
+/// persiste y a donde se va despues de elegirlo.
+enum ModoSeleccionPerfil {
+  /// Flujo normal: se elige el perfil y se sigue a elegir el de la otra
+  /// persona. El perfil se guarda en el telefono.
+  conversacion,
 
-  const ProfileConfig({
-    required this.type,
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.iconBgColor,
-    required this.cardColor,
-    required this.textColor,
-  });
+  /// Se abrio desde el menu para corregir el perfil propio. Se guarda y
+  /// se regresa a donde estabas, sin empezar una conversacion.
+  editar,
+
+  /// "No soy yo": alguien mas va a usar el telefono prestado. El perfil
+  /// elegido vale solo para esta conversacion y NO se guarda, para que la
+  /// duena del telefono no lo encuentre cambiado despues.
+  prestado,
 }
-
-/// Configuración de las preguntas de refinamiento por perfil.
-/// AJUSTA estos textos: solo el de "sordo" viene confirmado por el diseño
-/// que compartiste; los demás son placeholders razonables.
-class RefinementConfig {
-  final String title;
-  final String subtitle;
-  final List<String> options;
-
-  const RefinementConfig({
-    required this.title,
-    required this.subtitle,
-    required this.options,
-  });
-}
-
-const Map<ProfileType, ProfileConfig> profileConfigs = {
-  ProfileType.ciego: ProfileConfig(
-    type: ProfileType.ciego,
-    title: 'Soy ciego/a',
-    subtitle: 'Uso la app con voz y dictado',
-    icon: Icons.visibility_off,
-    iconBgColor: Color(0xFFB388E8),
-    cardColor: Color(0xFF8B5CF6),
-    textColor: Colors.white,
-  ),
-  ProfileType.sordo: ProfileConfig(
-    type: ProfileType.sordo,
-    title: 'Soy sordo/a',
-    subtitle: 'Uso subtítulos, señas, LSM y alertas visuales',
-    icon: Icons.hearing_disabled,
-    iconBgColor: Color(0xFFF5A855),
-    cardColor: Color(0xFFA8C5F0),
-    textColor: Color(0xFF1A1A2E),
-  ),
-  ProfileType.mudo: ProfileConfig(
-    type: ProfileType.mudo,
-    title: 'Soy mudo/a',
-    subtitle: 'Escucho y veo, pero la app habla por mí',
-    icon: Icons.volume_up,
-    iconBgColor: Color(0xFFE88B8B),
-    cardColor: Color(0xFFF3A9A0),
-    textColor: Color(0xFF1A1A2E),
-  ),
-  ProfileType.prestarCelular: ProfileConfig(
-    type: ProfileType.prestarCelular,
-    title: 'Prestaré mi Celular',
-    subtitle: 'Facilitar comunicación',
-    icon: Icons.pan_tool,
-    iconBgColor: Color(0xFFE88BC2),
-    cardColor: Color(0xFFF0C869),
-    textColor: Color(0xFF1A1A2E),
-  ),
-};
-
-/// Preguntas de refinamiento para cada perfil.
-/// Solo "sordo" está confirmado por tu mockup; edita el resto libremente.
-const Map<ProfileType, RefinementConfig> refinementConfigs = {
-  ProfileType.ciego: RefinementConfig(
-    title: '¿Cómo prefieres usar la app?',
-    subtitle: 'Elige una opción para personalizar tu experiencia',
-    options: ['No uso lector de pantalla', 'Uso lector de pantalla'],
-  ),
-  ProfileType.sordo: RefinementConfig(
-    title: '¿Cómo te puedo ayudar?',
-    subtitle: 'Elige un perfil para personalizar tu experiencia',
-    options: ['No conozco LSM', 'Conozco LSM'],
-  ),
-  ProfileType.mudo: RefinementConfig(
-    title: '¿Conoces Lengua de Señas Mexicana?',
-    subtitle: 'Esto nos ayuda a elegir cómo te comunicarás',
-    options: ['No conozco LSM', 'Conozco LSM'],
-  ),
-  ProfileType.prestarCelular: RefinementConfig(
-    title: '¿Quién usará el celular?',
-    subtitle: 'Elige el perfil de la persona que lo usará',
-    options: [
-      'Persona con discapacidad visual',
-      'Persona con discapacidad auditiva',
-      'Persona con discapacidad del habla',
-    ],
-  ),
-};
 
 class ProfileSelectionScreen extends StatefulWidget {
-  const ProfileSelectionScreen({super.key});
+  final ModoSeleccionPerfil modo;
+
+  const ProfileSelectionScreen({
+    super.key,
+    this.modo = ModoSeleccionPerfil.conversacion,
+  });
 
   @override
   State<ProfileSelectionScreen> createState() =>
@@ -192,9 +118,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
       if (BlindNarrator.talkBackFlow) {
         BlindNarrator.disable();
       }
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),
-      );
+      _persistirYSeguir(ProfileType.oyente, false, esPrestado: false);
       return;
     }
     if (_expandedProfile != null && _expandedOptionIndex != null) {
@@ -250,10 +174,43 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
       } else if (BlindNarrator.talkBackFlow) {
         BlindNarrator.disable();
       }
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),
+      _persistirYSeguir(
+        effectiveProfile,
+        ConversationProfile.mineKnowsLsm,
+        esPrestado: esPrestado,
       );
     }
+  }
+
+  /// Guarda el perfil propio y decide a donde ir.
+  ///
+  /// No se guarda en dos casos, y los dos son el mismo problema: el
+  /// telefono lo va a usar alguien que no es su duena. Uno es elegir la
+  /// tarjeta "Prestare mi Celular" ([esPrestado]); el otro es entrar por
+  /// "No soy yo" desde el menu ([ModoSeleccionPerfil.prestado]).
+  /// Persistir ahi haria que la app le mienta a la duena la proxima vez
+  /// que la abra.
+  void _persistirYSeguir(
+    ProfileType tipo,
+    bool sabeLsm, {
+    required bool esPrestado,
+  }) {
+    final bool debeGuardar =
+        !esPrestado && widget.modo != ModoSeleccionPerfil.prestado;
+    if (debeGuardar) {
+      // Sin await a proposito: escribir unos pocos bytes no debe frenar la
+      // navegacion, y PerfilGuardado deja el valor en memoria de forma
+      // sincrona (antes de su primer await), asi que la pantalla siguiente
+      // ya lo ve aunque el archivo todavia se este escribiendo.
+      PerfilGuardado.guardar(tipo, sabeLsm);
+    }
+    if (widget.modo == ModoSeleccionPerfil.editar) {
+      Navigator.of(context).pop();
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),
+    );
   }
 
   void _expandCard(ProfileType type) {
