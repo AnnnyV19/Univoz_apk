@@ -18,6 +18,7 @@ Widget buildAvatarViewport({
         ..src = Uri.base
             .resolve('assets/assets/avatar_viewer/index.html?standalone=1')
             .toString()
+        ..setAttribute('allow', 'camera; microphone')
         ..style.border = '0'
         ..style.width = '100%'
         ..style.height = '100%';

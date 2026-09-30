@@ -5232,6 +5232,10 @@
       webCameraState.detectorError = null;
       pintarEstadoCamaraWeb();
       try {
+        if (!window.isSecureContext) {
+          throw new Error(
+            'La cámara requiere HTTPS. Abre la app con https://IP_DE_LA_PC o usa localhost.');
+        }
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error('Este navegador no expone getUserMedia.');
         }

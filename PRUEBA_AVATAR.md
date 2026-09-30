@@ -15,11 +15,28 @@ Servidor de ingesta: `http://127.0.0.1:8730/`.
 
 ```bat
 cd /d D:\univoz\Univoz_apk\univoz
-flutter build web --release
+```
+
+`http://IP_DE_LA_PC:8731/` sirve para revisar interfaz, pero no habilita cámara en
+teléfono. `getUserMedia` exige contexto seguro: usar HTTPS para la prueba real.
+
+En PowerShell, desde esa carpeta:
+
+```powershell
+.\tool\probar_web_https.ps1
+```
+
+El script compila, crea certificado local, inicia Flutter Web HTTPS y muestra QR.
+Con teléfono y PC en misma red Wi-Fi, abrir el QR. El navegador puede pedir aceptar
+el certificado local una vez; después conceder permiso de cámara.
+
+Si se necesita servidor estático HTTP solo para revisar avatar sin cámara:
+
+```bat
 python -m http.server 8731 --bind 0.0.0.0 --directory build\web
 ```
 
-Con teléfono y PC en misma red Wi-Fi, consultar IPv4 con `ipconfig` y abrir:
+QR de prueba estática:
 
 ```text
 http://IP_DE_LA_PC:8731/
