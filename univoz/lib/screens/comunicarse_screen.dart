@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:senas_core/avatar_bridge.dart';
+import 'package:senas_core/avatar_view.dart';
+import 'package:senas_core/dtw.dart';
+import 'package:senas_core/muestras_locales.dart';
+import 'package:senas_core/plantillas.dart';
 import 'package:senas_core/skeleton_painter.dart' show PantallaDeTranslacion;
 import 'univoz_shared_widgets.dart';
 import 'profile_selection_screen.dart' show ProfileType;
@@ -64,6 +70,10 @@ class ComunicarseScreen extends StatefulWidget {
 class _ComunicarseScreenState extends State<ComunicarseScreen> {
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _traducidoController = TextEditingController();
+  final _avatarBridge = AvatarBridge();
+  final _almacen = AlmacenMuestras.instancia;
+  Diccionario? _diccionario;
+  bool _avatarReproduciendo = false;
   bool _isSpelling = true; // Deletreo vs Palabra
   bool _listening = false;
   bool _pidiendoPermisoCamara = false;
@@ -97,8 +107,62 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   @override
   void initState() {
     super.initState();
+    _avatarBridge.onTerminado = () {
+      if (mounted) setState(() => _avatarReproduciendo = false);
+    };
+    _cargarAvatar();
     if (BlindNarrator.talkBackFlow && widget.isActiveTab) {
       _startVoiceFlow();
+    }
+  }
+
+  Future<void> _cargarAvatar() async {
+    try {
+      await _almacen.cargar();
+      await _avatarBridge.configurarRig(_almacen.ajustes.rigCalibration);
+      final diccionario = await cargarDiccionario();
+      if (mounted) setState(() => _diccionario = diccionario);
+    } catch (_) {
+      // El resto de la pantalla sigue disponible aunque falte diccionario.
+    }
+  }
+
+  Template? _buscarSena(String texto) {
+    final diccionario = _diccionario;
+    final consulta = texto.trim().toUpperCase();
+    if (diccionario == null || consulta.isEmpty) return null;
+    for (final plantilla in diccionario.clasificador.templates) {
+      if (plantilla.gloss.toUpperCase() == consulta) return plantilla;
+    }
+    for (final plantilla in diccionario.clasificador.templates) {
+      if (plantilla.espanol.trim().toUpperCase() == consulta) return plantilla;
+    }
+    return null;
+  }
+
+  Future<bool> _firmar(String texto) async {
+    if (widget.modo != ComunicacionModo.avatar || texto.trim().isEmpty) {
+      return false;
+    }
+    if (!_avatarBridge.compatible) {
+      if (mounted) setState(() => _voiceStatus = 'Avatar 3D no disponible.');
+      return false;
+    }
+    final plantilla = _buscarSena(texto);
+    if (plantilla == null) {
+      if (mounted) {
+        setState(() => _voiceStatus = 'No encontré la seña de "$texto".');
+      }
+      return false;
+    }
+    if (mounted) setState(() => _avatarReproduciendo = true);
+    try {
+      await _avatarBridge.reproducir(plantilla.seq);
+      return true;
+    } catch (_) {
+      if (mounted)
+        setState(() => _voiceStatus = 'No se pudo reproducir la seña.');
+      return false;
     }
   }
 
@@ -129,6 +193,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     _voiceFlowGeneration++;
     _controller.dispose();
     _traducidoController.dispose();
+    _avatarBridge.dispose();
     BlindNarrator.stop();
     super.dispose();
   }
@@ -166,7 +231,8 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
         'compartirlo.';
   }
 
-  bool _isExitPhrase(String text) => _exitPhrases.contains(text.trim().toLowerCase());
+  bool _isExitPhrase(String text) =>
+      _exitPhrases.contains(text.trim().toLowerCase());
 
   /// Conduce toda esta pestaña por voz para quien usa el teléfono y es
   /// ciego/a: pregunta qué quiere decir, lo pone en el cuadro de texto,
@@ -181,9 +247,8 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   /// otro número, y esta corrida vieja se detiene sola en su siguiente
   /// verificación en vez de seguir hablando junto con la nueva.
   Future<void> _runVoiceComposeFlow(int generation) async {
-    bool isCurrent() => mounted &&
-        generation == _voiceFlowGeneration &&
-        widget.isActiveTab;
+    bool isCurrent() =>
+        mounted && generation == _voiceFlowGeneration && widget.isActiveTab;
 
     var prompt = _personalizedIntro();
     if (isCurrent()) setState(() => _voiceStatus = prompt);
@@ -229,7 +294,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           if (mounted) {
             setState(() => _voiceStatus =
                 'No se pudo escuchar el micrófono. Escribe tu mensaje '
-                'en el cuadro de texto.');
+                    'en el cuadro de texto.');
           }
           return;
         }
@@ -246,8 +311,10 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       await BlindNarrator.speak('Dijiste: $heard.');
       if (!isCurrent()) return;
       if (widget.modo == ComunicacionModo.avatar) {
-        await BlindNarrator.speak('Tu mensaje quedó listo para '
-            'mostrarse firmado.');
+        final firmado = await _firmar(heard);
+        await BlindNarrator.speak(firmado
+            ? 'Tu mensaje se está mostrando firmado.'
+            : 'No encontré esa palabra en el diccionario de señas.');
       } else {
         // Sin avatar de señas, la forma más directa de "entregar" el
         // mensaje es leerlo en voz alta, como si se lo mostráramos a la
@@ -265,6 +332,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   /// (mismo patrón que TraducirSenasScreen). Devuelve true si ya se
   /// puede continuar.
   Future<bool> _asegurarPermisoCamara() async {
+    if (kIsWeb) return true;
     final status = await Permission.camera.status;
     if (status.isGranted) return true;
     setState(() => _pidiendoPermisoCamara = true);
@@ -331,6 +399,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             'mensaje.';
       }
     });
+    if (heard.isNotEmpty) await _firmar(heard);
   }
 
   @override
@@ -396,8 +465,8 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               if (_listening)
                 Container(
                   margin: const EdgeInsets.only(right: 10),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: const Color(0xFFE85D5D),
                     borderRadius: BorderRadius.circular(14),
@@ -497,9 +566,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   label: 'Traducir señas\ny leerlas en voz alta',
                   color: const Color(0xFF6C63FF),
                   busy: _pidiendoPermisoCamara,
-                  onTap: _pidiendoPermisoCamara
-                      ? null
-                      : _abrirCamaraTraductora,
+                  onTap: _pidiendoPermisoCamara ? null : _abrirCamaraTraductora,
                 ),
               ),
               const SizedBox(width: 10),
@@ -528,9 +595,11 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             ),
             child: Stack(
               children: [
-                const Center(
-                  child: Icon(Icons.person,
-                      size: 100, color: Color(0xFF8B5CF6)),
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: AvatarViewport(bridge: _avatarBridge),
+                  ),
                 ),
                 if (_listening)
                   Positioned(
@@ -550,6 +619,15 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                             fontSize: 11,
                             fontWeight: FontWeight.w700),
                       ),
+                    ),
+                  ),
+                if (_avatarReproduciendo)
+                  const Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: Chip(
+                      avatar: Icon(Icons.front_hand, size: 18),
+                      label: Text('Señando...'),
                     ),
                   ),
               ],
@@ -580,6 +658,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           const SizedBox(height: 12),
           TextField(
             controller: _controller,
+            onSubmitted: _firmar,
             decoration: InputDecoration(
               hintText: 'Tu mensaje aquí...',
               filled: true,

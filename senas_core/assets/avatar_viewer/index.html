@@ -2869,6 +2869,21 @@
     // para recibir el modelo.
     if (window.SenasChannel) window.SenasChannel.postMessage('js_listo');
 
+    // Canal para Flutter Web: el avatar vive en un iframe porque
+    // webview_flutter no renderiza WebView en navegador.
+    window.addEventListener('message', (event) => {
+      const mensaje = event.data;
+      if (!mensaje || mensaje.channel !== 'univoz-avatar') return;
+      if (mensaje.action === 'configurarRig') {
+        window.configurarRig(mensaje.calibration);
+      } else if (mensaje.action === 'configurarManos') {
+        window.configurarManos(mensaje.izquierda, mensaje.derecha);
+      } else if (mensaje.action === 'reproducir') {
+        window.reproducirSecuencia(
+          mensaje.seq, mensaje.fps, mensaje.normVersion);
+      }
+    });
+
     function bone(nombre) {
       return vrm ? vrm.humanoid.getNormalizedBoneNode(nombre) : null;
     }
@@ -2926,7 +2941,8 @@
     const cal = {
       version: 2,
       avatarScale: 1.0,
-      invertZ: false,
+      // sign_norm emits +Z toward the person facing the avatar.
+      invertZ: true,
       leftArmGain: 1.0,
       rightArmGain: 1.0,
       ikMin: 0.05,

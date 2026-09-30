@@ -9,11 +9,12 @@
 library pantalla_avatar;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:webview_flutter/webview_flutter.dart';
 
 import 'avatar_bridge.dart';
+import 'avatar_view.dart';
 import 'dtw.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
@@ -55,28 +56,49 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
   }
 
   Future<void> _cargar() async {
-    await _almacen.cargar();
-    await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
-    final d = await cargarDiccionario();
-    if (!mounted) return;
-    setState(() {
-      _diccionario = d;
-      _cargando = false;
-    });
+    try {
+      await _almacen.cargar();
+      await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
+      final d = await cargarDiccionario();
+      if (!mounted) return;
+      setState(() {
+        _diccionario = d;
+        _cargando = false;
+        if (!_bridge.compatible) {
+          _aviso = 'El avatar 3D no está disponible aquí.';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _cargando = false;
+        _aviso = 'No se pudo cargar el avatar. Reintenta más tarde.';
+      });
+    }
   }
 
   Future<void> _iniciarVoz() async {
-    final ok = await _voz.initialize(
-      onError: (e) {
-        if (mounted) setState(() => _escuchando = false);
-      },
-      onStatus: (s) {
-        if (s == 'done' || s == 'notListening') {
+    if (kIsWeb) return;
+    try {
+      final ok = await _voz.initialize(
+        onError: (e) {
           if (mounted) setState(() => _escuchando = false);
-        }
-      },
-    );
-    if (mounted) setState(() => _vozLista = ok);
+        },
+        onStatus: (s) {
+          if (s == 'done' || s == 'notListening') {
+            if (mounted) setState(() => _escuchando = false);
+          }
+        },
+      );
+      if (mounted) setState(() => _vozLista = ok);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _vozLista = false;
+          _aviso = 'El reconocimiento de voz no está disponible.';
+        });
+      }
+    }
   }
 
   /// Busca una plantilla por glosa o por su traduccion al español. Si hay
@@ -110,6 +132,10 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
   }
 
   Future<void> _senar(String texto) async {
+    if (!_bridge.compatible) {
+      setState(() => _aviso = 'El avatar 3D no está disponible aquí.');
+      return;
+    }
     final t = _buscar(texto);
     if (t == null) {
       setState(() => _aviso = 'No tengo la seña de "$texto" todavía.');
@@ -162,7 +188,7 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
 
   @override
   void dispose() {
-    _voz.stop();
+    _voz.stop().catchError((_) {});
     _bridge.dispose();
     _controladorTexto.dispose();
     super.dispose();
@@ -178,9 +204,7 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
             flex: 3,
             child: Stack(
               children: [
-                Positioned.fill(
-                  child: WebViewWidget(controller: _bridge.controller),
-                ),
+                Positioned.fill(child: AvatarViewport(bridge: _bridge)),
                 if (_reproduciendo)
                   const Positioned(
                     top: 8,

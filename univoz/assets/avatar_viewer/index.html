@@ -2395,8 +2395,10 @@
       kMediaPipeVersion + '/wasm';
     // Reutiliza los mismos .task que Android. El servidor web sirve senas_core
     // como raiz, por eso esta ruta funciona en scripts/univoz.sh web.
-    const kPoseModelWeb = '../../android/app/src/main/assets/pose_landmarker_lite.task';
-    const kHandModelWeb = '../../android/app/src/main/assets/hand_landmarker.task';
+    // Flutter Web empaqueta estos modelos junto al visor; Android conserva
+    // sus modelos nativos en android/app/src/main/assets.
+    const kPoseModelWeb = 'pose_landmarker_lite.task';
+    const kHandModelWeb = 'hand_landmarker.task';
     const $estado = document.getElementById('estado');
     const $estadoTexto = document.getElementById('estadoTexto');
     function avisar(msg) {
@@ -2869,6 +2871,21 @@
     // para recibir el modelo.
     if (window.SenasChannel) window.SenasChannel.postMessage('js_listo');
 
+    // Canal para Flutter Web: el avatar vive en un iframe porque
+    // webview_flutter no renderiza WebView en navegador.
+    window.addEventListener('message', (event) => {
+      const mensaje = event.data;
+      if (!mensaje || mensaje.channel !== 'univoz-avatar') return;
+      if (mensaje.action === 'configurarRig') {
+        window.configurarRig(mensaje.calibration);
+      } else if (mensaje.action === 'configurarManos') {
+        window.configurarManos(mensaje.izquierda, mensaje.derecha);
+      } else if (mensaje.action === 'reproducir') {
+        window.reproducirSecuencia(
+          mensaje.seq, mensaje.fps, mensaje.normVersion);
+      }
+    });
+
     function bone(nombre) {
       return vrm ? vrm.humanoid.getNormalizedBoneNode(nombre) : null;
     }
@@ -2926,7 +2943,8 @@
     const cal = {
       version: 2,
       avatarScale: 1.0,
-      invertZ: false,
+      // sign_norm emits +Z toward the person facing the avatar.
+      invertZ: true,
       leftArmGain: 1.0,
       rightArmGain: 1.0,
       ikMin: 0.05,

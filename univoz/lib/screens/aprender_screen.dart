@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:senas_core/avatar_bridge.dart';
+import 'package:senas_core/avatar_view.dart';
+import 'package:senas_core/muestras_locales.dart';
 import 'univoz_shared_widgets.dart';
 
 /// Pestaña "Aprender señas": diccionario visual de LSM con avatar 3D.
@@ -10,6 +13,8 @@ class AprenderScreen extends StatefulWidget {
 }
 
 class _AprenderScreenState extends State<AprenderScreen> {
+  final _avatarBridge = AvatarBridge();
+  final _almacen = AlmacenMuestras.instancia;
   bool _playing = false;
   double _speed = 1.0;
 
@@ -24,6 +29,27 @@ class _AprenderScreenState extends State<AprenderScreen> {
   String? _selectedCategory;
 
   static const Color _bgColor = Color(0xFFF7F2FA);
+
+  @override
+  void initState() {
+    super.initState();
+    _prepararAvatar();
+  }
+
+  Future<void> _prepararAvatar() async {
+    try {
+      await _almacen.cargar();
+      await _avatarBridge.configurarRig(_almacen.ajustes.rigCalibration);
+    } catch (_) {
+      // El visor muestra disponibilidad; no bloqueamos diccionario.
+    }
+  }
+
+  @override
+  void dispose() {
+    _avatarBridge.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,9 +92,8 @@ class _AprenderScreenState extends State<AprenderScreen> {
                   ),
                   child: Stack(
                     children: [
-                      const Center(
-                        child: Icon(Icons.person,
-                            size: 120, color: Color(0xFF8B5CF6)),
+                      Positioned.fill(
+                        child: AvatarViewport(bridge: _avatarBridge),
                       ),
                       Positioned(
                         top: 12,

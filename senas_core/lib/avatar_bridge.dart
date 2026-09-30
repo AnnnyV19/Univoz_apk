@@ -25,12 +25,14 @@ library avatar_bridge;
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' show Color;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'motion_contract.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
+import 'avatar_web_bridge.dart';
 
 // Modelo actual: VRM 0.0 exportado de VRoid Studio 1.22.1. Tiene el mapa
 // humanoide completo (54 huesos, 15 por mano) y los blendshapes de
@@ -38,7 +40,10 @@ import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 const String _kRutaAvatar = 'assets/avatar/univozM.vrm';
 
 class AvatarBridge {
-  late final WebViewController controller;
+  late final WebViewController? controller;
+
+  bool get disponible => controller != null;
+  bool get compatible => disponible || kIsWeb;
 
   /// Se llama cuando el visor termina de reproducir la ultima secuencia
   /// mandada. Util para encadenar varias palabras (una frase completa).
@@ -56,6 +61,10 @@ class AvatarBridge {
   bool _calibracionPendiente = false;
 
   AvatarBridge() {
+    if (kIsWeb) {
+      controller = null;
+      return;
+    }
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0x00000000))
@@ -100,41 +109,55 @@ class AvatarBridge {
   }
 
   Future<void> _cargarAvatar() async {
+    final webView = controller;
+    if (webView == null) return;
     final datos = await rootBundle.load(_kRutaAvatar);
     final b64 = base64Encode(
         datos.buffer.asUint8List(datos.offsetInBytes, datos.lengthInBytes));
-    await controller.runJavaScript("window.cargarAvatarBase64('$b64')");
-    await controller.runJavaScript(
+    await webView.runJavaScript("window.cargarAvatarBase64('$b64')");
+    await webView.runJavaScript(
         "window.configurarRig('${_escapar(jsonEncode(_calibracion.toJson()))}')");
-    await controller
-        .runJavaScript('window.configurarDiagnostico($_diagnostico)');
+    await webView.runJavaScript('window.configurarDiagnostico($_diagnostico)');
     if (_calibracionPendiente) {
       _calibracionPendiente = false;
-      await controller.runJavaScript('window.iniciarCalibracionPulgares()');
+      await webView.runJavaScript('window.iniciarCalibracionPulgares()');
     }
   }
 
   /// Configura adaptación del espacio normalizado al esqueleto VRM.
   Future<void> configurarRig(RigCalibration calibracion) async {
     _calibracion = calibracion;
+    if (kIsWeb) {
+      postAvatarCommand({
+        'action': 'configurarRig',
+        'calibration': calibracion.toJson(),
+      });
+      return;
+    }
     if (!_jsListo) return;
-    await controller.runJavaScript(
+    final webView = controller;
+    if (webView == null) return;
+    await webView.runJavaScript(
         "window.configurarRig('${_escapar(jsonEncode(calibracion.toJson()))}')");
   }
 
   Future<void> configurarDiagnostico(bool activo) async {
     _diagnostico = activo;
     if (!_jsListo) return;
-    await controller.runJavaScript('window.configurarDiagnostico($activo)');
+    final webView = controller;
+    if (webView == null) return;
+    await webView.runJavaScript('window.configurarDiagnostico($activo)');
   }
 
   Future<void> iniciarCalibracionPulgares() async {
     _calibracionPendiente = true;
     _diagnostico = true;
     if (!_jsListo) return;
+    final webView = controller;
+    if (webView == null) return;
     _calibracionPendiente = false;
-    await controller.runJavaScript('window.configurarDiagnostico(true)');
-    await controller.runJavaScript('window.iniciarCalibracionPulgares()');
+    await webView.runJavaScript('window.configurarDiagnostico(true)');
+    await webView.runJavaScript('window.iniciarCalibracionPulgares()');
   }
 
   /// Elige que brazos anima el avatar. Muchas senas de LSM son de una sola
@@ -144,16 +167,37 @@ class AvatarBridge {
   /// Izquierda y derecha son las del AVATAR, no las de quien mira.
   Future<void> configurarManos(
       {bool izquierda = true, bool derecha = true}) async {
-    await controller
-        .runJavaScript('window.configurarManos($izquierda, $derecha)');
+    if (kIsWeb) {
+      postAvatarCommand({
+        'action': 'configurarManos',
+        'izquierda': izquierda,
+        'derecha': derecha,
+      });
+      return;
+    }
+    final webView = controller;
+    if (webView == null) return;
+    await webView.runJavaScript('window.configurarManos($izquierda, $derecha)');
   }
 
   /// Reproduce una secuencia completa (lista de frames de 152 dimensiones
   /// cada uno, tal cual Template.seq en dtw.dart / plantillas.dart).
   Future<void> reproducir(List<List<double>> seq, {int fps = 30}) async {
+    if (kIsWeb) {
+      MotionSequenceV2.fromFrames(seq, fps: fps);
+      postAvatarCommand({
+        'action': 'reproducir',
+        'seq': seq,
+        'fps': fps,
+        'normVersion': kNormVersion,
+      });
+      return;
+    }
+    final webView = controller;
+    if (webView == null) return;
     final contrato = MotionSequenceV2.fromFrames(seq, fps: fps);
     final json = jsonEncode(seq);
-    await controller.runJavaScript(
+    await webView.runJavaScript(
         "window.reproducirSecuencia('${_escapar(json)}',$fps,'$kNormVersion')");
     // Validación ocurre antes de cruzar WebView; evita mezclar formatos legacy.
     assert(contrato.tFrames == kTFrames &&
@@ -173,13 +217,15 @@ class AvatarBridge {
     double quality = 1.0,
     Map<String, dynamic>? sourceMeta,
   }) async {
+    final webView = controller;
+    if (webView == null) return;
     MotionFrameV2(v);
     if (renderFrame != null) MotionFrameV2(renderFrame);
     final timestamp = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
     final calidad = quality.clamp(0.0, 1.0);
     final renderJson = jsonEncode(renderFrame ?? v);
     final metaJson = jsonEncode(sourceMeta ?? const <String, dynamic>{});
-    await controller.runJavaScript(
+    await webView.runJavaScript(
         "window.aplicarFrameVivo('${jsonEncode(v)}',$timestamp,$calidad,"
         "'${_escapar(renderJson)}','${_escapar(metaJson)}')");
   }

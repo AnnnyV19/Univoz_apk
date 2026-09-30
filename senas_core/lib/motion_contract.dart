@@ -196,7 +196,8 @@ class RigCalibration {
   const RigCalibration({
     this.version = 2,
     this.avatarScale = 1.0,
-    this.invertZ = false,
+    // sign_norm emits +Z toward the person facing the avatar.
+    this.invertZ = true,
     this.leftArmGain = 1.0,
     this.rightArmGain = 1.0,
     this.ikMin = 0.05,
@@ -220,7 +221,7 @@ class RigCalibration {
     return RigCalibration(
       version: 2,
       avatarScale: (json['avatar_scale'] as num?)?.toDouble() ?? 1.0,
-      invertZ: json['invert_z'] as bool? ?? false,
+      invertZ: json['invert_z'] as bool? ?? true,
       leftArmGain: (json['left_arm_gain'] as num?)?.toDouble() ?? 1.0,
       rightArmGain: (json['right_arm_gain'] as num?)?.toDouble() ?? 1.0,
       ikMin: (json['ik_min'] as num?)?.toDouble() ?? 0.05,
