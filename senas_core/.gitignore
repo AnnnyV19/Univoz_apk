@@ -36,3 +36,5 @@ android/local.properties
 .idea/
 *.iml
 .vscode/
+# Registros de sesion (landmarks, sin video): datos locales, no versionar.
+sesiones/

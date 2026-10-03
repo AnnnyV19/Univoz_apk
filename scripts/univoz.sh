@@ -355,9 +355,11 @@ run_web() {
     fi
 
     log_info 'Servidor web activo; Ctrl+C detiene visor.'
+    # Servidor propio: estaticos + recepcion de sesiones (senas_core/sesiones).
     (
         cd "$SENAS_DIR"
-        exec "$PYTHON_BIN" -m http.server "$WEB_PORT" --bind "$WEB_HOST"
+        exec "$PYTHON_BIN" "$SENAS_DIR/tools/servidor_visor.py" \
+            --port "$WEB_PORT" --bind "$WEB_HOST"
     ) &
     WEB_PID="$!"
     PIDS+=("$WEB_PID")

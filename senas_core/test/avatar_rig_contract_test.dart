@@ -78,7 +78,10 @@ void main() {
 
   test('captura unificada Holistic y cara al avatar tras flag', () {
     final html = File('assets/avatar_viewer/index.html').readAsStringSync();
-    expect(html, contains("let capturaModo = 'separado';"));
+    expect(html, contains("let capturaModo = 'holistic';"));
+    // modelo local primero (offline) y respaldo a captura separada
+    expect(html, contains('[HOLISTIC_MODEL_LOCAL, HOLISTIC_MODEL_URL]'));
+    expect(html, contains("eventoSesion('capture_fallback'"));
     expect(html, contains('vision.HolisticLandmarker.createFromOptions'));
     expect(html, contains('holisticToTaskResults('));
     // blendshapes fallan en GPU WebGL: expresiones por geometria
@@ -99,5 +102,19 @@ void main() {
     final gate = html.indexOf('gateHandCandidates(candidatosPuerta, pose)');
     final assign = html.indexOf('assignHandsByArmChain(candidatosCrudos');
     expect(gate, lessThan(assign), reason: 'la compuerta va antes');
+  });
+
+  test('sesion automatica con consentimiento: mide cuerpo y graba todo', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains('// ---- inicio rig_session.mjs'));
+    expect(html, contains('iniciarSesionAutomatica();'));
+    expect(html, contains('if (!pedirConsentimientoSesion()) return;'));
+    expect(html, contains("window.iniciarCapturaPerfil({consent: true});"));
+    expect(html, contains('sesionActual.frame({'));
+    expect(html, contains("void cerrarSesionAutomatica('camera_stop')"));
+    expect(html, contains("fetch('/api/sesiones/'"));
+    expect(html, contains('window.borrarMisDatos'));
+    // nunca video ni imagenes en la sesion
+    expect(html, isNot(contains('toDataURL')));
   });
 }

@@ -8,8 +8,9 @@
 // igual y solo cambia la fuente. Las etiquetas Left/Right de Holistic se
 // pasan como pista; el lado fisico lo sigue decidiendo assignHandsByArmChain.
 
-// Modelo oficial float16 (13.7 MB). Mientras se valida se carga de la red;
-// para WebView Android offline habra que empaquetarlo junto al visor.
+// Modelo oficial float16 (13.7 MB), empaquetado junto al visor para
+// funcionar sin red. La URL oficial queda como respaldo.
+export const HOLISTIC_MODEL_LOCAL = 'holistic_landmarker.task';
 export const HOLISTIC_MODEL_URL = 'https://storage.googleapis.com/' +
   'mediapipe-models/holistic_landmarker/holistic_landmarker/float16/latest/' +
   'holistic_landmarker.task';

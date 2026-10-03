@@ -119,9 +119,13 @@
       <button id="bPerfilCorporal" type="button" disabled>Medir mi cuerpo</button>
       <button id="bBorrarPerfil" type="button" disabled>Borrar perfil</button>
     </div>
+    <div class="camaraAcciones">
+      <button id="bDescargarSesion" type="button" disabled>Sesión JSONL</button>
+      <button id="bBorrarDatos" type="button">Borrar mis datos</button>
+    </div>
+    <div id="camaraSesion">Sesión: —</div>
     <label><input id="camaraRetarget" type="checkbox"> Adaptar a mi cuerpo (anclas)</label>
     <label><input id="avatarVistaEspejo" type="checkbox"> Vista espejo (para mí)</label>
-    <label><input id="camaraHolistic" type="checkbox"> Captura unificada: cuerpo + manos + cara (recarga)</label>
     <label><input id="camaraSuavizar" type="checkbox" checked> Suavizar movimiento</label>
     <label><input id="camaraReposoMano" type="checkbox" checked> Volver mano a reposo si se pierde</label>
     <label><input id="camaraDiagnostico" type="checkbox"> Modo diagnóstico</label>
@@ -3073,7 +3077,7 @@
     // ---- fin rig_mirror.mjs ----
 
     // ---- inicio rig_holistic.mjs (antes importado por separado) ----
-    const {HOLISTIC_MODEL_URL, holisticToTaskResults} = (() => {
+    const {HOLISTIC_MODEL_LOCAL, HOLISTIC_MODEL_URL, holisticToTaskResults} = (() => {
       // Captura unificada con MediaPipe HolisticLandmarker: un solo modelo para
       // cuerpo, manos y cara (543 puntos), con manos ancladas a la pose y landmarks
       // metricos tambien para las manos.
@@ -3084,8 +3088,9 @@
       // igual y solo cambia la fuente. Las etiquetas Left/Right de Holistic se
       // pasan como pista; el lado fisico lo sigue decidiendo assignHandsByArmChain.
 
-      // Modelo oficial float16 (13.7 MB). Mientras se valida se carga de la red;
-      // para WebView Android offline habra que empaquetarlo junto al visor.
+      // Modelo oficial float16 (13.7 MB), empaquetado junto al visor para
+      // funcionar sin red. La URL oficial queda como respaldo.
+      const HOLISTIC_MODEL_LOCAL = 'holistic_landmarker.task';
       const HOLISTIC_MODEL_URL = 'https://storage.googleapis.com/' +
         'mediapipe-models/holistic_landmarker/holistic_landmarker/float16/latest/' +
         'holistic_landmarker.task';
@@ -3120,7 +3125,7 @@
 
         return {poseResult, handResult: {landmarks, worldLandmarks, handednesses}, face};
       }
-      return {HOLISTIC_MODEL_URL, holisticToTaskResults};
+      return {HOLISTIC_MODEL_LOCAL, HOLISTIC_MODEL_URL, holisticToTaskResults};
     })();
     // ---- fin rig_holistic.mjs ----
 
@@ -3388,6 +3393,172 @@
     })();
     // ---- fin rig_hand_gate.mjs ----
 
+    // ---- inicio rig_session.mjs (antes importado por separado) ----
+    const {SESSION_SCHEMA, compactLandmarks, newSessionId, createSessionRecorder} = (() => {
+      // Grabador de sesion: registra TODO lo que pasa en una sesion de camara
+      // (landmarks crudos, manos antes y despues de la compuerta, cara, vectores,
+      // errores, tiempos y eventos) para encontrar fallos y mejorar el pipeline.
+      // Nunca guarda video ni imagenes.
+      //
+      // Formato JSONL (SessionLogV1): una linea JSON por registro.
+      //   {kind: 'session_start', schema, session_id, started_at_ms, meta}
+      //   {kind: 'frame', ...}      un frame procesado
+      //   {kind: 'event', type, ...} eventos (camara, perfil, fallback, errores)
+      //   {kind: 'session_end', frames, events, dropped, reason}
+      // Cada linea lleva `seq` (0, 1, 2...) para deduplicar al analizar.
+      // Las lineas se mandan en bloques a un `sink` (servidor local); si falla,
+      // se reintentan y, si la cola se llena, se descartan los frames mas viejos
+      // (nunca la cabecera ni los eventos) contando cuantos se perdieron.
+
+      const SESSION_SCHEMA = 'SessionLogV1';
+
+      const round = (v, d = 4) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return null;
+        const f = 10 ** d;
+        return Math.round(n * f) / f;
+      };
+
+      /** Landmarks a arrays redondeados [x, y, z(, visibility)]. */
+      function compactLandmarks(points, {indices = null, digits = 4} = {}) {
+        if (!Array.isArray(points)) return null;
+        const pick = indices ? indices.map((i) => points[i]) : points;
+        return pick.map((p) => {
+          const arr = Array.isArray(p) ? p : [p?.x, p?.y, p?.z,
+            ...(p?.visibility != null ? [p.visibility] : [])];
+          return arr.map((v) => round(v, digits));
+        });
+      }
+
+      function newSessionId(date = new Date()) {
+        const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+        const rand = Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+        return `${stamp}-${rand}`;
+      }
+
+      function createSessionRecorder({
+        sessionId = newSessionId(),
+        meta = {},
+        sink = async () => false,
+        flushEvery = 60,
+        maxPending = 20000,
+        now = () => Date.now(),
+      } = {}) {
+        let pending = [];
+        const local = [];            // copia para exportar si no hay servidor
+        const maxLocal = maxPending;
+        let frames = 0, events = 0, lines = 0, dropped = 0, sent = 0;
+        let flushing = null;
+        let closed = false;
+
+        let seq = 0;
+        const push = (record, droppable) => {
+          // seq permite deduplicar: al cerrar la pagina un bloque en vuelo puede
+          // llegar dos veces (fetch + sendBeacon); preferimos duplicar a perder.
+          const line = JSON.stringify({seq: seq++, ...record});
+          lines++;
+          pending.push({line, droppable});
+          local.push(line);
+          if (local.length > maxLocal) {
+            const i = local.findIndex((l, k) => k > 0 && l.startsWith('{"kind":"frame"'));
+            local.splice(i > 0 ? i : 1, 1);
+          }
+          if (pending.length > maxPending) {
+            const i = pending.findIndex((p) => p.droppable);
+            if (i >= 0) {
+              pending.splice(i, 1);
+              dropped++;
+            }
+          }
+          if (pending.length >= flushEvery) void api.flush();
+        };
+
+        const api = {
+          sessionId,
+          frame(data) {
+            if (closed) return;
+            frames++;
+            push({kind: 'frame', ...data}, true);
+          },
+          event(type, data = {}) {
+            if (closed) return;
+            events++;
+            push({kind: 'event', type, t_ms: now(), ...data}, false);
+          },
+          async flush() {
+            if (flushing) return flushing;
+            if (!pending.length) return true;
+            const batch = pending.slice();
+            flushing = (async () => {
+              let ok = false;
+              try { ok = await sink(sessionId, batch.map((p) => p.line)); } catch (_) {}
+              if (ok) {
+                pending = pending.slice(batch.length);
+                sent += batch.length;
+              }
+              return ok;
+            })();
+            try { return await flushing; } finally { flushing = null; }
+          },
+          async close({reason = 'stop'} = {}) {
+            if (closed) return;
+            push({kind: 'session_end', t_ms: now(), frames, events, dropped,
+              reason}, false);
+            closed = true;
+            await api.flush();
+            if (pending.length) await api.flush();
+          },
+          /**
+           * Cierre sincrono para cuando la pagina se va (pagehide): agrega el fin
+           * de sesion y entrega TODO lo pendiente a `syncSink` (sendBeacon), que
+           * no espera respuesta.
+           */
+          closeNow({reason = 'page_unload', maxBytes = 60000} = {},
+            syncSink = null) {
+            if (closed) return false;
+            push({kind: 'session_end', t_ms: now(), frames, events, dropped,
+              reason}, false);
+            closed = true;
+            // sendBeacon acepta ~64 KB: se manda en bloques, en orden.
+            const send = (lines) => {
+              try { return !!syncSink?.(sessionId, lines); } catch (_) { return false; }
+            };
+            let bloque = [], bytes = 0, ok = true;
+            for (const p of pending) {
+              if (bloque.length && bytes + p.line.length + 1 > maxBytes) {
+                ok = send(bloque);
+                if (!ok) break;
+                sent += bloque.length;
+                bloque = []; bytes = 0;
+              }
+              bloque.push(p.line);
+              bytes += p.line.length + 1;
+            }
+            if (ok && bloque.length) {
+              ok = send(bloque);
+              if (ok) sent += bloque.length;
+            }
+            if (ok) {
+              pending = [];
+              return true;
+            }
+            // Al menos que quede registrado el cierre.
+            const fin = pending.at(-1).line;
+            if (send([fin])) sent += 1;
+            return false;
+          },
+          stats: () => ({frames, events, lines, dropped, sent,
+            pending: pending.length}),
+          exportLines: () => local.slice(),
+        };
+        push({kind: 'session_start', schema: SESSION_SCHEMA, session_id: sessionId,
+          started_at_ms: now(), meta}, false);
+        return api;
+      }
+      return {SESSION_SCHEMA, compactLandmarks, newSessionId, createSessionRecorder};
+    })();
+    // ---- fin rig_session.mjs ----
+
     // ---- fin modulos inline ----
 
 
@@ -3511,6 +3682,11 @@
 
     function guardarAudit(event) {
       const timestampMs = Number(event.timestampMs) || performance.now();
+      if (event.severity === 'error' || event.severity === 'warn') {
+        eventoSesion('audit', {stage: event.stage, joint: event.joint ?? null,
+          code: event.code ?? null, severity: event.severity,
+          action: event.action ?? null});
+      }
       const key = `${event.stage}:${event.joint ?? ''}:${event.code ?? ''}`;
       const previo = ultimoAuditEmitido.get(key);
       // Evita que una misma anomalía de 54 huesos consuma ventana completa;
@@ -5323,29 +5499,142 @@
     let camaraStream = null;
     let poseLandmarkerWeb = null;
     let handLandmarkerWeb = null;
-    // Captura unificada (docs/13): un solo HolisticLandmarker para cuerpo,
-    // manos y cara. 'separado' (defecto) usa Pose + Hand como siempre. Se
-    // elige al cargar la pagina porque los detectores se precargan.
+    // Captura del producto (docs/13): un solo HolisticLandmarker para cuerpo,
+    // manos y cara. 'separado' (Pose + Hand) queda solo como respaldo
+    // automatico si Holistic no carga, o para depurar con ?captura=separado.
     const kCapturaModos = ['separado', 'holistic'];
-    const kCapturaStorageKey = 'univoz.capturaModo.v1';
-    let capturaModo = 'separado';
+    let capturaModo = 'holistic';
     try {
-      const pedido = new URLSearchParams(location.search).get('captura') ??
-        localStorage.getItem(kCapturaStorageKey);
+      const pedido = new URLSearchParams(location.search).get('captura');
       if (kCapturaModos.includes(pedido)) capturaModo = pedido;
-    } catch (_) { /* sin storage: separado */ }
+    } catch (_) { /* sin URL: holistic */ }
     let holisticLandmarkerWeb = null;
     // Fabrica y estado del delegado, para caer a CPU si la GPU falla al
     // detectar (no solo al crear).
     let holisticCrear = null;
+    let holisticModelo = HOLISTIC_MODEL_LOCAL;
     let holisticEnCpu = false;
     let holisticReintentando = false;
+    // ---- Sesion automatica (rig_session) --------------------------------
+    // Con consentimiento (una vez), cada vez que se enciende la camara se
+    // mide el cuerpo y se graba TODO lo que pasa (sin video) para encontrar
+    // errores. Se manda al servidor local (tools/servidor_visor.py) y queda
+    // tambien en memoria para exportarla desde el panel.
+    const kConsentimientoKey = 'univoz.consentimientoSesion.v1';
+    let sesionActual = null;
+    let ultimaSesionLineas = null;
+    let servidorSesionesOk = null;
+    let sesionFlushTimer = null;
+    // Puntos de cara que se guardan (la malla completa son 478).
+    const kCaraClave = [1, 10, 152, 33, 133, 159, 145, 263, 362, 386, 374,
+      13, 14, 61, 291, 105, 334];
+    function consentimientoSesion() {
+      try { return localStorage.getItem(kConsentimientoKey) === 'si'; }
+      catch (_) { return false; }
+    }
+    function pedirConsentimientoSesion() {
+      if (consentimientoSesion()) return true;
+      const ok = window.confirm('Para adaptar el avatar a tu cuerpo y mejorar ' +
+        'la deteccion, cada vez que enciendas la camara se mediran tus ' +
+        'proporciones y se registrara la sesion (puntos del cuerpo, manos y ' +
+        'cara; nunca video ni imagenes). Se guarda solo en este equipo y ' +
+        'puedes borrarlo con "Borrar mis datos". ¿Aceptas?');
+      if (ok) {
+        try { localStorage.setItem(kConsentimientoKey, 'si'); } catch (_) {}
+      }
+      return ok;
+    }
+    async function sinkSesion(id, lineas) {
+      if (servidorSesionesOk === null) {
+        try {
+          const r = await fetch('/api/ping', {cache: 'no-store'});
+          servidorSesionesOk = r.ok && (await r.json()).sessions === true;
+        } catch (_) { servidorSesionesOk = false; }
+      }
+      if (!servidorSesionesOk) return false;
+      try {
+        const r = await fetch('/api/sesiones/' + encodeURIComponent(id), {
+          // Sin keepalive: comparte cuota (~64 KB) con sendBeacon del cierre.
+          method: 'POST', body: lineas.join('\n'),
+          headers: {'Content-Type': 'text/plain'},
+        });
+        return r.ok;
+      } catch (_) { return false; }
+    }
+    function iniciarSesionAutomatica() {
+      if (!pedirConsentimientoSesion()) return;
+      const video = document.getElementById('camaraVideo');
+      sesionActual = createSessionRecorder({
+        sink: sinkSesion,
+        meta: {
+          platform: standaloneWeb ? 'web' : 'android',
+          user_agent: navigator.userAgent,
+          capture_mode: capturaModo,
+          holistic_model: holisticLandmarkerWeb ? holisticModelo : null,
+          holistic_cpu: holisticEnCpu,
+          video: {width: video?.videoWidth ?? 0, height: video?.videoHeight ?? 0,
+            fps: webCameraState.captureFps},
+          retarget_mode: retargetMode,
+          view: vistaAvatar,
+          calibration: {invertZ: cal.invertZ, version: cal.version},
+          body_profile: perfilCorporal,
+          versions: {norm: '2.0.0', sign_space: SIGN_SPACE_VERSION,
+            body_profile: BODY_PROFILE_VERSION},
+        },
+      });
+      webCameraState.sessionId = sesionActual.sessionId;
+      // Envio por tiempo: lo pendiente nunca pasa de ~1 s de frames.
+      clearInterval(sesionFlushTimer);
+      sesionFlushTimer = setInterval(() => {
+        void sesionActual?.flush();
+        pintarEstadoCamaraWeb();
+      }, 1000);
+      // Medicion automatica del cuerpo en segundo plano.
+      window.iniciarCapturaPerfil({consent: true});
+      eventoSesion('session_auto_start', {});
+    }
+    async function cerrarSesionAutomatica(reason) {
+      clearInterval(sesionFlushTimer);
+      const sesion = sesionActual;
+      if (!sesion) return;
+      sesionActual = null;
+      await sesion.close({reason});
+      ultimaSesionLineas = sesion.exportLines();
+      pintarEstadoCamaraWeb();
+    }
+    function eventoSesion(type, data) {
+      sesionActual?.event(type, data);
+    }
+    function descargarSesionWeb() {
+      const lineas = sesionActual?.exportLines() ?? ultimaSesionLineas;
+      if (!lineas?.length) return;
+      const blob = new Blob([lineas.join('\n') + '\n'],
+        {type: 'application/x-ndjson'});
+      const url = URL.createObjectURL(blob);
+      const enlace = document.createElement('a');
+      enlace.href = url;
+      enlace.download = `sesion_${JSON.parse(lineas[0]).session_id}.jsonl`;
+      enlace.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    window.borrarMisDatos = function () {
+      try { localStorage.removeItem(kConsentimientoKey); } catch (_) {}
+      window.borrarPerfilCorporal();
+      ultimaSesionLineas = null;
+      void cerrarSesionAutomatica('consent_revoked');
+      avisar('Datos locales borrados (perfil y consentimiento).');
+    };
+    // Entrada de manos del ultimo frame (antes y despues de la compuerta).
+    let ultimaEntradaManosWeb = null;
+
     // Centinela: frame saltado a proposito (no es un error de camara).
     const kSaltarFrameWeb = Symbol('saltar_frame');
     function caerHolisticACpu(error) {
       if (holisticEnCpu || holisticReintentando || !holisticCrear) throw error;
       holisticReintentando = true;
       avisar('Holistic GPU fallo; reintentando en CPU…');
+      eventoSesion('holistic_gpu_failed', {
+        error: String(error?.message ?? error).slice(0, 300)});
       const anterior = holisticLandmarkerWeb;
       holisticLandmarkerWeb = null;
       try { anterior?.close(); } catch (_) {}
@@ -5414,6 +5703,7 @@
             JSON.stringify(perfilCorporal));
         } catch (_) { /* queda solo en memoria */ }
         avisar('Perfil corporal listo');
+        eventoSesion('body_profile', {profile: perfilCorporal});
         pintarEstadoCamaraWeb();
       } else if (estado.phase !== antes) {
         avisar('Perfil corporal: ' + estado.instruction);
@@ -5918,6 +6208,18 @@
           : 'Medir mi cuerpo';
         borrar.disabled = !perfilCorporal && !capturando;
       }
+      const bSesion = document.getElementById('bDescargarSesion');
+      const tSesion = document.getElementById('camaraSesion');
+      if (bSesion && tSesion) {
+        bSesion.disabled = !sesionActual && !ultimaSesionLineas?.length;
+        const st = sesionActual?.stats();
+        tSesion.textContent = sesionActual
+          ? `Sesión ${sesionActual.sessionId}: ${st.frames} frames · ` +
+            `${servidorSesionesOk ? 'guardando en servidor' : 'solo en memoria'}` +
+            (st.dropped ? ` · ${st.dropped} perdidos` : '')
+          : (consentimientoSesion() ? 'Sesión: se inicia con la cámara'
+            : 'Sesión: sin consentimiento');
+      }
       const calidad = s.quality > 0 ? Math.round(s.quality * 100) + '%' : '—';
       stats.textContent = 'Pose: ' + (s.pose ? 'sí' : 'no') +
         ' · I: ' + (s.leftHand ? 'sí (' + s.leftHandPoints + ')' : 'no') +
@@ -5991,6 +6293,15 @@
         diagnosticErrors.push({stage: 'association', code});
         webCameraState.handRejects = (webCameraState.handRejects ?? 0) + 1;
       }
+      ultimaEntradaManosWeb = sesionActual ? {
+        candidates: candidatosPuerta.map((c, index) => ({
+          lm: compactLandmarks(c.landmarks),
+          label: String(etiquetas?.[index]?.[0]?.categoryName ?? ''),
+          conf: Number(c.confidence.toFixed(3)),
+        })),
+        accepted: puerta.accepted, unanchored: puerta.unanchored,
+        rejected: puerta.rejected, passed: pasan,
+      } : null;
       manos = pasan.map((index) => manos[index]);
       etiquetas = pasan.map((index) => etiquetas?.[index] ?? []);
       const hombroI = webCoord(pose?.[11]);
@@ -6017,6 +6328,10 @@
         rightWristVisibility: Number(pose?.[16]?.visibility ?? 1),
         shoulderWidth: anchoHombros,
       });
+      if (ultimaEntradaManosWeb) {
+        ultimaEntradaManosWeb.assignment = {mode: asignacion.mode,
+          sides: asignacion.sideByIndex};
+      }
       webCameraState.handAssignmentMode = asignacion.mode === 'pose_arm_chain' ||
         asignacion.mode === 'ambiguous' ? asignacion.mode : 'pose_pending';
       if (asignacion.mode === 'ambiguous') {
@@ -6297,6 +6612,34 @@
             }
             registrarDiagnostico(null, null, timestampMs, 0);
           }
+          if (sesionActual) {
+            const r4 = (v) => (Array.isArray(v) ? v.map((x) =>
+              Math.round(Number(x) * 1e4) / 1e4) : null);
+            const caraCabeza = caraVivo ? headRotationFromFace(caraVivo.landmarks) : null;
+            sesionActual.frame({
+              t: timestampMs, id: sourceFrameId, mode: capturaModo,
+              ms: {pose: webCameraState.poseMs, hand: webCameraState.handMs,
+                proc: performance.now() - processStartedAt},
+              pose_ran: !!ejecutarPose,
+              pose: compactLandmarks(pose),
+              world: compactLandmarks(poseMundo),
+              hands: ultimaEntradaManosWeb,
+              tracked: {left: !!manos.left, right: !!manos.right,
+                left_surface: webCameraState.leftSurface,
+                right_surface: webCameraState.rightSurface},
+              face: caraVivo ? {
+                head: caraCabeza,
+                expr: expressionsFromFaceLandmarks(caraVivo.landmarks),
+                pts: compactLandmarks(caraVivo.landmarks, {indices: kCaraClave}),
+              } : null,
+              vec: r4(vector),
+              sign_space: signSpaceVivo ? {v: r4(signSpaceVivo.values),
+                mask: signSpaceVivo.mask, mode: signSpaceVivo.mode} : null,
+              quality: webCameraState.quality,
+              errors: diagnosticErrors.map((e) => e.code),
+              profile: capturaPerfil ? capturaPerfil.status().phase : null,
+            });
+          }
           pintarOverlayWeb(pose, manos.left, manos.right);
 
           const ahora = performance.now();
@@ -6322,6 +6665,7 @@
         } catch (e) {
           if (e !== kSaltarFrameWeb) {
             const error = String(e?.message ?? e);
+            eventoSesion('camera_error', {error: error.slice(0, 500)});
             webCameraState.running = false;
             void liberarCamaraWeb().catch(() => {}).finally(() => {
               webCameraState.error = error;
@@ -6340,6 +6684,7 @@
 
     async function liberarCamaraWeb() {
       cancelAnimationFrame(camaraLoopId);
+      void cerrarSesionAutomatica('camera_stop');
       if (camaraStream) {
         for (const track of camaraStream.getTracks()) track.stop();
         camaraStream = null;
@@ -6390,9 +6735,9 @@
         ...(gpu ? { delegate: 'GPU' } : {}),
       });
       if (capturaModo === 'holistic') {
-        holisticCrear = (gpu) => vision.HolisticLandmarker.createFromOptions(
-          fileset, {
-            baseOptions: base(HOLISTIC_MODEL_URL, gpu),
+        holisticCrear = (gpu, modelo = holisticModelo) =>
+          vision.HolisticLandmarker.createFromOptions(fileset, {
+            baseOptions: base(modelo, gpu),
             runningMode: 'VIDEO',
             minPoseDetectionConfidence: 0.4,
             minPosePresenceConfidence: 0.4,
@@ -6403,13 +6748,24 @@
             // const"); las expresiones salen de la geometria de la malla.
             outputFaceBlendshapes: false,
           });
-        try {
-          holisticEnCpu = false;
-          return {holistic: await holisticCrear(true)};
-        } catch (_) {
-          holisticEnCpu = true;
-          return {holistic: await holisticCrear(false)};
+        // Local primero (offline); luego la URL oficial; GPU y luego CPU.
+        for (const modelo of [HOLISTIC_MODEL_LOCAL, HOLISTIC_MODEL_URL]) {
+          for (const gpu of [true, false]) {
+            try {
+              const tarea = await holisticCrear(gpu, modelo);
+              holisticModelo = modelo;
+              holisticEnCpu = !gpu;
+              return {holistic: tarea};
+            } catch (error) {
+              eventoSesion('holistic_create_failed', {model: modelo, gpu,
+                error: String(error?.message ?? error).slice(0, 300)});
+            }
+          }
         }
+        // Sin Holistic: respaldo a Pose + Hand para no dejar sin camara.
+        capturaModo = 'separado';
+        avisar('Holistic no disponible; usando captura separada');
+        eventoSesion('capture_fallback', {to: 'separado'});
       }
       let pose = null;
       let hand = null;
@@ -6648,6 +7004,7 @@
         webCameraState.motionScore = 0;
         webCameraState.fingerMotionScore = 0;
         webCameraState.motionQuiet = true;
+        iniciarSesionAutomatica();
         pintarEstadoCamaraWeb();
         camaraLoopId = requestAnimationFrame(procesarCamaraWeb);
         return true;
@@ -6749,15 +7106,10 @@
       });
       document.getElementById('bBorrarPerfil').addEventListener('click',
         () => { window.borrarPerfilCorporal(); });
-      const controlHolistic = document.getElementById('camaraHolistic');
-      controlHolistic.checked = capturaModo === 'holistic';
-      controlHolistic.addEventListener('change', () => {
-        const modo = controlHolistic.checked ? 'holistic' : 'separado';
-        try { localStorage.setItem(kCapturaStorageKey, modo); } catch (_) {}
-        const url = new URL(location.href);
-        url.searchParams.set('captura', modo);
-        location.href = url.toString();
-      });
+      document.getElementById('bDescargarSesion').addEventListener('click',
+        descargarSesionWeb);
+      document.getElementById('bBorrarDatos').addEventListener('click',
+        () => { window.borrarMisDatos(); });
       const controlEspejo = document.getElementById('avatarVistaEspejo');
       controlEspejo.checked = vistaAvatar === 'espejo';
       controlEspejo.addEventListener('change', () => {
@@ -6768,7 +7120,17 @@
       controlRetarget.addEventListener('change', () => {
         window.configurarRetarget(controlRetarget.checked ? 'anchors' : 'legacy');
       });
-      window.addEventListener('beforeunload', () => { liberarCamaraWeb(); });
+      // pagehide (no beforeunload) es el evento fiable al cerrar o cambiar de
+      // pestana, tambien en movil. sendBeacon entrega aunque la pagina muera.
+      window.addEventListener('pagehide', () => {
+        const sesion = sesionActual;
+        sesionActual = null;
+        sesion?.closeNow({reason: 'page_unload', maxBytes: 30000}, (id, lineas) =>
+          servidorSesionesOk && navigator.sendBeacon?.(
+            '/api/sesiones/' + encodeURIComponent(id),
+            new Blob([lineas.join('\n')], {type: 'text/plain'})));
+        liberarCamaraWeb();
+      });
       pintarEstadoCamaraWeb();
       void precargarDetectoresWeb().catch(() => {});
       const autoStartDeadline = performance.now() + 15000;
