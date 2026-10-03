@@ -511,3 +511,27 @@ test('anchors mode falls back to legacy when the arm is masked', () => {
   root.updateMatrixWorld(true);
   assert.ok(wrist.getWorldPosition(vector()).y > -1e-6);
 });
+
+// Profundidad: sign_norm entrega +z = al frente de la persona (hacia la
+// camara) y el avatar mira a +Z (hacia la camara). Con la calibracion de
+// PRODUCCION una mano delante del cuerpo debe quedar delante del avatar.
+const productionInvertZ = /invertZ:\s*true/.test(calBlock);
+
+test('production default puts a forward wrist in front of the avatar', () => {
+  const {ctx,root,up,wrist}=armRuntime();
+  ctx.cal.invertZ = productionInvertZ;
+  // brazo estirado al frente: muneca a 0.9 anchos delante del hombro
+  ctx.resolverBrazo('left',base,vector(0,0,0),vector(0,0,.45),vector(0,0,.9));
+  root.updateMatrixWorld(true);
+  const d = wrist.getWorldPosition(vector()).sub(up.getWorldPosition(vector()));
+  assert.ok(d.z > 0.4, `muneca detras del avatar: z=${d.z}`);
+});
+
+test('production default keeps hand shape chirality (finger toward camera)', () => {
+  const ctx = mathRuntime();
+  ctx.cal.invertZ = productionInvertZ;
+  // sign_norm: x,y de la forma ya en marco de la persona; z en convencion de
+  // imagen (negativa = mas cerca de la camara = al frente de la persona).
+  const haciaCamara = ctx.vectorManoAAvatar([0, 0, -1], base);
+  assert.ok(haciaCamara.z > 0.99, `dedo hacia la camara invertido: z=${haciaCamara.z}`);
+});

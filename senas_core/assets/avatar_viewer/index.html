@@ -3774,10 +3774,12 @@
       };
     };
     const cal = {
-      version: 2,
+      version: 3,
       avatarScale: 1.0,
       // sign_norm emits +Z toward the person facing the avatar.
-      invertZ: true,
+      // sign_norm: +Z = al frente de la persona (hacia la camara); el avatar
+      // mira a +Z. No invertir: con true los brazos iban detras del avatar.
+      invertZ: false,
       leftArmGain: 1.0,
       rightArmGain: 1.0,
       ikMin: 0.05,
@@ -3832,7 +3834,9 @@
     window.configurarRig = function (json) {
       try {
         const c = typeof json === 'string' ? JSON.parse(json) : json;
-        if (!c || (c.version != null && ![1, 2].includes(Number(c.version)))) return;
+        if (!c || (c.version != null && ![1, 2, 3].includes(Number(c.version)))) return;
+        // V1/V2 traian invertZ=true por un defecto erroneo (ver cal).
+        if (c.version != null && Number(c.version) < 3) delete c.invert_z;
         for (const key of ['avatarScale', 'invertZ', 'leftArmGain',
           'rightArmGain', 'ikMin', 'ikMax', 'fingerSensitivity',
           'wristCompensation']) {

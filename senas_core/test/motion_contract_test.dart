@@ -82,9 +82,10 @@ void main() {
       'avatar_scale': 1.2,
       'invert_z': true,
     });
-    expect(migrated.version, 2);
+    expect(migrated.version, 3);
     expect(migrated.avatarScale, 1.2);
-    expect(migrated.invertZ, isTrue);
+    // invert_z=true venia del defecto erroneo: se migra a false.
+    expect(migrated.invertZ, isFalse);
     expect(migrated.leftThumb.calibrated, isFalse);
     expect(migrated.rightThumb.calibrated, isFalse);
   });
@@ -116,5 +117,13 @@ void main() {
   test('RigCalibration permite flexion natural del codo por defecto', () {
     expect(RigCalibration().ikMax, closeTo(2.60, 1e-12));
     expect(RigCalibration().resetHandOnLoss, isTrue);
+  });
+
+  test('RigCalibration V2 guardada con invertZ erroneo se corrige', () {
+    final v2 = RigCalibration.fromJson({'version': 2, 'invert_z': true});
+    expect(v2.invertZ, isFalse);
+    final v3 = RigCalibration.fromJson({'version': 3, 'invert_z': true});
+    expect(v3.invertZ, isTrue, reason: 'en V3 es eleccion explicita');
+    expect(const RigCalibration().invertZ, isFalse);
   });
 }

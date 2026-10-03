@@ -19,9 +19,10 @@ void main() {
     final contrato = File('lib/motion_contract.dart').readAsStringSync();
     final visor = File('assets/avatar_viewer/index.html').readAsStringSync();
 
-    expect(contrato, contains('this.invertZ = true'));
-    expect(contrato, contains("json['invert_z'] as bool? ?? true"));
-    expect(visor, contains('invertZ: true'));
+    // +Z de sign_norm = frente de la persona = frente del avatar.
+    expect(contrato, contains('this.invertZ = false'));
+    expect(contrato, contains("json['invert_z'] as bool? ?? false"));
+    expect(visor, contains('invertZ: false'));
   });
 
   test('mapeo anatómico conserva izquierda y derecha del avatar', () {

@@ -194,10 +194,12 @@ class RigCalibration {
   final ThumbCalibration rightThumb;
 
   const RigCalibration({
-    this.version = 2,
+    this.version = 3,
     this.avatarScale = 1.0,
-    // sign_norm emits +Z toward the person facing the avatar.
-    this.invertZ = true,
+    // sign_norm entrega +Z = al frente de la persona (hacia la camara) y el
+    // avatar mira a +Z (hacia la camara): no se invierte. Con true las manos
+    // delante del cuerpo quedaban detras del avatar.
+    this.invertZ = false,
     this.leftArmGain = 1.0,
     this.rightArmGain = 1.0,
     this.ikMin = 0.05,
@@ -219,9 +221,13 @@ class RigCalibration {
     final right = (thumbs['right'] as Map?)?.cast<String, dynamic>() ??
         const <String, dynamic>{};
     return RigCalibration(
-      version: 2,
+      version: 3,
       avatarScale: (json['avatar_scale'] as num?)?.toDouble() ?? 1.0,
-      invertZ: json['invert_z'] as bool? ?? true,
+      // Hasta V2 el defecto era true por error y quedo guardado en los
+      // ajustes sin que el usuario lo eligiera: se migra a false.
+      invertZ: sourceVersion >= 3
+          ? json['invert_z'] as bool? ?? false
+          : false,
       leftArmGain: (json['left_arm_gain'] as num?)?.toDouble() ?? 1.0,
       rightArmGain: (json['right_arm_gain'] as num?)?.toDouble() ?? 1.0,
       ikMin: (json['ik_min'] as num?)?.toDouble() ?? 0.05,
