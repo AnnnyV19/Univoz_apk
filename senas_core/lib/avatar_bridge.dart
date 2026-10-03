@@ -32,6 +32,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import 'motion_contract.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
+import 'sign_space.dart' show SignSpaceFrame;
 import 'avatar_web_bridge.dart';
 
 // Modelo actual: VRM 0.0 exportado de VRoid Studio 1.22.1. Tiene el mapa
@@ -182,7 +183,16 @@ class AvatarBridge {
 
   /// Reproduce una secuencia completa (lista de frames de 152 dimensiones
   /// cada uno, tal cual Template.seq en dtw.dart / plantillas.dart).
-  Future<void> reproducir(List<List<double>> seq, {int fps = 30}) async {
+  ///
+  /// [signSpace] es la pista opcional de la biblioteca (un SignSpaceFrame o
+  /// null por frame): con ella el visor adapta los brazos a las proporciones
+  /// del avatar en modo de retarget 'anchors'.
+  Future<void> reproducir(List<List<double>> seq,
+      {int fps = 30, List<SignSpaceFrame?>? signSpace}) async {
+    if (signSpace != null && signSpace.length != seq.length) {
+      throw ArgumentError('signSpace debe tener un frame por frame de seq');
+    }
+    final pista = signSpace?.map((f) => f?.toJson()).toList();
     if (kIsWeb) {
       MotionSequenceV2.fromFrames(seq, fps: fps);
       postAvatarCommand({
@@ -190,6 +200,7 @@ class AvatarBridge {
         'seq': seq,
         'fps': fps,
         'normVersion': kNormVersion,
+        if (pista != null) 'signSpace': pista,
       });
       return;
     }
@@ -197,8 +208,10 @@ class AvatarBridge {
     if (webView == null) return;
     final contrato = MotionSequenceV2.fromFrames(seq, fps: fps);
     final json = jsonEncode(seq);
+    final pistaJs = pista == null ? 'null' : "'${_escapar(jsonEncode(pista))}'";
     await webView.runJavaScript(
-        "window.reproducirSecuencia('${_escapar(json)}',$fps,'$kNormVersion')");
+        "window.reproducirSecuencia('${_escapar(json)}',$fps,'$kNormVersion',"
+        '$pistaJs)');
     // Validación ocurre antes de cruzar WebView; evita mezclar formatos legacy.
     assert(contrato.tFrames == kTFrames &&
         contrato.frames.first.length == kFrameDim);

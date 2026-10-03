@@ -2386,7 +2386,7 @@
     // ---- fin rig_tracking.mjs ----
 
     // ---- inicio rig_sign_space.mjs (antes importado por separado) ----
-    const {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame, parseSignSpaceFrame} = (() => {
+    const {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame, parseSignSpaceFrame, parseSignSpaceSequence} = (() => {
       // SignSpaceFrame v1: representacion de la sena independiente del cuerpo.
       // Espejo exacto de tools/sign_space.py y lib/sign_space.dart; golden en
       // test/golden/sign_space_cases.json. MotionFrameV2 152D no cambia.
@@ -2569,7 +2569,29 @@
           mask: Object.fromEntries(MASK_KEYS.map((k) => [k, raw.mask[k]])),
         };
       }
-      return {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame, parseSignSpaceFrame};
+
+      /**
+       * Valida la pista SignSpace de una sena de biblioteca (MotionSequenceV2 con
+       * campo opcional `sign_space`). Debe tener tantas entradas como frames 152D;
+       * cada entrada es un SignSpaceFrame o null (frame sin cuerpo utilizable).
+       * Devuelve el arreglo validado, o null si la pista no sirve: en ese caso el
+       * visor reproduce solo con 152D, como antes.
+       */
+      function parseSignSpaceSequence(raw, frameCount) {
+        if (!Array.isArray(raw) || raw.length !== frameCount) return null;
+        const out = [];
+        for (const entry of raw) {
+          if (entry === null) {
+            out.push(null);
+            continue;
+          }
+          const frame = parseSignSpaceFrame(entry);
+          if (!frame) return null;
+          out.push(frame);
+        }
+        return out.some(Boolean) ? out : null;
+      }
+      return {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame, parseSignSpaceFrame, parseSignSpaceSequence};
     })();
     // ---- fin rig_sign_space.mjs ----
 
@@ -3314,7 +3336,8 @@
         window.configurarManos(mensaje.izquierda, mensaje.derecha);
       } else if (mensaje.action === 'reproducir') {
         window.reproducirSecuencia(
-          mensaje.seq, mensaje.fps, mensaje.normVersion);
+          mensaje.seq, mensaje.fps, mensaje.normVersion,
+          mensaje.signSpace ?? null);
       }
     });
 
@@ -4666,6 +4689,9 @@
     let webPoseCache = null;
     let webGrabacion = [];
     let webUltimaSecuencia = null;
+    // Pista SignSpace pareada 1:1 con webGrabacion (biblioteca de senas).
+    let webGrabacionSignSpace = [];
+    let webUltimaSignSpace = null;
 
     function percentilWeb(values, percentile = .95) {
       if (!values.length) return 0;
@@ -5467,9 +5493,12 @@
               vector, frameVivo, timestampMs, calidad, ultimoSourceMeta);
             if (webCameraState.recording) {
               webGrabacion.push(vector.slice());
+              webGrabacionSignSpace.push(signSpaceVivo);
               webCameraState.recordedFrames = webGrabacion.length;
               if (webGrabacion.length >= kTFrames) {
                 webUltimaSecuencia = webGrabacion.slice(0, kTFrames);
+                webUltimaSignSpace = parseSignSpaceSequence(
+                  webGrabacionSignSpace.slice(0, kTFrames), kTFrames);
                 webCameraState.recording = false;
                 webCameraState.lastSequenceFrames = kTFrames;
                 pintarEstadoCamaraWeb();
@@ -5560,6 +5589,7 @@
       webCameraState.stale = false;
       webCameraState.staleMs = 0;
       webGrabacion = [];
+      webGrabacionSignSpace = [];
     }
 
     async function crearLandmarkersWeb(vision, fileset) {
@@ -5648,6 +5678,7 @@
     function iniciarGrabacionWeb() {
       if (!webCameraState.running) return;
       webGrabacion = [];
+      webGrabacionSignSpace = [];
       webCameraState.recording = true;
       webCameraState.recordedFrames = 0;
       webCameraState.lastSequenceFrames = 0;
@@ -5657,7 +5688,8 @@
     function repetirGrabacionWeb() {
       if (!webUltimaSecuencia) return;
       window.reproducirSecuencia(
-        JSON.stringify(webUltimaSecuencia), 30, '2.0.0');
+        JSON.stringify(webUltimaSecuencia), 30, '2.0.0',
+        webUltimaSignSpace ? JSON.stringify(webUltimaSignSpace) : null);
     }
 
     function descargarGrabacionWeb() {
@@ -5669,6 +5701,12 @@
         t_frames: kTFrames,
         fps: 30,
         frames: webUltimaSecuencia,
+        // Opcional: permite reproducir la sena en cualquier avatar con el
+        // retarget por anclas. Lectores viejos lo ignoran.
+        ...(webUltimaSignSpace ? {
+          sign_space_version: SIGN_SPACE_VERSION,
+          sign_space: webUltimaSignSpace,
+        } : {}),
       };
       const blob = new Blob([JSON.stringify(paquete)], {
         type: 'application/json',
@@ -6058,13 +6096,17 @@
     // del rig queda encapsulado en esta pagina; Dart solo conoce contrato V2.
     const RigBodyEngine = Object.freeze({ aplicarFrame });
 
-    window.reproducirSecuencia = function (seqJson, fps, normVersion) {
+    let colaSignSpace = null;
+    window.reproducirSecuencia = function (seqJson, fps, normVersion,
+        signSpaceJson = null) {
       if (normVersion != null && String(normVersion) !== '2.0.0') {
         avisar('norm_version incompatible: ' + normVersion);
         return;
       }
       try {
-        colaFrames = JSON.parse(seqJson);
+        // Android manda JSON (runJavaScript); Flutter Web manda el arreglo
+        // tal cual por postMessage. JSON.parse(arreglo) fallaba siempre.
+        colaFrames = typeof seqJson === 'string' ? JSON.parse(seqJson) : seqJson;
       } catch (e) {
         avisar('secuencia invalida: ' + e);
         return;
@@ -6076,6 +6118,15 @@
         avisar('secuencia incompatible: se requieren 32 frames de 152 valores');
         colaFrames = [];
         return;
+      }
+      colaSignSpace = null;
+      if (signSpaceJson) {
+        try {
+          colaSignSpace = parseSignSpaceSequence(
+            typeof signSpaceJson === 'string'
+              ? JSON.parse(signSpaceJson) : signSpaceJson,
+            colaFrames.length);
+        } catch (_) { /* pista invalida: se reproduce solo con 152D */ }
       }
       frameActual = 0;
       kFps = Number.isFinite(Number(fps)) && Number(fps) > 0
@@ -6217,6 +6268,7 @@
           RigBodyEngine.aplicarFrame(colaFrames[frameActual], {
             frameId: frameActual + 1,
             timestampMs: frameActual * 1000 / kFps,
+            signSpace: colaSignSpace?.[frameActual] ?? null,
           });
           frameActual++;
         }

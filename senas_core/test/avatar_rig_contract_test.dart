@@ -44,4 +44,14 @@ void main() {
     expect(html, contains("let retargetMode = 'legacy';"));
     expect(html, contains('window.configurarRetarget'));
   });
+
+  test('biblioteca: grabacion y reproduccion llevan pista SignSpace', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains('webGrabacionSignSpace.push(signSpaceVivo)'));
+    expect(html, contains('sign_space: webUltimaSignSpace'));
+    expect(html, contains('signSpace: colaSignSpace?.[frameActual] ?? null'));
+    expect(html, contains("typeof seqJson === 'string'"));
+    final bridge = File('lib/avatar_bridge.dart').readAsStringSync();
+    expect(bridge, contains("'signSpace': pista"));
+  });
 }

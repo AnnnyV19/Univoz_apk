@@ -7,6 +7,7 @@ import {
   SIGN_SPACE_VERSION,
   SS,
   parseSignSpaceFrame,
+  parseSignSpaceSequence,
   signSpaceFrame,
 } from '../../assets/avatar_viewer/rig_sign_space.mjs';
 import {
@@ -133,4 +134,14 @@ test('parseSignSpaceFrame accepts bridge JSON and rejects broken frames', () => 
   assert.equal(parseSignSpaceFrame({...frame,
     values: frame.values.map((v, i) => (i === 3 ? NaN : v))}), null);
   assert.equal(parseSignSpaceFrame({...frame, mask: {armL: true}}), null);
+});
+
+test('parseSignSpaceSequence pairs one entry per 152D frame', () => {
+  const frame = signSpaceFrame(golden.cases[0].pose, golden.cases[0].pose_mundo);
+  const track = JSON.parse(JSON.stringify([frame, null, frame]));
+  assert.deepEqual(parseSignSpaceSequence(track, 3), [frame, null, frame]);
+  assert.equal(parseSignSpaceSequence(track, 4), null, 'longitud distinta');
+  assert.equal(parseSignSpaceSequence([null, null], 2), null, 'pista vacia');
+  assert.equal(parseSignSpaceSequence([{...frame, version: 'x'}], 1), null);
+  assert.equal(parseSignSpaceSequence(undefined, 32), null);
 });

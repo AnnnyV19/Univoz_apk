@@ -180,3 +180,25 @@ export function parseSignSpaceFrame(raw) {
     mask: Object.fromEntries(MASK_KEYS.map((k) => [k, raw.mask[k]])),
   };
 }
+
+/**
+ * Valida la pista SignSpace de una sena de biblioteca (MotionSequenceV2 con
+ * campo opcional `sign_space`). Debe tener tantas entradas como frames 152D;
+ * cada entrada es un SignSpaceFrame o null (frame sin cuerpo utilizable).
+ * Devuelve el arreglo validado, o null si la pista no sirve: en ese caso el
+ * visor reproduce solo con 152D, como antes.
+ */
+export function parseSignSpaceSequence(raw, frameCount) {
+  if (!Array.isArray(raw) || raw.length !== frameCount) return null;
+  const out = [];
+  for (const entry of raw) {
+    if (entry === null) {
+      out.push(null);
+      continue;
+    }
+    const frame = parseSignSpaceFrame(entry);
+    if (!frame) return null;
+    out.push(frame);
+  }
+  return out.some(Boolean) ? out : null;
+}
