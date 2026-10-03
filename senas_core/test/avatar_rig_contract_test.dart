@@ -34,9 +34,10 @@ void main() {
     expect(html, contains('// ---- inicio rig_sign_space.mjs'));
     expect(html, contains('// ---- inicio rig_retarget.mjs'));
     // Web calcula SignSpace; Android lo recibe validado por el puente.
-    expect(html, contains('signSpaceVivo = signSpaceFrame(pose, poseMundo)'));
+    expect(html, contains('signSpaceFrame(pose, poseMundo), timestampMs)'));
     expect(html,
-        contains('signSpaceVivo = parseSignSpaceFrame(sourceMeta?.sign_space)'));
+        contains('parseSignSpaceFrame(sourceMeta?.sign_space), frameVivoTimestampMs)'));
+    expect(html, contains('filtroSignSpace.reset()'));
     expect(html, contains('signSpace: signSpaceVivo'));
     // resolverBrazo cae a legacy si no hay retarget.
     expect(html, contains('deltaMunecaRetarget(lado, meta.signSpace) ??'));

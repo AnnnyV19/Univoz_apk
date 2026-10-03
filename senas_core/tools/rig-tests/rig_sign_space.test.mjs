@@ -6,6 +6,7 @@ import {
   SIGN_SPACE_DIM,
   SIGN_SPACE_VERSION,
   SS,
+  createSignSpaceFilter,
   parseSignSpaceFrame,
   parseSignSpaceSequence,
   signSpaceFrame,
@@ -175,4 +176,56 @@ test('Fast User Capture ignores frames without visible shoulders', () => {
   capture.start({consent: true});
   const c = golden.cases.find((x) => x.name === 'sin_hombro');
   assert.equal(capture.push(c.pose, c.pose_mundo).progress, 0);
+});
+
+const baseFrame = () => signSpaceFrame(golden.cases[0].pose, golden.cases[0].pose_mundo);
+const withValues = (frame, fn) => ({...frame, values: frame.values.map(fn),
+  mask: {...frame.mask}});
+
+test('SignSpace filter reduces jitter and keeps directions unit length', () => {
+  const f = createSignSpaceFilter();
+  const frame = baseFrame();
+  let seed = 3;
+  const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
+  const rawDev = [], outDev = [];
+  for (let k = 0; k < 90; k++) {
+    const noisy = withValues(frame, (v, i) => (i < 30 ? v + noise() : v));
+    const out = f.filter(noisy, k * 33);
+    if (k > 30) {
+      rawDev.push(Math.abs(noisy.values[SS.OFF_PALM_R] - frame.values[SS.OFF_PALM_R]));
+      outDev.push(Math.abs(out.values[SS.OFF_PALM_R] - frame.values[SS.OFF_PALM_R]));
+    }
+    for (const off of [SS.OFF_UPPER_L, SS.OFF_FORE_R, SS.OFF_HANDDIR_R]) {
+      assert.ok(Math.abs(Math.hypot(...out.values.slice(off, off + 3)) - 1) < 1e-9);
+    }
+  }
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  assert.ok(mean(outDev) < mean(rawDev) * 0.6, `${mean(outDev)} vs ${mean(rawDev)}`);
+});
+
+test('SignSpace filter follows a real move within 300 ms', () => {
+  const f = createSignSpaceFilter();
+  const frame = baseFrame();
+  for (let k = 0; k < 10; k++) f.filter(frame, k * 33);
+  const moved = withValues(frame, (v, i) => (i === SS.OFF_PALM_R ? v + 0.5 : v));
+  let out;
+  for (let k = 10; k < 20; k++) out = f.filter(moved, k * 33);
+  assert.ok(Math.abs(out.values[SS.OFF_PALM_R] - moved.values[SS.OFF_PALM_R]) < 0.05);
+});
+
+test('SignSpace filter resets masked groups and holds contacts briefly', () => {
+  const f = createSignSpaceFilter({releaseFrames: 2});
+  const frame = baseFrame();
+  const contact = SS.OFF_CONTACT + SS.C_CHEST_R;
+  assert.equal(frame.values[contact], 1);
+  f.filter(frame, 0);
+  const lost = withValues(frame, (v, i) => (i === contact ? 0 : v));
+  assert.equal(f.filter(lost, 33).values[contact], 1, 'histeresis');
+  assert.equal(f.filter(lost, 66).values[contact], 0);
+  const hidden = {...frame, mask: {...frame.mask, armL: false},
+    values: frame.values.map((v, i) => (i < 6 ? 0 : v))};
+  assert.deepEqual(f.filter(hidden, 99).values.slice(0, 6), [0, 0, 0, 0, 0, 0]);
+  const back = f.filter(frame, 132);
+  back.values.slice(0, 6).forEach((v, i) =>
+    assert.ok(Math.abs(v - frame.values[i]) < 1e-12, 'reinicia sin arrastre'));
 });

@@ -202,3 +202,96 @@ export function parseSignSpaceSequence(raw, frameCount) {
   }
   return out.some(Boolean) ? out : null;
 }
+
+// Grupos continuos del frame y la mascara que los habilita.
+const FILTER_GROUPS = [
+  {mask: 'armL', offsets: [SS.OFF_UPPER_L, SS.OFF_FORE_L], unit: true},
+  {mask: 'armR', offsets: [SS.OFF_UPPER_R, SS.OFF_FORE_R], unit: true},
+  {mask: 'handL', offsets: [SS.OFF_PALM_L], unit: false},
+  {mask: 'handR', offsets: [SS.OFF_PALM_R], unit: false},
+  {mask: 'handL', offsets: [SS.OFF_HANDDIR_L], unit: true},
+  {mask: 'handR', offsets: [SS.OFF_HANDDIR_R], unit: true},
+  {mask: 'face', offsets: [SS.OFF_NOSE, SS.OFF_MOUTH], unit: false},
+];
+
+function oneEuro(minCutoff, beta, dCutoff = 1) {
+  let ready = false, prev = 0, prevRaw = 0, prevVel = 0, prevT = 0;
+  const alpha = (cutoff, dtMs) => {
+    const tau = 1 / (2 * Math.PI * Math.max(1e-6, cutoff));
+    return 1 / (1 + tau / (dtMs / 1000));
+  };
+  return {
+    filter(x, t) {
+      if (!ready) {
+        ready = true;
+        prev = prevRaw = x;
+        prevT = t;
+        return x;
+      }
+      const dt = Math.max(1, Math.min(200, t - prevT));
+      const ad = alpha(dCutoff, dt);
+      const vel = ad * ((x - prevRaw) / (dt / 1000)) + (1 - ad) * prevVel;
+      const a = alpha(minCutoff + beta * Math.abs(vel), dt);
+      prev = a * x + (1 - a) * prev;
+      prevRaw = x;
+      prevVel = vel;
+      prevT = t;
+      return prev;
+    },
+  };
+}
+
+/**
+ * One Euro por valor sobre los bloques continuos de SignSpaceFrame. Las
+ * direcciones se renormalizan despues de filtrar; un grupo que desaparece
+ * (mascara false) reinicia sus filtros para no arrastrar estado viejo al
+ * volver. Los contactos tienen histeresis: se encienden al instante y se
+ * apagan solo tras `releaseFrames` frames seguidos sin contacto.
+ */
+export function createSignSpaceFilter({
+  minCutoff = 2.0,
+  beta = 0.4,
+  releaseFrames = 2,
+} = {}) {
+  let filters = new Map();
+  let contactOff = new Array(5).fill(0);
+  let contactState = new Array(5).fill(0);
+  return {
+    filter(frame, timeMs) {
+      if (!frame) return null;
+      const out = frame.values.slice();
+      for (const group of FILTER_GROUPS) {
+        for (const off of group.offsets) {
+          if (!frame.mask[group.mask]) {
+            for (let i = 0; i < 3; i++) filters.delete(off + i);
+            continue;
+          }
+          for (let i = 0; i < 3; i++) {
+            if (!filters.has(off + i)) filters.set(off + i, oneEuro(minCutoff, beta));
+            out[off + i] = filters.get(off + i).filter(out[off + i], timeMs);
+          }
+          if (group.unit) {
+            const m = Math.hypot(out[off], out[off + 1], out[off + 2]);
+            if (m > EPS) for (let i = 0; i < 3; i++) out[off + i] /= m;
+          }
+        }
+      }
+      for (let c = 0; c < 5; c++) {
+        const raw = out[SS.OFF_CONTACT + c];
+        if (raw >= 0.5) {
+          contactState[c] = 1;
+          contactOff[c] = 0;
+        } else if (contactState[c] && ++contactOff[c] >= releaseFrames) {
+          contactState[c] = 0;
+        }
+        out[SS.OFF_CONTACT + c] = contactState[c];
+      }
+      return {...frame, values: out, mask: {...frame.mask}};
+    },
+    reset() {
+      filters = new Map();
+      contactOff = new Array(5).fill(0);
+      contactState = new Array(5).fill(0);
+    },
+  };
+}
