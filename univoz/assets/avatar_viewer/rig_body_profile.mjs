@@ -114,3 +114,73 @@ export function parseBodyProfile(raw) {
     return null;
   }
 }
+
+export const BODY_CAPTURE_PHASES = Object.freeze([
+  {id: 'neutral', instruction: 'Quieto, brazos relajados a los lados'},
+  {id: 'arms_forward', instruction: 'Estira los brazos al frente y muevelos despacio'},
+  {id: 'hands', instruction: 'Abre y cierra las manos frente al pecho'},
+]);
+
+/**
+ * Fast User Capture: guia las 3 poses y junta frames validos (hombros
+ * visibles). Sin consentimiento explicito no arranca. Al terminar estima el
+ * perfil; nunca guarda los frames, solo el perfil resultante.
+ */
+export function createBodyProfileCapture({
+  framesPerPhase = 45,
+  declared = {},
+  minVisibility = MIN_VISIBILITY,
+} = {}) {
+  let state = 'idle';
+  let phase = 0;
+  let count = 0;
+  let frames = [];
+  let profile = null;
+
+  const status = () => ({
+    state,
+    phase: BODY_CAPTURE_PHASES[phase]?.id ?? null,
+    instruction: BODY_CAPTURE_PHASES[phase]?.instruction ?? null,
+    progress: state === 'done' ? 1 :
+      (phase * framesPerPhase + count) / (BODY_CAPTURE_PHASES.length * framesPerPhase),
+    profile,
+  });
+
+  return {
+    start({consent = false} = {}) {
+      if (consent !== true) throw new Error('consentimiento requerido');
+      state = 'capturing';
+      phase = 0;
+      count = 0;
+      frames = [];
+      profile = null;
+      return status();
+    },
+    push(pose, world) {
+      if (state !== 'capturing') return status();
+      if (!Array.isArray(pose) || pose.length < 33 ||
+          visibility(pose[I.L_SHOULDER]) < minVisibility ||
+          visibility(pose[I.R_SHOULDER]) < minVisibility) return status();
+      frames.push([pose, world]);
+      count += 1;
+      if (count >= framesPerPhase) {
+        phase += 1;
+        count = 0;
+        if (phase >= BODY_CAPTURE_PHASES.length) {
+          profile = estimateBodyProfile(frames, {declared,
+            minSamples: Math.min(MIN_SAMPLES, framesPerPhase), minVisibility});
+          frames = []; // no se conservan landmarks
+          state = 'done';
+          phase = BODY_CAPTURE_PHASES.length - 1;
+        }
+      }
+      return status();
+    },
+    cancel() {
+      state = 'idle';
+      frames = [];
+      return status();
+    },
+    status,
+  };
+}

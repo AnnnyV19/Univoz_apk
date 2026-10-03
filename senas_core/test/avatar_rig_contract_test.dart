@@ -54,4 +54,14 @@ void main() {
     final bridge = File('lib/avatar_bridge.dart').readAsStringSync();
     expect(bridge, contains("'signSpace': pista"));
   });
+
+  test('perfil corporal: consentimiento, local y borrable', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains('window.iniciarCapturaPerfil'));
+    expect(html, contains('window.borrarPerfilCorporal'));
+    expect(html, contains('localStorage.removeItem(BODY_PROFILE_STORAGE_KEY)'));
+    expect(html, contains('window.confirm('));
+    expect(html, contains('iniciarCapturaPerfil({consent: true})'));
+    expect(html, contains('alimentarCapturaPerfil(pose, poseMundo)'));
+  });
 }

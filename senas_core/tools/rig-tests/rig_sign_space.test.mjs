@@ -11,7 +11,9 @@ import {
   signSpaceFrame,
 } from '../../assets/avatar_viewer/rig_sign_space.mjs';
 import {
+  BODY_CAPTURE_PHASES,
   BODY_PROFILE_VERSION,
+  createBodyProfileCapture,
   estimateBodyProfile,
   parseBodyProfile,
 } from '../../assets/avatar_viewer/rig_body_profile.mjs';
@@ -144,4 +146,33 @@ test('parseSignSpaceSequence pairs one entry per 152D frame', () => {
   assert.equal(parseSignSpaceSequence([null, null], 2), null, 'pista vacia');
   assert.equal(parseSignSpaceSequence([{...frame, version: 'x'}], 1), null);
   assert.equal(parseSignSpaceSequence(undefined, 32), null);
+});
+
+test('Fast User Capture needs consent, walks 3 phases and keeps no frames', () => {
+  const capture = createBodyProfileCapture({framesPerPhase: 8});
+  assert.throws(() => capture.start(), /consentimiento/);
+  assert.equal(capture.push(golden.cases[0].pose, golden.cases[0].pose_mundo).state,
+    'idle', 'sin start no captura');
+  capture.start({consent: true});
+  const frames = golden.profiles[0].frames;
+  const seen = new Set();
+  let status;
+  for (let i = 0; i < 8 * BODY_CAPTURE_PHASES.length; i++) {
+    const f = frames[i % frames.length];
+    status = capture.push(f.pose, f.pose_mundo);
+    if (status.state === 'capturing') seen.add(status.phase);
+  }
+  assert.deepEqual([...seen], BODY_CAPTURE_PHASES.map((p) => p.id));
+  assert.equal(status.state, 'done');
+  assert.equal(status.progress, 1);
+  assert.equal(status.profile.samples, 24);
+  assert.ok(Math.abs(status.profile.measures.shoulderWidth -
+    golden.profiles[0].expected.measures.shoulderWidth) < 0.01);
+});
+
+test('Fast User Capture ignores frames without visible shoulders', () => {
+  const capture = createBodyProfileCapture({framesPerPhase: 2});
+  capture.start({consent: true});
+  const c = golden.cases.find((x) => x.name === 'sin_hombro');
+  assert.equal(capture.push(c.pose, c.pose_mundo).progress, 0);
 });

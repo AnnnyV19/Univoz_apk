@@ -189,3 +189,79 @@ BodyProfile estimateBodyProfile(
     declared: Map.of(declared),
   );
 }
+
+/// Fases guiadas de Fast User Capture (mismas que rig_body_profile.mjs).
+const List<(String, String)> kBodyCapturePhases = [
+  ('neutral', 'Quieto, brazos relajados a los lados'),
+  ('arms_forward', 'Estira los brazos al frente y muevelos despacio'),
+  ('hands', 'Abre y cierra las manos frente al pecho'),
+];
+
+enum BodyCaptureState { idle, capturing, done }
+
+/// Fast User Capture: junta frames validos en 3 poses guiadas y estima el
+/// perfil. Exige consentimiento explicito y descarta los frames al terminar:
+/// solo sobrevive el [BodyProfile].
+class BodyProfileCapture {
+  final int framesPerPhase;
+  final Map<String, String> declared;
+  final double minVisibility;
+
+  BodyCaptureState _state = BodyCaptureState.idle;
+  int _phase = 0;
+  int _count = 0;
+  List<(List<List<double>>, List<List<double>>)> _frames = [];
+  BodyProfile? _profile;
+
+  BodyProfileCapture({
+    this.framesPerPhase = 45,
+    this.declared = const {},
+    this.minVisibility = kSsMinVisibility,
+  });
+
+  BodyCaptureState get state => _state;
+  String? get phase =>
+      _phase < kBodyCapturePhases.length ? kBodyCapturePhases[_phase].$1 : null;
+  String? get instruction =>
+      _phase < kBodyCapturePhases.length ? kBodyCapturePhases[_phase].$2 : null;
+  double get progress => _state == BodyCaptureState.done
+      ? 1.0
+      : (_phase * framesPerPhase + _count) /
+          (kBodyCapturePhases.length * framesPerPhase);
+  BodyProfile? get profile => _profile;
+
+  void start({required bool consent}) {
+    if (!consent) throw StateError('consentimiento requerido');
+    _state = BodyCaptureState.capturing;
+    _phase = 0;
+    _count = 0;
+    _frames = [];
+    _profile = null;
+  }
+
+  void push(List<List<double>>? pose, List<List<double>>? world) {
+    if (_state != BodyCaptureState.capturing) return;
+    if (pose == null || world == null || pose.length < 33) return;
+    bool vis(int i) => pose[i].length >= 4 && pose[i][3] >= minVisibility;
+    if (!vis(kSsLShoulder) || !vis(kSsRShoulder)) return;
+    _frames.add((pose, world));
+    _count++;
+    if (_count < framesPerPhase) return;
+    _phase++;
+    _count = 0;
+    if (_phase >= kBodyCapturePhases.length) {
+      _profile = estimateBodyProfile(_frames,
+          declared: declared,
+          minSamples: math.min(kBpMinSamples, framesPerPhase),
+          minVisibility: minVisibility);
+      _frames = []; // no se conservan landmarks
+      _state = BodyCaptureState.done;
+      _phase = kBodyCapturePhases.length - 1;
+    }
+  }
+
+  void cancel() {
+    _state = BodyCaptureState.idle;
+    _frames = [];
+  }
+}

@@ -84,4 +84,23 @@ void main() {
     expect(
         () => BodyProfile.fromJson({'version': '0.9'}), throwsFormatException);
   });
+
+  test('Fast User Capture exige consentimiento y no guarda frames', () {
+    final capture = BodyProfileCapture(framesPerPhase: 8);
+    expect(() => capture.start(consent: false), throwsStateError);
+    final perfil = (data['profiles'] as List).first as Map<String, dynamic>;
+    final frames = (perfil['frames'] as List).cast<Map<String, dynamic>>();
+    capture.start(consent: true);
+    final fases = <String>{};
+    for (var i = 0; i < 8 * kBodyCapturePhases.length; i++) {
+      final f = frames[i % frames.length];
+      if (capture.state == BodyCaptureState.capturing)
+        fases.add(capture.phase!);
+      capture.push(_pts(f['pose']), _pts(f['pose_mundo']));
+    }
+    expect(fases, kBodyCapturePhases.map((p) => p.$1).toSet());
+    expect(capture.state, BodyCaptureState.done);
+    expect(capture.progress, 1.0);
+    expect(capture.profile!.samples, 24);
+  });
 }

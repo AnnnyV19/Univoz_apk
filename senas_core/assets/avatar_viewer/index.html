@@ -115,6 +115,11 @@
       <button id="bRepetirCamara" type="button" disabled>Repetir</button>
       <button id="bDescargarCamara" type="button" disabled>JSON</button>
     </div>
+    <div class="camaraAcciones">
+      <button id="bPerfilCorporal" type="button" disabled>Medir mi cuerpo</button>
+      <button id="bBorrarPerfil" type="button" disabled>Borrar perfil</button>
+    </div>
+    <label><input id="camaraRetarget" type="checkbox"> Adaptar a mi cuerpo (anclas)</label>
     <label><input id="camaraSuavizar" type="checkbox" checked> Suavizar movimiento</label>
     <label><input id="camaraReposoMano" type="checkbox" checked> Volver mano a reposo si se pierde</label>
     <label><input id="camaraDiagnostico" type="checkbox"> Modo diagnóstico</label>
@@ -2596,7 +2601,7 @@
     // ---- fin rig_sign_space.mjs ----
 
     // ---- inicio rig_body_profile.mjs (antes importado por separado) ----
-    const {BODY_PROFILE_VERSION, BODY_PROFILE_LIMBS, BODY_PROFILE_STATUSES, BODY_PROFILE_STORAGE_KEY, estimateBodyProfile, parseBodyProfile} = (() => {
+    const {BODY_PROFILE_VERSION, BODY_PROFILE_LIMBS, BODY_PROFILE_STATUSES, BODY_PROFILE_STORAGE_KEY, estimateBodyProfile, parseBodyProfile, BODY_CAPTURE_PHASES, createBodyProfileCapture} = (() => {
       // BodyProfileV1: medidas del cuerpo + modelo de capacidad (CapabilityMask
       // externo). Espejo exacto de tools/body_profile.py y lib/body_profile.dart.
       // Local, versionado y borrable: solo medianas, nunca video ni landmarks.
@@ -2713,7 +2718,77 @@
           return null;
         }
       }
-      return {BODY_PROFILE_VERSION, BODY_PROFILE_LIMBS, BODY_PROFILE_STATUSES, BODY_PROFILE_STORAGE_KEY, estimateBodyProfile, parseBodyProfile};
+
+      const BODY_CAPTURE_PHASES = Object.freeze([
+        {id: 'neutral', instruction: 'Quieto, brazos relajados a los lados'},
+        {id: 'arms_forward', instruction: 'Estira los brazos al frente y muevelos despacio'},
+        {id: 'hands', instruction: 'Abre y cierra las manos frente al pecho'},
+      ]);
+
+      /**
+       * Fast User Capture: guia las 3 poses y junta frames validos (hombros
+       * visibles). Sin consentimiento explicito no arranca. Al terminar estima el
+       * perfil; nunca guarda los frames, solo el perfil resultante.
+       */
+      function createBodyProfileCapture({
+        framesPerPhase = 45,
+        declared = {},
+        minVisibility = MIN_VISIBILITY,
+      } = {}) {
+        let state = 'idle';
+        let phase = 0;
+        let count = 0;
+        let frames = [];
+        let profile = null;
+
+        const status = () => ({
+          state,
+          phase: BODY_CAPTURE_PHASES[phase]?.id ?? null,
+          instruction: BODY_CAPTURE_PHASES[phase]?.instruction ?? null,
+          progress: state === 'done' ? 1 :
+            (phase * framesPerPhase + count) / (BODY_CAPTURE_PHASES.length * framesPerPhase),
+          profile,
+        });
+
+        return {
+          start({consent = false} = {}) {
+            if (consent !== true) throw new Error('consentimiento requerido');
+            state = 'capturing';
+            phase = 0;
+            count = 0;
+            frames = [];
+            profile = null;
+            return status();
+          },
+          push(pose, world) {
+            if (state !== 'capturing') return status();
+            if (!Array.isArray(pose) || pose.length < 33 ||
+                visibility(pose[I.L_SHOULDER]) < minVisibility ||
+                visibility(pose[I.R_SHOULDER]) < minVisibility) return status();
+            frames.push([pose, world]);
+            count += 1;
+            if (count >= framesPerPhase) {
+              phase += 1;
+              count = 0;
+              if (phase >= BODY_CAPTURE_PHASES.length) {
+                profile = estimateBodyProfile(frames, {declared,
+                  minSamples: Math.min(MIN_SAMPLES, framesPerPhase), minVisibility});
+                frames = []; // no se conservan landmarks
+                state = 'done';
+                phase = BODY_CAPTURE_PHASES.length - 1;
+              }
+            }
+            return status();
+          },
+          cancel() {
+            state = 'idle';
+            frames = [];
+            return status();
+          },
+          status,
+        };
+      }
+      return {BODY_PROFILE_VERSION, BODY_PROFILE_LIMBS, BODY_PROFILE_STATUSES, BODY_PROFILE_STORAGE_KEY, estimateBodyProfile, parseBodyProfile, BODY_CAPTURE_PHASES, createBodyProfileCapture};
     })();
     // ---- fin rig_body_profile.mjs ----
 
@@ -4689,6 +4764,47 @@
     let webPoseCache = null;
     let webGrabacion = [];
     let webUltimaSecuencia = null;
+    // Perfil corporal (Fast User Capture). Local, versionado y borrable:
+    // solo se guardan medianas, nunca video ni landmarks.
+    let capturaPerfil = null;
+    let perfilCorporal = null;
+    try {
+      perfilCorporal = parseBodyProfile(
+        localStorage.getItem(BODY_PROFILE_STORAGE_KEY));
+    } catch (_) { /* sin storage */ }
+    window.obtenerPerfilCorporal = () => perfilCorporal;
+    window.borrarPerfilCorporal = function () {
+      perfilCorporal = null;
+      capturaPerfil = null;
+      try { localStorage.removeItem(BODY_PROFILE_STORAGE_KEY); } catch (_) {}
+      pintarEstadoCamaraWeb();
+      return true;
+    };
+    window.iniciarCapturaPerfil = function ({consent = false, declared = {},
+        framesPerPhase = 45} = {}) {
+      capturaPerfil = createBodyProfileCapture({declared, framesPerPhase});
+      const estado = capturaPerfil.start({consent});
+      avisar('Perfil corporal: ' + estado.instruction);
+      pintarEstadoCamaraWeb();
+      return estado;
+    };
+    function alimentarCapturaPerfil(pose, poseMundo) {
+      if (!capturaPerfil) return;
+      const antes = capturaPerfil.status().phase;
+      const estado = capturaPerfil.push(pose, poseMundo);
+      if (estado.state === 'done') {
+        perfilCorporal = estado.profile;
+        capturaPerfil = null;
+        try {
+          localStorage.setItem(BODY_PROFILE_STORAGE_KEY,
+            JSON.stringify(perfilCorporal));
+        } catch (_) { /* queda solo en memoria */ }
+        avisar('Perfil corporal listo');
+        pintarEstadoCamaraWeb();
+      } else if (estado.phase !== antes) {
+        avisar('Perfil corporal: ' + estado.instruction);
+      }
+    }
     // Pista SignSpace pareada 1:1 con webGrabacion (biblioteca de senas).
     let webGrabacionSignSpace = [];
     let webUltimaSignSpace = null;
@@ -5178,6 +5294,16 @@
       grabar.disabled = !s.running || s.recording;
       repetir.disabled = !webUltimaSecuencia;
       descargar.disabled = !webUltimaSecuencia;
+      const medir = document.getElementById('bPerfilCorporal');
+      const borrar = document.getElementById('bBorrarPerfil');
+      if (medir && borrar) {
+        const capturando = capturaPerfil?.status().state === 'capturing';
+        medir.disabled = !s.running || capturando;
+        medir.textContent = capturando
+          ? 'Midiendo ' + Math.round(capturaPerfil.status().progress * 100) + '%'
+          : 'Medir mi cuerpo';
+        borrar.disabled = !perfilCorporal && !capturando;
+      }
       const calidad = s.quality > 0 ? Math.round(s.quality * 100) + '%' : '—';
       stats.textContent = 'Pose: ' + (s.pose ? 'sí' : 'no') +
         ' · I: ' + (s.leftHand ? 'sí (' + s.leftHandPoints + ')' : 'no') +
@@ -5486,6 +5612,7 @@
             frameVivoSourceFrameId = sourceFrameId;
             frameVivoSourceSkewMs = Math.abs(timestampMs - poseTimestampMs);
             signSpaceVivo = signSpaceFrame(pose, poseMundo);
+            alimentarCapturaPerfil(pose, poseMundo);
             frameVivo = suavizarFrameWeb(vectorRender ?? vector, timestampMs);
             frameVivoTimestampMs = timestampMs;
             procesarCalibracionPulgares(vector, calidad);
@@ -5927,6 +6054,19 @@
       grabar.addEventListener('click', iniciarGrabacionWeb);
       repetir.addEventListener('click', repetirGrabacionWeb);
       descargar.addEventListener('click', descargarGrabacionWeb);
+      document.getElementById('bPerfilCorporal').addEventListener('click', () => {
+        const ok = window.confirm('Medir tu cuerpo unos segundos para adaptar ' +
+          'el avatar. Solo se guardan medidas en este navegador (sin video) ' +
+          'y puedes borrarlas cuando quieras. ¿Continuar?');
+        if (ok) window.iniciarCapturaPerfil({consent: true});
+      });
+      document.getElementById('bBorrarPerfil').addEventListener('click',
+        () => { window.borrarPerfilCorporal(); });
+      const controlRetarget = document.getElementById('camaraRetarget');
+      controlRetarget.checked = retargetMode === 'anchors';
+      controlRetarget.addEventListener('change', () => {
+        window.configurarRetarget(controlRetarget.checked ? 'anchors' : 'legacy');
+      });
       window.addEventListener('beforeunload', () => { liberarCamaraWeb(); });
       pintarEstadoCamaraWeb();
       void precargarDetectoresWeb().catch(() => {});
