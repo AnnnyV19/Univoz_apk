@@ -98,3 +98,16 @@ def test_resumen_incluye_auditoria_con_perfil():
     assert r["audit"]["frames"] == 3
     assert r["audit"]["codes"]["bone_length_upperL"] == 1
     assert 30 < r["audit"]["anomalous_pct"] < 40
+
+
+def test_frames_agrupados_por_marca_de_protocolo():
+    regs = [{"seq": 0, "kind": "session_start", "session_id": "m"},
+            {"seq": 1, "kind": "event", "type": "marker", "step": 1},
+            dict(_frame(0), seq=2), dict(_frame(33), seq=3),
+            {"seq": 4, "kind": "event", "type": "marker", "step": 2},
+            dict(_frame(66, rejected=("hand_duplicate",)), seq=5)]
+    r = an.resumir(regs)
+    assert r["by_step"]["1"]["frames"] == 2
+    assert r["by_step"]["2"]["frames"] == 1
+    assert r["by_step"]["2"]["top_errors"] == [["x", 1]] or \
+        r["by_step"]["2"]["top_errors"] == [("x", 1)]

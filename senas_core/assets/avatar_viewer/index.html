@@ -7233,6 +7233,14 @@
       });
       // pagehide (no beforeunload) es el evento fiable al cerrar o cambiar de
       // pestana, tambien en movil. sendBeacon entrega aunque la pagina muera.
+      // Marcas de protocolo: teclas 1-9 anotan el paso actual en la sesion
+      // para que el analisis separe errores por gesto.
+      window.addEventListener('keydown', (event) => {
+        if (!sesionActual || !/^[1-9]$/.test(event.key) ||
+            event.target?.tagName === 'INPUT') return;
+        eventoSesion('marker', {step: Number(event.key)});
+        avisar('Marca ' + event.key);
+      });
       window.addEventListener('pagehide', () => {
         const sesion = sesionActual;
         sesionActual = null;

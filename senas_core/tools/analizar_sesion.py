@@ -50,6 +50,38 @@ def leer(ruta):
     return out
 
 
+def por_paso(frames, eventos):
+    """Agrupa frames por la ultima marca de protocolo (teclas 1-9) vista
+    antes de cada frame, usando el orden de `seq`. Resume cobertura y
+    errores mas comunes de cada paso."""
+    marcas = sorted((e.get("seq", 0), e.get("step")) for e in eventos
+                    if e.get("type") == "marker")
+    if not marcas:
+        return {}
+    grupos = collections.defaultdict(list)
+    for f in frames:
+        paso = None
+        for seq, step in marcas:
+            if seq < f.get("seq", 0):
+                paso = step
+        if paso is not None:
+            grupos[paso].append(f)
+    out = {}
+    for paso, fs in sorted(grupos.items()):
+        n = len(fs)
+        cub = lambda pred: round(100.0 * sum(1 for f in fs if pred(f)) / n, 1)
+        out[str(paso)] = {
+            "frames": n,
+            "pose_pct": cub(lambda f: f.get("pose")),
+            "left_pct": cub(lambda f: (f.get("tracked") or {}).get("left")),
+            "right_pct": cub(lambda f: (f.get("tracked") or {}).get("right")),
+            "face_pct": cub(lambda f: f.get("face")),
+            "top_errors": collections.Counter(
+                c for f in fs for c in f.get("errors", [])).most_common(5),
+        }
+    return out
+
+
 def resumir(registros):
     """Devuelve un dict con el resumen (usado tambien por las pruebas)."""
     cab = next((r for r in registros if r.get("kind") == "session_start"), {})
@@ -128,6 +160,7 @@ def resumir(registros):
                                          for q in (.05, .95)]
                                      for k in ("yaw", "pitch", "roll")}
     out["events"] = dict(collections.Counter(e.get("type") for e in eventos))
+    out["by_step"] = por_paso(frames, eventos)
     perfil = next((e.get("profile") for e in eventos
                    if e.get("type") == "body_profile"), None)
     if perfil:
