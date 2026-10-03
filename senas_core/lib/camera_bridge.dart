@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import 'sign_norm.dart';
+import 'sign_space.dart';
 
 const String kCanalMetodos = 'univoz/camara';
 
@@ -205,6 +206,13 @@ class LandmarkFrame {
               left: renderLeft ?? left,
               right: renderRight ?? right,
             );
+
+  /// SignSpaceFrame v1 para el avatar (independiente del cuerpo), o null.
+  /// No reemplaza a [normalize]: el reconocimiento sigue usando 152D.
+  SignSpaceFrame? signSpace() =>
+      (!fusionAceptada || pose == null || poseMundo == null)
+          ? null
+          : signSpaceFrame(pose!, poseMundo!);
 
   bool get fusionAceptada => (sourceSkewMs ?? 0).abs() <= 120;
   bool get requiereProyeccionRender {

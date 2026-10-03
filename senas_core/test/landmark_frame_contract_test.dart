@@ -86,4 +86,35 @@ void main() {
     expect(frame.esValido, isFalse);
     expect(frame.toJson()['left'], isNull);
   });
+
+  test('LandmarkFrame entrega SignSpaceFrame para el avatar sin tocar 152D',
+      () {
+    final frame = LandmarkFrame.fromMap({
+      't': 10,
+      'pose': _validPose(),
+      'poseMundo': _validWorldPose(),
+      'left': null,
+      'right': null,
+      'pose_t': 10,
+      'hands_t': 10,
+    });
+    final ss = frame.signSpace();
+    expect(ss, isNotNull);
+    expect(ss!.values, hasLength(35));
+    expect(ss.values.every((v) => v.isFinite), isTrue);
+    expect(frame.normalize(), hasLength(152));
+  });
+
+  test('LandmarkFrame no entrega SignSpaceFrame si la fusion falla', () {
+    final frame = LandmarkFrame.fromMap({
+      't': 10,
+      'pose': _validPose(),
+      'poseMundo': _validWorldPose(),
+      'left': null,
+      'right': null,
+      'pose_t': 10,
+      'hands_t': 400,
+    });
+    expect(frame.signSpace(), isNull);
+  });
 }

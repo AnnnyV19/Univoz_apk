@@ -207,6 +207,7 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
           if (f.poseTimestampMs != null) 'pose_t': f.poseTimestampMs,
           if (f.handsTimestampMs != null) 'hands_t': f.handsTimestampMs,
           if (f.sourceSkewMs != null) 'source_skew_ms': f.sourceSkewMs,
+          if (f.signSpace() case final ss?) 'sign_space': ss.toJson(),
           'association': f.association,
           'tracks': {
             'left': f.association['left_state'],

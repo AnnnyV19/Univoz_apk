@@ -6,6 +6,7 @@ import {
   SIGN_SPACE_DIM,
   SIGN_SPACE_VERSION,
   SS,
+  parseSignSpaceFrame,
   signSpaceFrame,
 } from '../../assets/avatar_viewer/rig_sign_space.mjs';
 import {
@@ -121,4 +122,15 @@ test('retarget returns null when the arm is masked out', () => {
 test('avatar profile rejects degenerate rigs', () => {
   assert.throws(() => createAvatarRigProfile({shoulderL: [0, 0, 0],
     shoulderR: [0, 0, 0], upperL: 1, upperR: 1, foreL: 1, foreR: 1}), RangeError);
+});
+
+test('parseSignSpaceFrame accepts bridge JSON and rejects broken frames', () => {
+  const frame = signSpaceFrame(golden.cases[0].pose, golden.cases[0].pose_mundo);
+  assert.deepEqual(parseSignSpaceFrame(JSON.parse(JSON.stringify(frame))), frame);
+  assert.equal(parseSignSpaceFrame(null), null);
+  assert.equal(parseSignSpaceFrame({...frame, version: '0.1'}), null);
+  assert.equal(parseSignSpaceFrame({...frame, values: frame.values.slice(1)}), null);
+  assert.equal(parseSignSpaceFrame({...frame,
+    values: frame.values.map((v, i) => (i === 3 ? NaN : v))}), null);
+  assert.equal(parseSignSpaceFrame({...frame, mask: {armL: true}}), null);
 });

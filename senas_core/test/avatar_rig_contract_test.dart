@@ -26,4 +26,22 @@ void main() {
     expect(html, contains('deadbandHeld'));
     expect(html, contains('posarReposoBrazo'));
   });
+
+  test('visor cablea SignSpaceFrame y retarget por anclas tras flag', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+
+    // Modulos inline generados desde los .mjs.
+    expect(html, contains('// ---- inicio rig_sign_space.mjs'));
+    expect(html, contains('// ---- inicio rig_retarget.mjs'));
+    // Web calcula SignSpace; Android lo recibe validado por el puente.
+    expect(html, contains('signSpaceVivo = signSpaceFrame(pose, poseMundo)'));
+    expect(html,
+        contains('signSpaceVivo = parseSignSpaceFrame(sourceMeta?.sign_space)'));
+    expect(html, contains('signSpace: signSpaceVivo'));
+    // resolverBrazo cae a legacy si no hay retarget.
+    expect(html, contains('deltaMunecaRetarget(lado, meta.signSpace) ??'));
+    // Apagado por defecto hasta validar en camara fisica.
+    expect(html, contains("let retargetMode = 'legacy';"));
+    expect(html, contains('window.configurarRetarget'));
+  });
 }

@@ -2386,7 +2386,7 @@
     // ---- fin rig_tracking.mjs ----
 
     // ---- inicio rig_sign_space.mjs (antes importado por separado) ----
-    const {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame} = (() => {
+    const {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame, parseSignSpaceFrame} = (() => {
       // SignSpaceFrame v1: representacion de la sena independiente del cuerpo.
       // Espejo exacto de tools/sign_space.py y lib/sign_space.dart; golden en
       // test/golden/sign_space_cases.json. MotionFrameV2 152D no cambia.
@@ -2544,7 +2544,32 @@
         return {version: SIGN_SPACE_VERSION, mode: base.mode, scale: base.scale,
           values: out, mask};
       }
-      return {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame};
+
+      const MASK_KEYS = ['armL', 'armR', 'handL', 'handR', 'face'];
+
+      /**
+       * Valida un SignSpaceFrame recibido por el puente (Dart) o de la biblioteca.
+       * Devuelve el frame normalizado o null si no cumple el contrato v1.
+       */
+      function parseSignSpaceFrame(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        if (raw.version !== SIGN_SPACE_VERSION) return null;
+        if (raw.mode !== 'full' && raw.mode !== 'upper') return null;
+        const values = raw.values;
+        if (!Array.isArray(values) || values.length !== SIGN_SPACE_DIM ||
+            values.some((v) => !Number.isFinite(Number(v)))) return null;
+        if (!raw.mask || MASK_KEYS.some((k) => typeof raw.mask[k] !== 'boolean')) {
+          return null;
+        }
+        return {
+          version: raw.version,
+          mode: raw.mode,
+          scale: Number(raw.scale),
+          values: values.map(Number),
+          mask: Object.fromEntries(MASK_KEYS.map((k) => [k, raw.mask[k]])),
+        };
+      }
+      return {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame, parseSignSpaceFrame};
     })();
     // ---- fin rig_sign_space.mjs ----
 
@@ -3843,6 +3868,60 @@
       aplicar('RightShoulder', 0.30);
     }
 
+    // Retarget por anclas (docs/13-mapeo-corporal-universal.md). 'legacy'
+    // escala la muneca por ancho de hombros (comportamiento historico);
+    // 'anchors' aplica direcciones del usuario a los huesos del avatar y
+    // resuelve contactos contra SU cara y pecho. Queda en 'legacy' por
+    // defecto hasta validar en camara fisica (gates de docs/07).
+    const kRetargetModes = ['legacy', 'anchors'];
+    const kRetargetStorageKey = 'univoz.retargetMode.v1';
+    let retargetMode = 'legacy';
+    try {
+      const pedido = new URLSearchParams(location.search).get('retarget') ??
+        localStorage.getItem(kRetargetStorageKey);
+      if (kRetargetModes.includes(pedido)) retargetMode = pedido;
+    } catch (_) { /* sin storage: queda legacy */ }
+    window.configurarRetarget = function (modo) {
+      if (!kRetargetModes.includes(modo)) return retargetMode;
+      retargetMode = modo;
+      try { localStorage.setItem(kRetargetStorageKey, modo); } catch (_) {}
+      return retargetMode;
+    };
+
+    let perfilAvatarCache = null;
+    function perfilAvatarRetarget() {
+      const l = refRig.left, r = refRig.right;
+      if (!l || !r) return null;
+      const clave = [anchoHombrosAvatar, l.lenUp, l.lenLo, r.lenUp, r.lenLo]
+        .join('|');
+      if (perfilAvatarCache?.clave !== clave) {
+        const sw = anchoHombrosAvatar;
+        try {
+          perfilAvatarCache = {clave, perfil: createAvatarRigProfile({
+            shoulderL: [-sw / 2, 0, 0], shoulderR: [sw / 2, 0, 0],
+            upperL: l.lenUp, foreL: l.lenLo, upperR: r.lenUp, foreR: r.lenLo,
+          })};
+        } catch (_) {
+          perfilAvatarCache = {clave, perfil: null};
+        }
+      }
+      return perfilAvatarCache.perfil;
+    }
+
+    // Desplazamiento hombro -> muneca en mundo del avatar, o null para usar
+    // el camino legacy (modo apagado, sin SignSpace o brazo enmascarado).
+    function deltaMunecaRetarget(lado, signSpace) {
+      if (retargetMode !== 'anchors' || !signSpace) return null;
+      const perfil = perfilAvatarRetarget();
+      if (!perfil) return null;
+      const side = lado === 'left' ? 'L' : 'R';
+      const arm = retargetArm(signSpace, perfil, side);
+      if (!arm) return null;
+      const hombro = perfil.shoulders[side];
+      return vectorBaseAvatar(new THREE.Vector3(arm.wrist[0] - hombro[0],
+        arm.wrist[1] - hombro[1], arm.wrist[2] - hombro[2]), kBase);
+    }
+
     function resolverBrazo(lado, base, hombro, codo, muneca, meta = {}) {
       const r = refRig[lado];
       if (!r) return;
@@ -3856,8 +3935,9 @@
       // en la misma direccion. El gain permite compensar rigs exportados con
       // brazos proporcionalmente distintos.
       const ganancia = lado === 'left' ? cal.leftArmGain : cal.rightArmGain;
-      const deltaMano = vectorBaseAvatar(muneca.clone().sub(hombro), base)
-        .multiplyScalar(anchoHombrosAvatar * Math.max(0.2, Math.min(2.0, ganancia)));
+      const deltaMano = deltaMunecaRetarget(lado, meta.signSpace) ??
+        vectorBaseAvatar(muneca.clone().sub(hombro), base)
+          .multiplyScalar(anchoHombrosAvatar * Math.max(0.2, Math.min(2.0, ganancia)));
       const objetivoMuneca = hombroAvatar.clone().add(deltaMano);
       const radioObjetivo = objetivoMuneca.distanceTo(hombroAvatar);
       if (radioObjetivo < 1e-4 || r.lenUp < 1e-4 || r.lenLo < 1e-4) return;
@@ -4425,6 +4505,9 @@
     let frameVivoSourceFrameId = 0;
     let ultimoSourceFrameRenderizado = 0;
     let frameVivoSourceSkewMs = 0;
+    // SignSpaceFrame v1 del frame vivo (independiente del cuerpo). Solo lo
+    // usa resolverBrazo en modo de retarget 'anchors'; 152D sigue mandando.
+    let signSpaceVivo = null;
     // Reloj local de recepcion. timestampMs puede venir de DateTime de Dart
     // (epoch) o de performance.now() web; no sirve para medir silencio entre
     // mensajes. Esto cubre tambien stream nativo detenido dentro de WebView.
@@ -5376,6 +5459,7 @@
             frameVivoFrameId++;
             frameVivoSourceFrameId = sourceFrameId;
             frameVivoSourceSkewMs = Math.abs(timestampMs - poseTimestampMs);
+            signSpaceVivo = signSpaceFrame(pose, poseMundo);
             frameVivo = suavizarFrameWeb(vectorRender ?? vector, timestampMs);
             frameVivoTimestampMs = timestampMs;
             procesarCalibracionPulgares(vector, calidad);
@@ -5997,6 +6081,7 @@
       kFps = Number.isFinite(Number(fps)) && Number(fps) > 0
         ? Math.min(120, Math.max(1, Number(fps))) : 30;
       frameVivo = null;
+      signSpaceVivo = null;
       frameVivoFrameId = 0;
       frameVivoSourceSkewMs = 0;
       frameVivoRecibidoAt = 0;
@@ -6068,6 +6153,7 @@
       frameVivoTimestampMs = Number(timestampMs) || 0;
       frameVivoFrameId++;
       frameVivoSourceSkewMs = Number(sourceMeta?.source_skew_ms ?? 0);
+      signSpaceVivo = parseSignSpaceFrame(sourceMeta?.sign_space);
       frameVivoQuality = Number(quality) || 0;
       frameVivoRecibidoAt = performance.now();
       frameVivoExterno = !standaloneWeb;
@@ -6161,6 +6247,7 @@
             frameId: frameVivoFrameId,
             timestampMs: frameVivoTimestampMs,
             sourceSkewMs: frameVivoSourceSkewMs,
+            signSpace: signSpaceVivo,
           });
           if (standaloneWeb && frameVivoSourceFrameId > 0 &&
               frameVivoSourceFrameId !== ultimoSourceFrameRenderizado) {

@@ -155,3 +155,28 @@ export function signSpaceFrame(pose, poseWorld, {
   return {version: SIGN_SPACE_VERSION, mode: base.mode, scale: base.scale,
     values: out, mask};
 }
+
+const MASK_KEYS = ['armL', 'armR', 'handL', 'handR', 'face'];
+
+/**
+ * Valida un SignSpaceFrame recibido por el puente (Dart) o de la biblioteca.
+ * Devuelve el frame normalizado o null si no cumple el contrato v1.
+ */
+export function parseSignSpaceFrame(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.version !== SIGN_SPACE_VERSION) return null;
+  if (raw.mode !== 'full' && raw.mode !== 'upper') return null;
+  const values = raw.values;
+  if (!Array.isArray(values) || values.length !== SIGN_SPACE_DIM ||
+      values.some((v) => !Number.isFinite(Number(v)))) return null;
+  if (!raw.mask || MASK_KEYS.some((k) => typeof raw.mask[k] !== 'boolean')) {
+    return null;
+  }
+  return {
+    version: raw.version,
+    mode: raw.mode,
+    scale: Number(raw.scale),
+    values: values.map(Number),
+    mask: Object.fromEntries(MASK_KEYS.map((k) => [k, raw.mask[k]])),
+  };
+}

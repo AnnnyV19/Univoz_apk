@@ -9,6 +9,11 @@ import {
   solveThumbPose,
 } from '../../assets/avatar_viewer/rig_math.mjs';
 import { createRigSafetyGate } from '../../assets/avatar_viewer/rig_safety.mjs';
+import { signSpaceFrame } from '../../assets/avatar_viewer/rig_sign_space.mjs';
+import {
+  createAvatarRigProfile,
+  retargetArm,
+} from '../../assets/avatar_viewer/rig_retarget.mjs';
 import {
   assignHandsByArmChain,
   resolveAnatomicalHandSide,
@@ -432,15 +437,18 @@ for (const side of ['left','right']) {
   });
 }
 
-function armRuntime() {
+function armRuntime(retargetMode='legacy') {
   const root=new THREE.Object3D(), up=new THREE.Object3D();
   const lo=new THREE.Object3D(), wrist=new THREE.Object3D();
   root.add(up); up.add(lo); lo.add(wrist);
   lo.position.x=.3; wrist.position.x=.25; root.updateMatrixWorld(true);
   const r={dirUp:vector(1,0,0), dirLo:vector(1,0,0), lenUp:.3,lenLo:.25,
     qUp:new THREE.Quaternion(),qLo:new THREE.Quaternion()};
-  const ctx=runtime(['vectorBaseAvatar','resolverBrazo'],{
-    refRig:{left:r}, bone:n=>n==='upper'?up:lo,
+  const ctx=runtime(['vectorBaseAvatar','perfilAvatarRetarget',
+    'deltaMunecaRetarget','resolverBrazo'],{
+    retargetMode, perfilAvatarCache:null, retargetArm, createAvatarRigProfile,
+    kBase:base,
+    refRig:{left:r,right:r}, bone:n=>n==='upper'?up:lo,
     VRMHumanBoneName:{LeftUpperArm:'upper',LeftLowerArm:'lower'},
     cal:{invertZ:false,leftArmGain:1,ikMin:.05,ikMax:2.60},
     avDerecha:vector(1,0,0),avArriba:vector(0,1,0),avFrente:vector(0,0,1),
@@ -462,3 +470,44 @@ for (const target of [[2,0,0],[.001,0,0],[.3,.2,0]]) {
       'clamped wrist left target ray');
   });
 }
+
+const signGolden = JSON.parse(readFileSync(
+  new URL('../../test/golden/sign_space_cases.json', import.meta.url), 'utf8'));
+const hangingFrame = () => {
+  const c = signGolden.cases.find((x) => x.name === 'de_pie');
+  return signSpaceFrame(c.pose, c.pose_mundo);
+};
+// 152D falso: muneca a la derecha a la altura del hombro.
+const legacyWrist = vector(.4, 0, 0);
+
+test('anchors mode drives the arm from SignSpace directions', () => {
+  const {ctx,root,up,wrist}=armRuntime('anchors');
+  ctx.resolverBrazo('left',base,vector(0,0,0),vector(.1,-.2,0),legacyWrist,
+    {signSpace: hangingFrame()});
+  root.updateMatrixWorld(true);
+  const d = wrist.getWorldPosition(vector()).sub(up.getWorldPosition(vector()));
+  // brazo izquierdo del usuario cuelga: el avatar cuelga, ignora 152D
+  assert.ok(d.clone().normalize().y < -0.99, `y=${d.clone().normalize().y}`);
+});
+
+test('legacy mode ignores SignSpace and keeps historic behavior', () => {
+  const run = (meta) => {
+    const {ctx,root,wrist}=armRuntime('legacy');
+    ctx.resolverBrazo('left',base,vector(0,0,0),vector(.1,-.2,0),legacyWrist,meta);
+    root.updateMatrixWorld(true);
+    return wrist.getWorldPosition(vector());
+  };
+  const a = run({}), b = run({signSpace: hangingFrame()});
+  assert.ok(a.distanceTo(b) < 1e-12);
+  assert.ok(a.y > -1e-6, 'legacy sigue a la muneca 152D');
+});
+
+test('anchors mode falls back to legacy when the arm is masked', () => {
+  const frame = hangingFrame();
+  frame.mask.armL = false;
+  const {ctx,root,wrist}=armRuntime('anchors');
+  ctx.resolverBrazo('left',base,vector(0,0,0),vector(.1,-.2,0),legacyWrist,
+    {signSpace: frame});
+  root.updateMatrixWorld(true);
+  assert.ok(wrist.getWorldPosition(vector()).y > -1e-6);
+});

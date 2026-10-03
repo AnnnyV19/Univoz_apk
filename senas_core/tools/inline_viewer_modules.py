@@ -28,6 +28,9 @@ INDEX = os.path.join(VIEWER, "index.html")
 MODULES = ["rig_math", "rig_metrics", "rig_diagnostics", "rig_safety",
            "rig_tracking", "rig_sign_space", "rig_body_profile",
            "rig_retarget"]
+# Modulos nuevos: exponen todos sus exports. Los historicos conservan la
+# lista de nombres de su bloque (algunos exports no se usan en la pagina).
+EXPORT_ALL = {"rig_sign_space", "rig_body_profile", "rig_retarget"}
 INDENT = "      "
 FIN_MODULOS = "    // ---- fin modulos inline ----"
 
@@ -72,6 +75,8 @@ def regenerar(html):
             e = lineas.index(fin(mod))
             m = re.match(r"\s*const \{(.*)\} = \(\(\) => \{", lineas[s + 1])
             nombres = [n.strip() for n in m.group(1).split(",")]
+            if mod in EXPORT_ALL:
+                nombres = exports_de(open(os.path.join(VIEWER, mod + ".mjs")).read())
             lineas[s:e + 1] = bloque(mod, nombres)
         except ValueError:
             src = open(os.path.join(VIEWER, mod + ".mjs")).read()
