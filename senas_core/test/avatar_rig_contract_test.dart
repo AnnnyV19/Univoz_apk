@@ -81,7 +81,10 @@ void main() {
     expect(html, contains("let capturaModo = 'separado';"));
     expect(html, contains('vision.HolisticLandmarker.createFromOptions'));
     expect(html, contains('holisticToTaskResults('));
-    expect(html, contains('outputFaceBlendshapes: true'));
+    // blendshapes fallan en GPU WebGL: expresiones por geometria
+    expect(html, contains('outputFaceBlendshapes: false'));
+    expect(html, contains('expressionsFromFaceLandmarks(cara.landmarks'));
+    expect(html, contains('caerHolisticACpu(error)'));
     expect(html, contains('aplicarCara(caraVivo, espejo'));
     expect(html, contains("'Neck', 'Head']"));
     // el parpadeo generico cede ante la cara real

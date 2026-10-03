@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   FACE_IDX,
   blendshapesToVrmExpressions,
+  expressionsFromFaceLandmarks,
   headRotationFromFace,
   mirrorFaceSignals,
 } from '../../assets/avatar_viewer/rig_face.mjs';
@@ -83,4 +84,48 @@ test('mirror swaps eyes and negates yaw and roll', () => {
     {yaw: .2, pitch: .1, roll: -.3});
   assert.deepEqual(m.expressions, {blinkLeft: 0, blinkRight: 1, aa: .5});
   assert.deepEqual(m.head, {yaw: -.2, pitch: .1, roll: .3});
+});
+
+// Cara frontal sintetica con parpados, labios y cejas parametrizables.
+function faceWith({eyeOpen = 0.30, mouthOpen = 0, mouthWidth = 0.050,
+  brow = 0.035} = {}) {
+  const f = Array.from({length: 478}, () => ({x: .5, y: .5, z: 0}));
+  const put = (i, x, y) => { f[i] = {x: 0.5 + x, y: 0.5 - y, z: 0}; };
+  put(FACE_IDX.FOREHEAD, 0, 0.09);
+  put(FACE_IDX.CHIN, 0, -0.09);
+  put(FACE_IDX.NOSE_TIP, 0, 0);
+  for (const [s, outer, inner, top, bottom, browIdx] of [
+    [-1, 33, 133, 159, 145, 105], [1, 263, 362, 386, 374, 334]]) {
+    put(outer, s * 0.050, 0.03);
+    put(inner, s * 0.020, 0.03);
+    const h = eyeOpen * 0.030 / 2;
+    put(top, s * 0.035, 0.03 + h);
+    put(bottom, s * 0.035, 0.03 - h);
+    put(browIdx, s * 0.035, 0.03 + h + brow);
+  }
+  put(13, 0, -0.04 + mouthOpen / 2);
+  put(14, 0, -0.04 - mouthOpen / 2);
+  put(61, -mouthWidth / 2, -0.04);
+  put(291, mouthWidth / 2, -0.04);
+  return f;
+}
+
+test('geometric expressions: open face is neutral', () => {
+  const e = expressionsFromFaceLandmarks(faceWith());
+  assert.ok(e.blinkLeft < 0.1 && e.blinkRight < 0.1, JSON.stringify(e));
+  assert.ok(e.aa < 0.1);
+  assert.ok(e.happy < 0.1);
+  assert.ok(e.surprised < 0.1);
+});
+
+test('geometric expressions detect blink, open jaw, smile and raised brows', () => {
+  assert.ok(expressionsFromFaceLandmarks(faceWith({eyeOpen: 0.05})).blinkLeft > 0.9);
+  assert.ok(expressionsFromFaceLandmarks(faceWith({mouthOpen: 0.04})).aa > 0.9);
+  assert.ok(expressionsFromFaceLandmarks(faceWith({mouthWidth: 0.075})).happy > 0.5);
+  assert.ok(expressionsFromFaceLandmarks(faceWith({brow: 0.055})).surprised > 0.5);
+});
+
+test('geometric expressions reject incomplete faces', () => {
+  assert.deepEqual(expressionsFromFaceLandmarks(null), {});
+  assert.deepEqual(expressionsFromFaceLandmarks(faceWith().slice(0, 200)), {});
 });

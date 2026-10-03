@@ -3121,7 +3121,7 @@
     // ---- fin rig_holistic.mjs ----
 
     // ---- inicio rig_face.mjs (antes importado por separado) ----
-    const {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals} = (() => {
+    const {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals, expressionsFromFaceLandmarks} = (() => {
       // Cara del usuario -> avatar (FaceFrameV1, canal aparte de 152D).
       //
       // Los rasgos no manuales (cejas, boca, mirada, giro de cabeza) son parte de
@@ -3200,7 +3200,48 @@
           head: head ? {yaw: -head.yaw, pitch: head.pitch, roll: -head.roll} : null,
         };
       }
-      return {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals};
+
+      // Indices de la malla facial de MediaPipe (478 puntos). "Derecho" = de la
+      // persona.
+      const EYE = {
+        right: {outer: 33, inner: 133, top: 159, bottom: 145, brow: 105},
+        left: {outer: 263, inner: 362, top: 386, bottom: 374, brow: 334},
+      };
+      const LIP_TOP = 13, LIP_BOTTOM = 14, MOUTH_RIGHT = 61, MOUTH_LEFT = 291;
+
+      // Umbrales sobre proporciones de la propia cara (no dependen de distancia a
+      // la camara). Aproximados para un adulto; ajustables tras prueba fisica.
+      const EAR_OPEN = 0.25, EAR_CLOSED = 0.10;      // alto/ancho del ojo
+      const JAW_FULL = 0.18;                          // labios / alto de cara
+      const SMILE_NEUTRAL = 0.52, SMILE_FULL = 0.65;  // boca / ancho entre ojos
+      const BROW_NEUTRAL = 0.22, BROW_FULL = 0.30;    // ceja-ojo / alto de cara
+
+      /**
+       * Expresiones VRM 1.0 desde la geometria de la malla facial. Funciona sin
+       * blendshapes (el subgrafo de blendshapes de Holistic no corre en GPU
+       * WebGL).
+       */
+      function expressionsFromFaceLandmarks(landmarks, {aspect = 1} = {}) {
+        if (!Array.isArray(landmarks) || landmarks.length < 400) return {};
+        const p = (i) => [Number(landmarks[i]?.x) * aspect, Number(landmarks[i]?.y)];
+        const d = (a, b) => Math.hypot(p(a)[0] - p(b)[0], p(a)[1] - p(b)[1]);
+        const alto = d(FACE_IDX.FOREHEAD, FACE_IDX.CHIN);
+        const entreOjos = d(EYE.right.outer, EYE.left.outer);
+        if (!(alto > 1e-6) || !(entreOjos > 1e-6)) return {};
+        const lin = (v, a, b) => clamp01((v - a) / (b - a));
+        const blink = (e) => lin(d(e.top, e.bottom) / Math.max(1e-6, d(e.outer, e.inner)),
+          EAR_OPEN, EAR_CLOSED);
+        const ceja = (d(EYE.right.brow, EYE.right.top) + d(EYE.left.brow, EYE.left.top)) /
+          (2 * alto);
+        return {
+          blinkLeft: blink(EYE.left),
+          blinkRight: blink(EYE.right),
+          aa: lin(d(LIP_TOP, LIP_BOTTOM) / alto, 0, JAW_FULL),
+          happy: lin(d(MOUTH_RIGHT, MOUTH_LEFT) / entreOjos, SMILE_NEUTRAL, SMILE_FULL),
+          surprised: lin(ceja, BROW_NEUTRAL, BROW_FULL),
+        };
+      }
+      return {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals, expressionsFromFaceLandmarks};
     })();
     // ---- fin rig_face.mjs ----
 
@@ -4797,7 +4838,9 @@
       const video = document.getElementById('camaraVideo');
       const aspect = video?.videoWidth > 0 && video?.videoHeight > 0
         ? video.videoWidth / video.videoHeight : 4 / 3;
-      let expresiones = blendshapesToVrmExpressions(cara.blendshapes);
+      let expresiones = Object.keys(cara.blendshapes ?? {}).length
+        ? blendshapesToVrmExpressions(cara.blendshapes)
+        : expressionsFromFaceLandmarks(cara.landmarks, {aspect});
       let cabeza = headRotationFromFace(cara.landmarks, {aspect});
       if (espejo) {
         ({expressions: expresiones, head: cabeza} =
@@ -5149,6 +5192,28 @@
       if (kCapturaModos.includes(pedido)) capturaModo = pedido;
     } catch (_) { /* sin storage: separado */ }
     let holisticLandmarkerWeb = null;
+    // Fabrica y estado del delegado, para caer a CPU si la GPU falla al
+    // detectar (no solo al crear).
+    let holisticCrear = null;
+    let holisticEnCpu = false;
+    let holisticReintentando = false;
+    // Centinela: frame saltado a proposito (no es un error de camara).
+    const kSaltarFrameWeb = Symbol('saltar_frame');
+    function caerHolisticACpu(error) {
+      if (holisticEnCpu || holisticReintentando || !holisticCrear) throw error;
+      holisticReintentando = true;
+      avisar('Holistic GPU fallo; reintentando en CPU…');
+      const anterior = holisticLandmarkerWeb;
+      holisticLandmarkerWeb = null;
+      try { anterior?.close(); } catch (_) {}
+      holisticCrear(false).then((tarea) => {
+        holisticEnCpu = true;
+        holisticLandmarkerWeb = tarea;
+        avisar('Holistic en CPU');
+      }).catch((e) => {
+        avisar('Holistic no disponible: ' + (e?.message ?? e));
+      }).finally(() => { holisticReintentando = false; });
+    }
     // Ultima cara detectada por Holistic: {landmarks, blendshapes} o null.
     let caraVivo = null;
     let preloadedLandmarkersWeb = null;
@@ -5941,11 +6006,21 @@
           // first lock. Fast finger response gets priority without losing
           // shoulder-chain identity.
           let ejecutarPose, poseResult, handResult;
+          if (capturaModo === 'holistic' && !holisticLandmarkerWeb) {
+            // Recreando en CPU: se salta el frame sin marcar error.
+            throw kSaltarFrameWeb;
+          }
           if (holisticLandmarkerWeb) {
             // Holistic: cuerpo, manos y cara en una pasada, pose cada frame.
             const holisticStartedAt = performance.now();
-            const unificado = holisticToTaskResults(
-              holisticLandmarkerWeb.detectForVideo(video, timestampMs));
+            let crudo;
+            try {
+              crudo = holisticLandmarkerWeb.detectForVideo(video, timestampMs);
+            } catch (error) {
+              caerHolisticACpu(error);
+              throw kSaltarFrameWeb;
+            }
+            const unificado = holisticToTaskResults(crudo);
             registrarTiempoWeb('pose', performance.now() - holisticStartedAt);
             registrarTiempoWeb('hand', 0);
             ejecutarPose = true;
@@ -6084,13 +6159,15 @@
               inputFps: webCameraState.inputFps,
             }).stride;
         } catch (e) {
-          const error = String(e?.message ?? e);
-          webCameraState.running = false;
-          void liberarCamaraWeb().catch(() => {}).finally(() => {
-            webCameraState.error = error;
-            avisar('Error procesando cámara: ' + error);
-            pintarEstadoCamaraWeb();
-          });
+          if (e !== kSaltarFrameWeb) {
+            const error = String(e?.message ?? e);
+            webCameraState.running = false;
+            void liberarCamaraWeb().catch(() => {}).finally(() => {
+              webCameraState.error = error;
+              avisar('Error procesando cámara: ' + error);
+              pintarEstadoCamaraWeb();
+            });
+          }
         } finally {
           webCameraState.processing = false;
         }
@@ -6152,22 +6229,25 @@
         ...(gpu ? { delegate: 'GPU' } : {}),
       });
       if (capturaModo === 'holistic') {
-        const opciones = (gpu) => ({
-          baseOptions: base(HOLISTIC_MODEL_URL, gpu),
-          runningMode: 'VIDEO',
-          minPoseDetectionConfidence: 0.4,
-          minPosePresenceConfidence: 0.4,
-          minHandLandmarksConfidence: 0.4,
-          minFaceDetectionConfidence: 0.4,
-          minFacePresenceConfidence: 0.4,
-          outputFaceBlendshapes: true,
-        });
+        holisticCrear = (gpu) => vision.HolisticLandmarker.createFromOptions(
+          fileset, {
+            baseOptions: base(HOLISTIC_MODEL_URL, gpu),
+            runningMode: 'VIDEO',
+            minPoseDetectionConfidence: 0.4,
+            minPosePresenceConfidence: 0.4,
+            minHandLandmarksConfidence: 0.4,
+            minFaceDetectionConfidence: 0.4,
+            minFacePresenceConfidence: 0.4,
+            // El subgrafo de blendshapes falla en GPU WebGL ("No support of
+            // const"); las expresiones salen de la geometria de la malla.
+            outputFaceBlendshapes: false,
+          });
         try {
-          return {holistic: await vision.HolisticLandmarker.createFromOptions(
-            fileset, opciones(true))};
+          holisticEnCpu = false;
+          return {holistic: await holisticCrear(true)};
         } catch (_) {
-          return {holistic: await vision.HolisticLandmarker.createFromOptions(
-            fileset, opciones(false))};
+          holisticEnCpu = true;
+          return {holistic: await holisticCrear(false)};
         }
       }
       let pose = null;

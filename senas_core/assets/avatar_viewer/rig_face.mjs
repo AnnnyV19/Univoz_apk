@@ -76,3 +76,44 @@ export function mirrorFaceSignals(expressions, head) {
     head: head ? {yaw: -head.yaw, pitch: head.pitch, roll: -head.roll} : null,
   };
 }
+
+// Indices de la malla facial de MediaPipe (478 puntos). "Derecho" = de la
+// persona.
+const EYE = {
+  right: {outer: 33, inner: 133, top: 159, bottom: 145, brow: 105},
+  left: {outer: 263, inner: 362, top: 386, bottom: 374, brow: 334},
+};
+const LIP_TOP = 13, LIP_BOTTOM = 14, MOUTH_RIGHT = 61, MOUTH_LEFT = 291;
+
+// Umbrales sobre proporciones de la propia cara (no dependen de distancia a
+// la camara). Aproximados para un adulto; ajustables tras prueba fisica.
+const EAR_OPEN = 0.25, EAR_CLOSED = 0.10;      // alto/ancho del ojo
+const JAW_FULL = 0.18;                          // labios / alto de cara
+const SMILE_NEUTRAL = 0.52, SMILE_FULL = 0.65;  // boca / ancho entre ojos
+const BROW_NEUTRAL = 0.22, BROW_FULL = 0.30;    // ceja-ojo / alto de cara
+
+/**
+ * Expresiones VRM 1.0 desde la geometria de la malla facial. Funciona sin
+ * blendshapes (el subgrafo de blendshapes de Holistic no corre en GPU
+ * WebGL).
+ */
+export function expressionsFromFaceLandmarks(landmarks, {aspect = 1} = {}) {
+  if (!Array.isArray(landmarks) || landmarks.length < 400) return {};
+  const p = (i) => [Number(landmarks[i]?.x) * aspect, Number(landmarks[i]?.y)];
+  const d = (a, b) => Math.hypot(p(a)[0] - p(b)[0], p(a)[1] - p(b)[1]);
+  const alto = d(FACE_IDX.FOREHEAD, FACE_IDX.CHIN);
+  const entreOjos = d(EYE.right.outer, EYE.left.outer);
+  if (!(alto > 1e-6) || !(entreOjos > 1e-6)) return {};
+  const lin = (v, a, b) => clamp01((v - a) / (b - a));
+  const blink = (e) => lin(d(e.top, e.bottom) / Math.max(1e-6, d(e.outer, e.inner)),
+    EAR_OPEN, EAR_CLOSED);
+  const ceja = (d(EYE.right.brow, EYE.right.top) + d(EYE.left.brow, EYE.left.top)) /
+    (2 * alto);
+  return {
+    blinkLeft: blink(EYE.left),
+    blinkRight: blink(EYE.right),
+    aa: lin(d(LIP_TOP, LIP_BOTTOM) / alto, 0, JAW_FULL),
+    happy: lin(d(MOUTH_RIGHT, MOUTH_LEFT) / entreOjos, SMILE_NEUTRAL, SMILE_FULL),
+    surprised: lin(ceja, BROW_NEUTRAL, BROW_FULL),
+  };
+}
