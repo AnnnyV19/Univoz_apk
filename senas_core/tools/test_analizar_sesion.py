@@ -66,3 +66,19 @@ def test_sesion_android_lee_asignacion_y_rechazos():
     r = an.resumir([{"kind": "session_start", "session_id": "a"}, f, dict(f, t=2)])
     assert r["assignment_modes"] == {"pose_arm_chain": 2}
     assert r["hand_rejects"] == {"hand_duplicate": 2}
+
+
+def test_baseline_y_comparar():
+    vec = [0.0] * 152
+    regs = [{"kind": "session_start", "session_id": "b1",
+             "meta": {"platform": "web", "video": {"width": 360}}}]
+    regs += [_frame(i * 33, vec) for i in range(5)]
+    r = an.resumir(regs)
+    b = an.baseline(r)
+    assert b["schema"] == "BaselineV1"
+    assert b["platform"] == "web" and b["frames"] == 5
+    assert b["video"] == {"width": 360}
+    r2 = dict(r, fps=r["fps"] + 10)
+    d = an.comparar(r, r2)
+    assert d["fps"]["delta"] == 10
+    assert "frames" not in d

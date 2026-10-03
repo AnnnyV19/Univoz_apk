@@ -2,6 +2,9 @@
 
 Uso:  python3 tools/analizar_sesion.py [sesiones/<id>.jsonl ...]
       (sin argumentos analiza la sesion mas reciente de senas_core/sesiones)
+      python3 tools/analizar_sesion.py --baseline [sesion.jsonl]
+      (guarda docs/evidence/baseline/<id>-<plataforma>.json, Fase 0)
+      python3 tools/analizar_sesion.py --comparar A B
 
 Reporta cobertura (pose, manos, cara), rechazos de la compuerta de manos,
 modos de asignacion de lado, errores mas frecuentes, tiempos, eventos,
@@ -134,14 +137,85 @@ def imprimir(res):
     print(json.dumps(res, indent=1, ensure_ascii=False))
 
 
+BASELINE_DIR = os.path.join(HERE, "..", "..", "docs", "evidence", "baseline")
+
+
+def baseline(res):
+    """Registro de Fase 0: metricas comparables + contexto del dispositivo.
+    Cada gate reporta dispositivo, resolucion y tamano de muestra."""
+    meta = res.get("meta", {})
+    return {
+        "schema": "BaselineV1",
+        "session_id": res.get("session_id"),
+        "platform": meta.get("platform"),
+        "screen": meta.get("screen"),
+        "capture_mode": meta.get("capture_mode"),
+        "device": meta.get("user_agent") or meta.get("device"),
+        "video": meta.get("video"),
+        "frames": res.get("frames", 0),
+        "duration_s": res.get("duration_s"),
+        "fps": res.get("fps"),
+        "coverage_pct": res.get("coverage_pct"),
+        "timing_ms": res.get("timing_ms"),
+        "hand_rejects": res.get("hand_rejects"),
+        "assignment_modes": res.get("assignment_modes"),
+        "depth": res.get("depth"),
+        "head_range_deg": res.get("head_range_deg"),
+        "top_errors": res.get("top_errors"),
+    }
+
+
+def _plano(d, prefijo=""):
+    out = {}
+    for k, v in (d or {}).items():
+        clave = prefijo + k
+        if isinstance(v, dict):
+            out.update(_plano(v, clave + "."))
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[clave] = v
+    return out
+
+
+def comparar(a, b):
+    """Diferencias numericas b - a entre dos resumenes (o baselines)."""
+    pa, pb = _plano(a), _plano(b)
+    return {k: {"a": pa[k], "b": pb[k], "delta": round(pb[k] - pa[k], 3)}
+            for k in sorted(set(pa) & set(pb)) if pa[k] != pb[k]}
+
+
+def _ultima():
+    todas = sorted(glob.glob(os.path.join(SESIONES, "*.jsonl")))
+    if not todas:
+        print("no hay sesiones en", os.path.normpath(SESIONES))
+        sys.exit(1)
+    return todas[-1]
+
+
+def _cargar(ruta):
+    if ruta.endswith(".json"):
+        with open(ruta, encoding="utf-8") as fh:
+            return json.load(fh)
+    return resumir(leer(ruta))
+
+
 if __name__ == "__main__":
-    rutas = sys.argv[1:]
-    if not rutas:
-        todas = sorted(glob.glob(os.path.join(SESIONES, "*.jsonl")))
-        if not todas:
-            print("no hay sesiones en", os.path.normpath(SESIONES))
+    args = sys.argv[1:]
+    if args[:1] == ["--comparar"]:
+        if len(args) != 3:
+            print("uso: --comparar A B (jsonl o baseline .json)")
             sys.exit(1)
-        rutas = [todas[-1]]
-    for ruta in rutas:
+        imprimir(comparar(_cargar(args[1]), _cargar(args[2])))
+        sys.exit(0)
+    if args[:1] == ["--baseline"]:
+        ruta = args[1] if len(args) > 1 else _ultima()
+        b = baseline(resumir(leer(ruta)))
+        os.makedirs(BASELINE_DIR, exist_ok=True)
+        nombre = "%s-%s.json" % (b["session_id"] or "sesion", b["platform"] or "x")
+        destino = os.path.normpath(os.path.join(BASELINE_DIR, nombre))
+        with open(destino, "w", encoding="utf-8") as fh:
+            json.dump(b, fh, indent=1, ensure_ascii=False)
+        print("baseline:", destino)
+        sys.exit(0)
+    for ruta in args or [_ultima()]:
         print("==", ruta)
         imprimir(resumir(leer(ruta)))
