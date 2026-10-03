@@ -1,8 +1,8 @@
 # ReconocerUnivoz — documentación de ingeniería
 
-Índice de esta rama para planear y validar la evolución de captura de señas,
-RigBody, avatar VRM y reconocimiento. Este `README.md` vive solo en la rama
-de trabajo; no modifica el README de la rama principal.
+Índice para planear y validar la evolución de captura de señas, RigBody,
+avatar VRM y reconocimiento. Desde 2026-10-02 este repo (`Univoz_apk`) es el
+árbol canónico; `ReconocerUnivoz` queda como histórico.
 
 ## Estado actual
 
@@ -51,6 +51,13 @@ cámara física todavía requiere una sesión asistida.
 - [Métricas y criterios de aceptación](10-metricas-y-criterios.md)
 - [Evidencia de sesión web](evidence/2026-09-11-web-camera-session.md)
 - [Plan ejecutable](superpowers/plans/2026-09-11-rigbody-roadmap.md)
+
+### Sistema único y mapeo corporal
+
+- [Auditoría del sistema único](11-auditoria-sistema-unico.md)
+- [Plan del sistema único (fases U–7)](12-plan-sistema-unico.md)
+- [Mapeo corporal universal: cualquier cuerpo → avatar](13-mapeo-corporal-universal.md)
+- [Head tracking (fase futura, corregido a 152D)](PLAN_HEAD_TRACKING.md)
 
 ## Verificación rápida
 
