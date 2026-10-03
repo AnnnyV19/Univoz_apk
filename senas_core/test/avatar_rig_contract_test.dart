@@ -90,4 +90,14 @@ void main() {
     // el parpadeo generico cede ante la cara real
     expect(html, contains('performance.now() - caraAplicadaAt < 500'));
   });
+
+  test('compuerta anti-alucinacion de manos antes de asignar lados', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains('// ---- inicio rig_hand_gate.mjs'));
+    expect(html, contains('gateHandCandidates(candidatosPuerta, pose)'));
+    expect(html, contains('webHandBirthGate.filter('));
+    final gate = html.indexOf('gateHandCandidates(candidatosPuerta, pose)');
+    final assign = html.indexOf('assignHandsByArmChain(candidatosCrudos');
+    expect(gate, lessThan(assign), reason: 'la compuerta va antes');
+  });
 }

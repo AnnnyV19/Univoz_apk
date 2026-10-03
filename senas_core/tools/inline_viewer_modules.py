@@ -27,11 +27,11 @@ INDEX = os.path.join(VIEWER, "index.html")
 
 MODULES = ["rig_math", "rig_metrics", "rig_diagnostics", "rig_safety",
            "rig_tracking", "rig_sign_space", "rig_mirror", "rig_body_profile",
-           "rig_retarget", "rig_holistic", "rig_face"]
+           "rig_retarget", "rig_holistic", "rig_face", "rig_hand_gate"]
 # Modulos nuevos: exponen todos sus exports. Los historicos conservan la
 # lista de nombres de su bloque (algunos exports no se usan en la pagina).
 EXPORT_ALL = {"rig_sign_space", "rig_mirror", "rig_body_profile",
-              "rig_retarget", "rig_holistic", "rig_face"}
+              "rig_retarget", "rig_holistic", "rig_face", "rig_hand_gate"}
 INDENT = "      "
 FIN_MODULOS = "    // ---- fin modulos inline ----"
 
