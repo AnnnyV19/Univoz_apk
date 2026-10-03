@@ -52,7 +52,7 @@ dependencies {
     // MediaPipe: motor de reconocimiento de manos/cuerpo (ver
     // senas_core/INTEGRACION.md y
     // android/app/src/main/kotlin/LandmarkEngine.kt).
-    implementation("com.google.mediapipe:tasks-vision:0.10.9")
+    implementation("com.google.mediapipe:tasks-vision:1.0.0")
 
     // CameraX: captura de video para el reconocedor de señas.
     implementation("androidx.camera:camera-core:1.3.0")

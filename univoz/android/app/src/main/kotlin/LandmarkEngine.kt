@@ -9,13 +9,19 @@ import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.components.containers.Landmark
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
+import com.google.mediapipe.tasks.vision.holisticlandmarker.HolisticLandmarker
+import com.google.mediapipe.tasks.vision.holisticlandmarker.HolisticLandmarkerResult
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 
 /**
- * Envuelve HandLandmarker y PoseLandmarker corriendo en LIVE_STREAM.
+ * Captura del producto: HolisticLandmarker (cuerpo, manos y cara en una sola
+ * pasada, docs/13). Si Holistic no carga, cae a HandLandmarker +
+ * PoseLandmarker corriendo en LIVE_STREAM, descritos abajo.
  *
  * Los dos tasks son independientes y devuelven resultados por callbacks
  * asincronos que llegan en orden impredecible. Hay DOS salidas distintas
@@ -73,6 +79,12 @@ class LandmarkEngine(
         val sourceSkewMs: Long?,
         val association: Map<String, Any?>,
         val errors: List<Map<String, String>>,
+        /** 17 puntos clave de cara x (x, y, z) en el orden de [FACE_KEYPOINTS]. */
+        val face: DoubleArray? = null,
+        /** 21 x (x, y, z) en metros (solo Holistic). */
+        val leftWorld: DoubleArray? = null,
+        val rightWorld: DoubleArray? = null,
+        val captureMode: String = "separado",
     )
 
     // Ultimo dato conocido de cada mitad, para armar el preview sin esperar
@@ -100,8 +112,14 @@ class LandmarkEngine(
     // A 30 FPS permite un desfase de hasta 3-4 capturas entre tasks, pero no
     // mezcla posturas separadas por una pausa real del tracking.
     private val ventanaFusionMs = 120L
-    private companion object {
-        const val MIN_POSE_WRIST_VISIBILITY = 0.35
+    companion object {
+        private const val MIN_POSE_WRIST_VISIBILITY = 0.35
+        /**
+         * Puntos de la malla facial que viajan al visor; mismos indices que
+         * kCaraClave en index.html y FACE_IDX/EYE de rig_face.mjs.
+         */
+        val FACE_KEYPOINTS = intArrayOf(1, 10, 152, 33, 133, 159, 145, 263,
+            362, 386, 374, 13, 14, 61, 291, 105, 334)
     }
 
     // Compuertas de backpresion INDEPENDIENTES: cada modelo se libera con
@@ -117,10 +135,60 @@ class LandmarkEngine(
 
     private val timeoutNs = 2_000_000_000L // 2s de seguridad por si un resultado nunca llega
 
-    private val handLandmarker: HandLandmarker
-    private val poseLandmarker: PoseLandmarker
+    private var handLandmarker: HandLandmarker? = null
+    private var poseLandmarker: PoseLandmarker? = null
+    private var holisticLandmarker: HolisticLandmarker? = null
+    private val holisticLock = Any()
+    private var holisticEnVuelo = false
+    private var holisticDesdeNs = 0L
+    private val birthGate = HandCandidateGate.BirthGate(frames = 3)
+
+    /** Errores al crear Holistic (se reportan en el primer frame). */
+    private val erroresCreacion = mutableListOf<Map<String, String>>()
+
+    val holisticActivo: Boolean get() = holisticLandmarker != null
 
     init {
+        holisticLandmarker = crearHolistic(context)
+        if (holisticLandmarker == null) crearSeparados(context)
+    }
+
+    private fun crearHolistic(context: Context): HolisticLandmarker? {
+        for (delegate in listOf(Delegate.GPU, Delegate.CPU)) {
+            try {
+                val options = HolisticLandmarker.HolisticLandmarkerOptions.builder()
+                    .setBaseOptions(
+                        BaseOptions.builder()
+                            .setModelAssetPath("holistic_landmarker.task")
+                            .setDelegate(delegate)
+                            .build()
+                    )
+                    .setRunningMode(RunningMode.LIVE_STREAM)
+                    .setMinPoseDetectionConfidence(0.4f)
+                    .setMinPosePresenceConfidence(0.4f)
+                    .setMinHandLandmarksConfidence(0.4f)
+                    .setMinFaceDetectionConfidence(0.4f)
+                    .setMinFacePresenceConfidence(0.4f)
+                    // Expresiones salen de la geometria de la malla (rig_face):
+                    // el subgrafo de blendshapes no es necesario.
+                    .setOutputFaceBlendshapes(false)
+                    .setResultListener { result, _ -> onHolistic(result) }
+                    .setErrorListener { e -> onError("holistic: ${e.message}") }
+                    .build()
+                return HolisticLandmarker.createFromOptions(context, options)
+            } catch (e: Exception) {
+                erroresCreacion += mapOf(
+                    "stage" to "capture",
+                    "code" to "holistic_create_failed",
+                    "delegate" to delegate.name,
+                )
+            }
+        }
+        erroresCreacion += mapOf("stage" to "capture", "code" to "capture_fallback")
+        return null
+    }
+
+    private fun crearSeparados(context: Context) {
         val handOptions = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(
                 BaseOptions.builder()
@@ -157,6 +225,23 @@ class LandmarkEngine(
         poseLandmarker = PoseLandmarker.createFromOptions(context, poseOptions)
     }
 
+    fun holisticOcupado(): Boolean = synchronized(holisticLock) {
+        holisticEnVuelo && (System.nanoTime() - holisticDesdeNs < timeoutNs)
+    }
+
+    /** [timestampMs] estrictamente creciente. False si ya hay un frame en vuelo. */
+    fun analizarHolistic(bitmap: Bitmap, timestampMs: Long): Boolean {
+        val tarea = holisticLandmarker ?: return false
+        synchronized(holisticLock) {
+            val ahora = System.nanoTime()
+            if (holisticEnVuelo && ahora - holisticDesdeNs < timeoutNs) return false
+            holisticEnVuelo = true
+            holisticDesdeNs = ahora
+        }
+        tarea.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
+        return true
+    }
+
     fun manosOcupadas(): Boolean = synchronized(manosLock) {
         manosEnVuelo && (System.nanoTime() - manosDesdeNs < timeoutNs)
     }
@@ -173,8 +258,8 @@ class LandmarkEngine(
             manosEnVuelo = true
             manosDesdeNs = ahora
         }
-        val mpImage = BitmapImageBuilder(bitmap).build()
-        handLandmarker.detectAsync(mpImage, timestampMs)
+        val tarea = handLandmarker ?: return false
+        tarea.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
         return true
     }
 
@@ -186,8 +271,8 @@ class LandmarkEngine(
             poseEnVuelo = true
             poseDesdeNs = ahora
         }
-        val mpImage = BitmapImageBuilder(bitmap).build()
-        poseLandmarker.detectAsync(mpImage, timestampMs)
+        val tarea = poseLandmarker ?: return false
+        tarea.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
         return true
     }
 
@@ -203,6 +288,7 @@ class LandmarkEngine(
         handsTimestampMs: Long?,
         tracking: HandTrackCoordinator.Result?,
         extraErrors: List<Map<String, String>> = emptyList(),
+        extras: Extras? = null,
     ): FrameResult {
         val skew = if (poseTimestampMs != null && handsTimestampMs != null)
             abs(poseTimestampMs - handsTimestampMs) else null
@@ -253,7 +339,97 @@ class LandmarkEngine(
             skew,
             association,
             errors,
+            face = extras?.face,
+            leftWorld = extras?.leftWorld,
+            rightWorld = extras?.rightWorld,
+            captureMode = if (holisticActivo) "holistic" else "separado",
         )
+    }
+
+    /** Datos que solo trae Holistic. */
+    private class Extras(
+        val face: DoubleArray?,
+        val leftWorld: DoubleArray?,
+        val rightWorld: DoubleArray?,
+    )
+
+    private fun normalizados(lm: List<NormalizedLandmark>, conVisibilidad: Boolean): DoubleArray {
+        val ancho = if (conVisibilidad) 4 else 3
+        return DoubleArray(lm.size * ancho).also {
+            for (i in lm.indices) {
+                val p = lm[i]
+                it[i * ancho] = p.x().toDouble()
+                it[i * ancho + 1] = p.y().toDouble()
+                it[i * ancho + 2] = p.z().toDouble()
+                if (conVisibilidad) {
+                    it[i * ancho + 3] = p.visibility().orElse(0f).toDouble()
+                }
+            }
+        }
+    }
+
+    private fun metricos(lm: List<Landmark>): DoubleArray =
+        DoubleArray(lm.size * 3).also {
+            for (i in lm.indices) {
+                it[i * 3] = lm[i].x().toDouble()
+                it[i * 3 + 1] = lm[i].y().toDouble()
+                it[i * 3 + 2] = lm[i].z().toDouble()
+            }
+        }
+
+    private fun onHolistic(result: HolisticLandmarkerResult) {
+        synchronized(holisticLock) { holisticEnVuelo = false }
+        val t = result.timestampMs()
+        val poseLm = result.poseLandmarks()
+        val pose = if (poseLm.size >= 33) normalizados(poseLm, true) else null
+        val mundoLm = result.poseWorldLandmarks()
+        val mundo = if (mundoLm.size >= 33) metricos(mundoLm) else null
+        val caraLm = result.faceLandmarks()
+        val cara = if (caraLm.size > 400) DoubleArray(FACE_KEYPOINTS.size * 3).also {
+            FACE_KEYPOINTS.forEachIndexed { k, i ->
+                it[k * 3] = caraLm[i].x().toDouble()
+                it[k * 3 + 1] = caraLm[i].y().toDouble()
+                it[k * 3 + 2] = caraLm[i].z().toDouble()
+            }
+        } else null
+
+        val candidatas = mutableListOf<ManoCandidata>()
+        val mundos = mutableListOf<DoubleArray?>()
+        val errores = mutableListOf<Map<String, String>>()
+        synchronized(erroresCreacion) {
+            errores += erroresCreacion
+            erroresCreacion.clear()
+        }
+        for ((imagen, metrico) in listOf(
+            result.leftHandLandmarks() to result.leftHandWorldLandmarks(),
+            result.rightHandLandmarks() to result.rightHandWorldLandmarks(),
+        )) {
+            if (imagen.size != 21) continue
+            val arr = normalizados(imagen, false)
+            if (arr.any { !it.isFinite() }) {
+                errores += mapOf("stage" to "capture", "code" to "point_non_finite")
+                continue
+            }
+            // La etiqueta de Holistic es solo pista: el lado lo decide la
+            // cadena del brazo, igual que en el camino separado.
+            candidatas += ManoCandidata(arr, 1.0, arr[0], arr[1])
+            mundos += if (metrico.size == 21) metricos(metrico) else null
+        }
+
+        synchronized(ultimoLock) {
+            ultimaPose = pose
+            ultimaPoseMundo = mundo
+            ultimoTimestampPose = t
+        }
+        procesarCandidatas(t, candidatas, pose, errores) { tracked ->
+            // Mundo de cada mano segun el lado que le asigno el tracker.
+            fun mundoDe(detected: DoubleArray?): DoubleArray? {
+                if (detected == null) return null
+                val i = candidatas.indexOfFirst { it.puntos.contentEquals(detected) }
+                return mundos.getOrNull(i)
+            }
+            Extras(cara, mundoDe(tracked.left.detected), mundoDe(tracked.right.detected))
+        }
     }
 
     private fun onPose(result: PoseLandmarkerResult) {
@@ -377,6 +553,29 @@ class LandmarkEngine(
                 muñecaY = lm[0].y().toDouble(),
             )
         }
+        procesarCandidatas(t, candidatas, poseParaLados, erroresEntrada)
+    }
+
+    /**
+     * Compuerta anti-alucinacion -> lado por cadena del brazo -> tracker ->
+     * frames. Comun a Holistic y al camino separado.
+     */
+    private fun procesarCandidatas(
+        t: Long,
+        todas: List<ManoCandidata>,
+        poseParaLados: DoubleArray?,
+        erroresEntrada: MutableList<Map<String, String>>,
+        extras: ((HandTrackCoordinator.Result) -> Extras)? = null,
+    ) {
+        val entradas = todas.map { HandCandidateGate.Input(it.puntos, it.confianza) }
+        val puerta = HandCandidateGate.gate(entradas, poseParaLados)
+        puerta.rejected.forEach { (_, code) ->
+            erroresEntrada += mapOf("stage" to "association", "code" to code)
+        }
+        val pasan = synchronized(birthGate) {
+            birthGate.filter(entradas, puerta.accepted, puerta.unanchored)
+        }
+        val candidatas = pasan.map { todas[it] }
         val poseCadenaDisponible = poseParaLados != null &&
             poseParaLados.size >= 33 * 4 && poseTieneCadenaBrazo(poseParaLados)
         val ladosCadena = if (poseCadenaDisponible) {
@@ -411,6 +610,7 @@ class LandmarkEngine(
                 )
             }
             val tracked = handTracker.update(trackCandidates, poseHint, t)
+            val extra = extras?.invoke(tracked)
             val izq = tracked.left.detected
             val der = tracked.right.detected
             ultimoTracking = tracked
@@ -433,6 +633,7 @@ class LandmarkEngine(
                     t,
                     tracked,
                     erroresEntrada,
+                    extra,
                 )
             }
             crearFrame(
@@ -447,6 +648,7 @@ class LandmarkEngine(
                 t,
                 tracked,
                 erroresEntrada,
+                extra,
             )
         }
         onPreview(preview)
@@ -528,7 +730,12 @@ class LandmarkEngine(
         val expectedLower = hypot(wx - ex, wy - ey)
         val observedLower = hypot(mano.muñecaX - ex, mano.muñecaY - ey)
         val chain = abs(observedLower - expectedLower) / ancho
-        return endpoint + direction * .35 + chain * .20
+        // Muneca que la pose no ve = estimacion (a veces encima de la otra
+        // mano): pesa menos. Igual que armChainCost en rig_tracking.mjs.
+        val visibilidad = pose[muneca * 4 + 3]
+        val noVista = if (visibilidad.isFinite())
+            (1.0 - visibilidad.coerceIn(0.0, 1.0)) * .6 else 0.0
+        return endpoint + direction * .35 + chain * .20 + noVista
     }
 
     private fun distanciaPose(pose: DoubleArray, a: Int, b: Int): Double {
@@ -538,8 +745,11 @@ class LandmarkEngine(
     }
 
     fun cerrar() {
-        handLandmarker.close()
-        poseLandmarker.close()
+        handLandmarker?.close()
+        poseLandmarker?.close()
+        holisticLandmarker?.close()
+        synchronized(holisticLock) { holisticEnVuelo = false }
+        synchronized(birthGate) { birthGate.reset() }
         synchronized(ultimoLock) {
             ultimaPose = null
             ultimaPoseMundo = null

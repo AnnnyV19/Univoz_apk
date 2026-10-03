@@ -208,6 +208,18 @@ class LandmarkPlugin(
     }
     private fun procesar(proxy: ImageProxy) {
         try {
+            val motor = engine
+            if (motor?.holisticActivo == true) {
+                // Holistic: un solo modelo para cuerpo, manos y cara; pose y
+                // manos salen del mismo frame (sin desfase entre fuentes).
+                if (motor.holisticOcupado()) return
+                val bitmap = rotar(proxy.toBitmap(), proxy.imageInfo.rotationDegrees)
+                var t = proxy.imageInfo.timestamp / 1_000_000
+                if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
+                ultimoTimestamp = t
+                motor.analizarHolistic(bitmap, t)
+                return
+            }
             val ahoraNs = proxy.imageInfo.timestamp
             val manosLibres = engine?.manosOcupadas() == false
             val tocaPose = engine?.poseOcupada() == false &&
@@ -255,7 +267,7 @@ class LandmarkPlugin(
     }
 
     private fun aMapa(f: LandmarkEngine.FrameResult): HashMap<String, Any?> {
-        val payload = HashMap<String, Any?>(13)
+        val payload = HashMap<String, Any?>(17)
         payload["t"] = f.timestampMs
         payload["pose"] = f.pose
         // Esqueleto metrico en 3D: es el unico con el que se puede
@@ -270,6 +282,12 @@ class LandmarkPlugin(
         payload["source_skew_ms"] = f.sourceSkewMs
         payload["association"] = f.association
         payload["errors"] = f.errors
+        payload["capture_mode"] = f.captureMode
+        // Solo Holistic: puntos clave de cara (orden FACE_KEYPOINTS) y manos
+        // en metros.
+        payload["face"] = f.face
+        payload["leftWorld"] = f.leftWorld
+        payload["rightWorld"] = f.rightWorld
         return payload
     }
     private fun detener(requestedSession: Long? = null) {
