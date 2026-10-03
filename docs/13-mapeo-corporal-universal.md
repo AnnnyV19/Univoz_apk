@@ -102,6 +102,20 @@ mentón, pecho, caderas) y longitudes de dedos.
 | Zurdo | Mano dominante en vivo, espejo en reconocimiento y avatar |
 | Rasgos no manuales | `FaceFrameV1`: giro de cabeza, cejas, boca, mirada |
 
+## Captura y robustez (estado)
+
+- **Holistic único** (web y Android): cuerpo, manos (con métricas) y cara en
+  una pasada; pose y manos del mismo frame. Respaldo automático a Pose + Hand.
+- **Compuerta de manos** antes de asignar lado: duplicados, mano lejos de
+  las muñecas visibles, tamaño imposible y confirmación de manos sin ancla.
+  La muñeca que la pose no ve pesa menos al decidir el lado.
+- **Codo oculto** reconstruido con el perfil (`reconstructed`).
+- **Cara**: giro de cabeza y expresiones geométricas (blendshapes no corren
+  en GPU WebGL).
+- **Sesión automática** con consentimiento: mide el cuerpo y graba todo
+  para analizar fallos; **Audit Sentinel** offline marca longitudes óseas
+  fuera del perfil y teletransportes de muñeca.
+
 ## Cómo probarlo
 
 ```bash

@@ -57,14 +57,35 @@ Fase 0 pendiente):
   `AvatarBridge.reproducir` (Fase 4).
 - [x] `tools/inline_viewer_modules.py`: los bloques inline del visor se
   generan desde los `.mjs`; `univoz.sh test` falla si derivan.
-- [ ] Hand world landmarks en Kotlin/web (Fase 1).
-- [ ] Flag `pose_landmarker_full` (Fase 1; requiere descargar el modelo).
-- [ ] Reconstrucción por perfil cuando falta hombro o codo (Fase 1).
-- [ ] Mano dominante en vivo (Fase 1).
-- [ ] UI de captura de perfil en la app Android (Fase 2).
+- [x] Filtro One Euro sobre `SignSpaceFrame` (respeta "Suavizar movimiento").
+- [x] Captura única **Holistic** (cuerpo + manos con landmarks métricos +
+  cara) en web y Android nativo (`tasks-vision` 1.0.0), modelo empaquetado,
+  respaldo automático a Pose + Hand. Sustituye a hand world landmarks y al
+  flag `pose_landmarker_full` (Fase 1).
+- [x] Corrección `invertZ` (brazos detrás del avatar) y RigCalibration v3.
+- [x] Compuerta anti-alucinación de manos (duplicados, lejos del brazo,
+  tamaño imposible, confirmación sin ancla) en JS y Kotlin, y costo de lado
+  que penaliza muñecas no visibles (Fase 1).
+- [x] Codo oculto reconstruido con el perfil corporal (`reconstructed`)
+  (Fase 1).
+- [x] Mano dominante: cubierta por `espejoAutomatico` del diccionario.
+- [x] Cara al avatar: giro de cabeza y expresiones geométricas; Android manda
+  17 puntos clave y la proporción real de la imagen (Fase 5).
+- [x] Vista espejo solo para uno mismo; traducción en vista interlocutor.
+- [x] Sesión automática con consentimiento en todas las pantallas con
+  cámara: mide el cuerpo y graba `SessionLogV1` (web: servidor local;
+  Android: archivo en el teléfono, compartir/borrar en Ajustes) (Fase 2/0).
+- [x] Anclas de cara del retarget desde los huesos de ojos del VRM.
+- [x] `tools/analizar_sesion.py` (cobertura, rechazos, errores, tiempos,
+  profundidad, `--baseline`, `--comparar`) y Audit Sentinel offline contra el
+  perfil (`tools/auditoria.py`) (Fase 0/6).
+- [x] `tools/sincronizar_kotlin.py`: copias Kotlin de `univoz` sin deriva.
+- [ ] Baselines físicos reales (requieren sesiones del usuario) (Fase 0).
+- [ ] Retarget `anchors` por defecto tras validación visual (Fase 3).
 - [ ] Un solo `palmFrameV2` y `jointLimits` anatómicos (Fase 3; requieren
   validación visual).
-- [x] Filtro One Euro sobre `SignSpaceFrame` (respeta "Suavizar movimiento").
+- [ ] Audit en vivo en el visor, Kalman por track, métricas del clasificador
+  (Fase 6).
 
 ### Fase 0 — Baseline físico
 

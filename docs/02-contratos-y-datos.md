@@ -103,6 +103,11 @@ copie o reproduzca con sus propias proporciones. Implementación canónica
   campo opcional `sign_space` (+ `sign_space_version`) de `MotionSequenceV2`,
   un frame o `null` por cada frame 152D. Lectores viejos lo ignoran.
 
+- `reconstructed` (opcional): `armL`/`armR` en `true` cuando el codo no era
+  visible y se resolvió con las longitudes del perfil corporal (IK de dos
+  huesos, plano del codo de la estimación de MediaPipe). Frames sin el campo
+  equivalen a `false`.
+
 ## `BodyProfileV1` y `CapabilityMask`
 
 Medianas de ancho de hombros, brazo, antebrazo, mano y cuello por lado
@@ -113,6 +118,27 @@ Se estima con Fast User Capture (3 poses guiadas) tras consentimiento
 explícito; se guarda local (`univoz.bodyProfile.v1` en web), versionado y
 borrable. Nunca guarda video ni landmarks: los frames se descartan al
 terminar la estimación.
+
+## Cara (`face_pts`)
+
+La captura Holistic de Android manda 17 puntos clave de la malla facial,
+`x, y, z` normalizados por la imagen, en este orden (`kFaceKeypoints`,
+`FACE_KEYPOINTS`): `1, 10, 152, 33, 133, 159, 145, 263, 362, 386, 374, 13,
+14, 61, 291, 105, 334`. Viaja junto a `image_aspect` (ancho/alto de la imagen
+rotada). El visor reconstruye una malla dispersa y calcula giro de cabeza y
+expresiones (`rig_face.mjs`). La cara nunca entra en `MotionFrameV2`.
+
+## `SessionLogV1` (registro de sesión)
+
+JSONL, una línea por registro, cada una con `seq` para deduplicar:
+`session_start` (`schema`, `session_id`, `meta`: plataforma, pantalla,
+modo de captura, video, calibración, perfil), `frame` (landmarks crudos de
+pose e imagen, manos antes/después de la compuerta o asociación del motor,
+cara, 152D, SignSpace, tiempos, errores), `event` (cámara, perfil, fallbacks,
+auditoría, muestras guardadas) y `session_end`. Solo con consentimiento;
+nunca video ni imágenes. Web: `senas_core/sesiones/` vía
+`tools/servidor_visor.py`; Android: `<documentos>/sesiones/`. Se analiza con
+`tools/analizar_sesion.py`.
 
 ## Backend y almacenamiento
 
