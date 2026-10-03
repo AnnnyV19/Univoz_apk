@@ -3106,9 +3106,11 @@
     };
     window.webCameraState = webCameraState;
 
+    // 1800 frames = ~60 s a 30 FPS: entra una sesion completa del protocolo
+    // de camara sin perder el inicio.
     const rigDiagnostics = new RigDiagnosticBuffer({
       platform: standaloneWeb ? 'web' : 'android', avatar: 'univozM',
-    });
+    }, 1800);
     rigDiagnostics.setEnabled(false);
     // Telemetría numérica efímera. Nunca guarda video ni imágenes y funciona
     // aunque panel visual de diagnóstico esté apagado.
@@ -3321,6 +3323,11 @@
         hands_t: Number(sourceMeta?.hands_t ?? timestampMs),
         source_skew_ms: Number(sourceMeta?.source_skew_ms ?? 0),
         raw_frame: raw?.slice() ?? null,
+        // Evidencia del mapeo corporal (docs/13): frame independiente del
+        // cuerpo y modo de retarget activo en este instante.
+        sign_space: signSpaceVivo ? {values: signSpaceVivo.values.slice(),
+          mask: {...signSpaceVivo.mask}, mode: signSpaceVivo.mode} : null,
+        retarget_mode: retargetMode,
         render_frame: filtered?.slice() ?? null,
         filtered_frame: filtered?.slice() ?? null,
         point_issues: diagnosticPointIssues.slice(),
