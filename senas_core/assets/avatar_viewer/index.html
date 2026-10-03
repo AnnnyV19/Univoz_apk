@@ -2938,7 +2938,7 @@
     // ---- fin rig_body_profile.mjs ----
 
     // ---- inicio rig_retarget.mjs (antes importado por separado) ----
-    const {RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, createAvatarRigProfile, retargetArm} = (() => {
+    const {RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, createAvatarRigProfile, retargetArm, faceAnchorsFromEyes} = (() => {
       // Retargeter SignSpaceFrame -> avatar con proporciones propias.
       //
       // Lejos del cuerpo manda la DIRECCION de cada segmento del usuario aplicada
@@ -3053,7 +3053,36 @@
         }
         return {palm, wrist, elbow, anchor, anchorWeight};
       }
-      return {RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, createAvatarRigProfile, retargetArm};
+
+      /**
+       * Anclas de la cara del avatar (marco del cuerpo del avatar) desde sus
+       * huesos de ojos. Todo en coordenadas de mundo del visor; `right`, `up`,
+       * `front` son los ejes del avatar. Las distancias faciales se escalan por la
+       * distancia entre ojos (IPD), asi sirven para avatares realistas o
+       * estilizados. null si faltan ojos o los ejes son degenerados.
+       */
+      function faceAnchorsFromEyes({shoulderMid, eyeL, eyeR, right, up, front}) {
+        const pts = [shoulderMid, eyeL, eyeR, right, up, front];
+        if (pts.some((p) => !Array.isArray(p) || p.length < 3 ||
+            !p.every(Number.isFinite))) return null;
+        const ipd = len(sub(eyeL, eyeR));
+        if (!(ipd > 1e-4)) return null;
+        const mid = mul(add(eyeL, eyeR), 0.5);
+        const toBody = (p) => {
+          const q = sub(p, shoulderMid);
+          return [q[0] * right[0] + q[1] * right[1] + q[2] * right[2],
+            q[0] * up[0] + q[1] * up[1] + q[2] * up[2],
+            q[0] * front[0] + q[1] * front[1] + q[2] * front[2]];
+        };
+        const eyes = toBody(mid);
+        // Proporciones faciales humanas en IPD: nariz ~0.6 bajo los ojos y ~0.5
+        // al frente; boca ~1.15 bajo los ojos y ~0.4 al frente.
+        return {
+          nose: [eyes[0], eyes[1] - 0.6 * ipd, eyes[2] + 0.5 * ipd],
+          mouth: [eyes[0], eyes[1] - 1.15 * ipd, eyes[2] + 0.4 * ipd],
+        };
+      }
+      return {RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, createAvatarRigProfile, retargetArm, faceAnchorsFromEyes};
     })();
     // ---- fin rig_retarget.mjs ----
 
@@ -4375,6 +4404,7 @@
     const refRig = { left: null, right: null };
     const refHand = { left: null, right: null };
     const refTorso = {};
+    let refRostro = null;
     const avDerecha = new THREE.Vector3();
     const avArriba = new THREE.Vector3(0, 1, 0);
     // El avatar mira a +Z: es VRM 0.0 (mira a -Z) y la escena se voltea media
@@ -4420,6 +4450,15 @@
       bone(VRMHumanBoneName.LeftUpperArm).getWorldPosition(pL);
       bone(VRMHumanBoneName.RightUpperArm).getWorldPosition(pR);
       avDerecha.subVectors(pR, pL).normalize();
+
+      // Ojos en reposo: anclas de cara para el retarget (faceAnchorsFromEyes).
+      const ojoI = bone(VRMHumanBoneName.LeftEye);
+      const ojoD = bone(VRMHumanBoneName.RightEye);
+      refRostro = ojoI && ojoD ? {
+        eyeL: ojoI.getWorldPosition(new THREE.Vector3()).toArray(),
+        eyeR: ojoD.getWorldPosition(new THREE.Vector3()).toArray(),
+        shoulderMid: pL.clone().add(pR).multiplyScalar(0.5).toArray(),
+      } : null;
 
       for (const clave of ['Hips', 'Spine', 'Chest', 'UpperChest',
         'LeftShoulder', 'RightShoulder', 'Neck', 'Head']) {
@@ -4743,14 +4782,18 @@
     function perfilAvatarRetarget() {
       const l = refRig.left, r = refRig.right;
       if (!l || !r) return null;
-      const clave = [anchoHombrosAvatar, l.lenUp, l.lenLo, r.lenUp, r.lenLo]
-        .join('|');
+      const clave = [anchoHombrosAvatar, l.lenUp, l.lenLo, r.lenUp, r.lenLo,
+        refRostro?.eyeL?.join(',') ?? '-'].join('|');
       if (perfilAvatarCache?.clave !== clave) {
         const sw = anchoHombrosAvatar;
         try {
+          const cara = refRostro ? faceAnchorsFromEyes({...refRostro,
+            right: avDerecha.toArray(), up: avArriba.toArray(),
+            front: avFrente.toArray()}) : null;
           perfilAvatarCache = {clave, perfil: createAvatarRigProfile({
             shoulderL: [-sw / 2, 0, 0], shoulderR: [sw / 2, 0, 0],
             upperL: l.lenUp, foreL: l.lenLo, upperR: r.lenUp, foreR: r.lenLo,
+            nose: cara?.nose ?? null, mouth: cara?.mouth ?? null,
           })};
         } catch (_) {
           perfilAvatarCache = {clave, perfil: null};

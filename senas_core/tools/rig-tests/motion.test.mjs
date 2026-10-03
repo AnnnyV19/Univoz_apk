@@ -447,6 +447,7 @@ function armRuntime(retargetMode='legacy') {
   const ctx=runtime(['vectorBaseAvatar','perfilAvatarRetarget',
     'deltaMunecaRetarget','resolverBrazo'],{
     retargetMode, perfilAvatarCache:null, retargetArm, createAvatarRigProfile,
+    refRostro:null, faceAnchorsFromEyes:()=>null,
     kBase:base,
     refRig:{left:r,right:r}, bone:n=>n==='upper'?up:lo,
     VRMHumanBoneName:{LeftUpperArm:'upper',LeftLowerArm:'lower'},

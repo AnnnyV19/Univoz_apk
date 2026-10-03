@@ -112,3 +112,32 @@ export function retargetArm(frame, avatar, side) {
   }
   return {palm, wrist, elbow, anchor, anchorWeight};
 }
+
+/**
+ * Anclas de la cara del avatar (marco del cuerpo del avatar) desde sus
+ * huesos de ojos. Todo en coordenadas de mundo del visor; `right`, `up`,
+ * `front` son los ejes del avatar. Las distancias faciales se escalan por la
+ * distancia entre ojos (IPD), asi sirven para avatares realistas o
+ * estilizados. null si faltan ojos o los ejes son degenerados.
+ */
+export function faceAnchorsFromEyes({shoulderMid, eyeL, eyeR, right, up, front}) {
+  const pts = [shoulderMid, eyeL, eyeR, right, up, front];
+  if (pts.some((p) => !Array.isArray(p) || p.length < 3 ||
+      !p.every(Number.isFinite))) return null;
+  const ipd = len(sub(eyeL, eyeR));
+  if (!(ipd > 1e-4)) return null;
+  const mid = mul(add(eyeL, eyeR), 0.5);
+  const toBody = (p) => {
+    const q = sub(p, shoulderMid);
+    return [q[0] * right[0] + q[1] * right[1] + q[2] * right[2],
+      q[0] * up[0] + q[1] * up[1] + q[2] * up[2],
+      q[0] * front[0] + q[1] * front[1] + q[2] * front[2]];
+  };
+  const eyes = toBody(mid);
+  // Proporciones faciales humanas en IPD: nariz ~0.6 bajo los ojos y ~0.5
+  // al frente; boca ~1.15 bajo los ojos y ~0.4 al frente.
+  return {
+    nose: [eyes[0], eyes[1] - 0.6 * ipd, eyes[2] + 0.5 * ipd],
+    mouth: [eyes[0], eyes[1] - 1.15 * ipd, eyes[2] + 0.4 * ipd],
+  };
+}

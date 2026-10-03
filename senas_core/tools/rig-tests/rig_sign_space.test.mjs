@@ -20,6 +20,7 @@ import {
 } from '../../assets/avatar_viewer/rig_body_profile.mjs';
 import {
   createAvatarRigProfile,
+  faceAnchorsFromEyes,
   retargetArm,
 } from '../../assets/avatar_viewer/rig_retarget.mjs';
 
@@ -229,4 +230,18 @@ test('SignSpace filter resets masked groups and holds contacts briefly', () => {
   const back = f.filter(frame, 132);
   back.values.slice(0, 6).forEach((v, i) =>
     assert.ok(Math.abs(v - frame.values[i]) < 1e-12, 'reinicia sin arrastre'));
+});
+
+test('face anchors come from the avatar eyes, scaled by eye distance', () => {
+  // Avatar mirando a +Z, su derecha en -X (como en el visor).
+  const a = faceAnchorsFromEyes({
+    shoulderMid: [0, 1.4, 0], eyeL: [0.03, 1.62, 0.08], eyeR: [-0.03, 1.62, 0.08],
+    right: [-1, 0, 0], up: [0, 1, 0], front: [0, 0, 1]});
+  const close = (x, y) => assert.ok(Math.abs(x - y) < 1e-9, `${x} vs ${y}`);
+  close(a.nose[0], 0); close(a.nose[1], 0.22 - 0.036); close(a.nose[2], 0.08 + 0.03);
+  close(a.mouth[1], 0.22 - 0.069);
+  assert.ok(a.mouth[1] < a.nose[1]);
+  assert.equal(faceAnchorsFromEyes({shoulderMid: [0, 0, 0], eyeL: [0, 0, 0],
+    eyeR: [0, 0, 0], right: [1, 0, 0], up: [0, 1, 0], front: [0, 0, 1]}), null);
+  assert.equal(faceAnchorsFromEyes({}), null);
 });
