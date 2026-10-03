@@ -128,10 +128,13 @@ void main() {
       'leftWorld': List<double>.filled(21 * 3, 0.01),
       'face': List<double>.filled(kFaceKeypoints.length * 3, 0.5),
       'capture_mode': 'holistic',
+      'image_w': 480,
+      'image_h': 640,
       'pose_t': 10,
       'hands_t': 10,
     });
     expect(frame.captureMode, 'holistic');
+    expect(frame.imageAspect, closeTo(480 / 640, 1e-9));
     expect(frame.face, hasLength(kFaceKeypoints.length));
     expect(frame.leftWorld, hasLength(21));
     expect(frame.rightWorld, isNull);

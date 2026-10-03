@@ -217,6 +217,7 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
           if (f.signSpace() case final ss?) 'sign_space': ss.toJson(),
           // Cara (Holistic): el visor calcula cabeza y expresiones.
           if (f.face != null) 'face_pts': f.face,
+          if (f.imageAspect != null) 'image_aspect': f.imageAspect,
           'association': f.association,
           'tracks': {
             'left': f.association['left_state'],

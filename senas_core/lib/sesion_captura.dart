@@ -154,6 +154,7 @@ Map<String, dynamic> frameDeSesion(LandmarkFrame f, {int? id}) {
     't': f.timestampMs,
     if (id != null) 'id': id,
     'mode': f.captureMode,
+    if (f.imageAspect != null) 'aspect': f.imageAspect,
     'pose': compactarPuntos(f.pose),
     'world': compactarPuntos(f.poseMundo),
     'hands': {

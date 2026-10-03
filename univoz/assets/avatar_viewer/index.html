@@ -5173,12 +5173,14 @@
     // Cara rastreada (captura Holistic). Mientras haya cara reciente, las
     // expresiones y la cabeza vienen del usuario; si no, parpadeo generico.
     let caraAplicadaAt = 0;
+    let aspectoImagenVivo = null;
     const caraSuave = {expressions: {}, head: null};
     function aplicarCara(cara, espejo, meta = {}) {
       if (!vrm || !cara) return false;
+      // Web: proporcion del <video>; Android: la que manda Kotlin.
       const video = document.getElementById('camaraVideo');
       const aspect = video?.videoWidth > 0 && video?.videoHeight > 0
-        ? video.videoWidth / video.videoHeight : 4 / 3;
+        ? video.videoWidth / video.videoHeight : (aspectoImagenVivo ?? 4 / 3);
       let expresiones = Object.keys(cara.blendshapes ?? {}).length
         ? blendshapesToVrmExpressions(cara.blendshapes)
         : expressionsFromFaceLandmarks(cara.landmarks, {aspect});
@@ -7431,6 +7433,8 @@
       signSpaceVivo = filtrarSignSpace(
         parseSignSpaceFrame(sourceMeta?.sign_space), frameVivoTimestampMs);
       // Android (Holistic nativo) manda 17 puntos clave de cara.
+      const aspecto = Number(sourceMeta?.image_aspect);
+      aspectoImagenVivo = aspecto > 0 && Number.isFinite(aspecto) ? aspecto : null;
       const caraPuntos = faceFromKeypoints(sourceMeta?.face_pts);
       caraVivo = caraPuntos ? {landmarks: caraPuntos, blendshapes: {}} : null;
       frameVivoQuality = Number(quality) || 0;

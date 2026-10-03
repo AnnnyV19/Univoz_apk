@@ -117,4 +117,10 @@ void main() {
     // nunca video ni imagenes en la sesion
     expect(html, isNot(contains('toDataURL')));
   });
+
+  test('cabeza usa la proporcion real de la imagen en Android', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains('Number(sourceMeta?.image_aspect)'));
+    expect(html, contains('(aspectoImagenVivo ?? 4 / 3)'));
+  });
 }

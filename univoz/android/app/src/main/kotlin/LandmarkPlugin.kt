@@ -214,6 +214,8 @@ class LandmarkPlugin(
                 // manos salen del mismo frame (sin desfase entre fuentes).
                 if (motor.holisticOcupado()) return
                 val bitmap = rotar(proxy.toBitmap(), proxy.imageInfo.rotationDegrees)
+                imagenAncho = bitmap.width
+                imagenAlto = bitmap.height
                 var t = proxy.imageInfo.timestamp / 1_000_000
                 if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
                 ultimoTimestamp = t
@@ -231,6 +233,8 @@ class LandmarkPlugin(
 
             val rotacion = proxy.imageInfo.rotationDegrees
             val bitmap = rotar(proxy.toBitmap(), rotacion)
+            imagenAncho = bitmap.width
+            imagenAlto = bitmap.height
             var t = proxy.imageInfo.timestamp / 1_000_000
             if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
             ultimoTimestamp = t
@@ -246,6 +250,9 @@ class LandmarkPlugin(
             proxy.close()
         }
     }
+    @Volatile private var imagenAncho = 0
+    @Volatile private var imagenAlto = 0
+
     private fun rotar(bitmap: Bitmap, grados: Int): Bitmap {
         if (grados == 0) return bitmap
         val m = if (gradosCacheados == grados) {
@@ -283,6 +290,12 @@ class LandmarkPlugin(
         payload["association"] = f.association
         payload["errors"] = f.errors
         payload["capture_mode"] = f.captureMode
+        // Tamano del bitmap ya rotado: los landmarks vienen normalizados por
+        // ancho y alto, y el visor necesita la proporcion para la cabeza.
+        if (imagenAncho > 0 && imagenAlto > 0) {
+            payload["image_w"] = imagenAncho
+            payload["image_h"] = imagenAlto
+        }
         // Solo Holistic: puntos clave de cara (orden FACE_KEYPOINTS) y manos
         // en metros.
         payload["face"] = f.face

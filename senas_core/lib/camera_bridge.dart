@@ -108,6 +108,9 @@ class LandmarkFrame {
   /// `holistic` o `separado` (respaldo).
   final String captureMode;
 
+  /// Ancho / alto de la imagen analizada (ya rotada), o null.
+  final double? imageAspect;
+
   const LandmarkFrame({
     required this.timestampMs,
     this.pose,
@@ -125,6 +128,7 @@ class LandmarkFrame {
     this.leftWorld,
     this.rightWorld,
     this.captureMode = 'separado',
+    this.imageAspect,
   });
 
   /// Decodifica desde el mapa que llega por el canal del lado nativo.
@@ -182,7 +186,13 @@ class LandmarkFrame {
       leftWorld: mundoIzq,
       rightWorld: mundoDer,
       captureMode: map['capture_mode'] as String? ?? 'separado',
+      imageAspect: _aspecto(map['image_w'], map['image_h']),
     );
+  }
+
+  static double? _aspecto(Object? w, Object? h) {
+    if (w is! num || h is! num || w <= 0 || h <= 0) return null;
+    return w / h;
   }
 
   static List<List<double>>? _desempacar(Object? raw, int ancho) {
@@ -272,6 +282,7 @@ class LandmarkFrame {
         if (errors.isNotEmpty) 'errors': errors,
         if (visibilidadMin != null) 'visibilidad_min': visibilidadMin,
         'capture_mode': captureMode,
+        if (imageAspect != null) 'image_aspect': imageAspect,
         if (face != null) 'face': face,
         if (leftWorld != null) 'leftWorld': leftWorld,
         if (rightWorld != null) 'rightWorld': rightWorld,
