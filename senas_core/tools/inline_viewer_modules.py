@@ -36,6 +36,17 @@ INDENT = "      "
 FIN_MODULOS = "    // ---- fin modulos inline ----"
 
 
+def leer(ruta):
+    # UTF-8 y LF en cualquier sistema: en Windows open() usaria cp1252 y CRLF.
+    with open(ruta, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def escribir(ruta, texto):
+    with open(ruta, "w", encoding="utf-8", newline="") as fh:
+        fh.write(texto)
+
+
 def inicio(mod):
     return "    // ---- inicio %s.mjs (antes importado por separado) ----" % mod
 
@@ -50,7 +61,7 @@ def exports_de(src):
 
 
 def bloque(mod, nombres):
-    src = open(os.path.join(VIEWER, mod + ".mjs")).read().rstrip("\n")
+    src = leer(os.path.join(VIEWER, mod + ".mjs")).rstrip("\n")
     lineas = [inicio(mod),
               "    const {%s} = (() => {" % ", ".join(nombres)]
     for linea in src.split("\n"):
@@ -77,10 +88,10 @@ def regenerar(html):
             m = re.match(r"\s*const \{(.*)\} = \(\(\) => \{", lineas[s + 1])
             nombres = [n.strip() for n in m.group(1).split(",")]
             if mod in EXPORT_ALL:
-                nombres = exports_de(open(os.path.join(VIEWER, mod + ".mjs")).read())
+                nombres = exports_de(leer(os.path.join(VIEWER, mod + ".mjs")))
             lineas[s:e + 1] = bloque(mod, nombres)
         except ValueError:
-            src = open(os.path.join(VIEWER, mod + ".mjs")).read()
+            src = leer(os.path.join(VIEWER, mod + ".mjs"))
             nombres = exports_de(src)
             if FIN_MODULOS not in lineas:
                 ultimo = max(i for i, l in enumerate(lineas)
@@ -99,7 +110,7 @@ def archivos_visor():
 
 
 def main(check):
-    actual = open(INDEX).read()
+    actual = leer(INDEX)
     nuevo = regenerar(actual)
     problemas = []
     if nuevo != actual:
@@ -108,7 +119,7 @@ def main(check):
         for f in archivos_visor():
             otro = os.path.join(UNIVOZ_VIEWER, f)
             if f == "index.html":
-                igual = os.path.exists(otro) and open(otro).read() == nuevo
+                igual = os.path.exists(otro) and leer(otro) == nuevo
             else:
                 igual = os.path.exists(otro) and \
                     open(os.path.join(VIEWER, f), "rb").read() == \
@@ -119,8 +130,7 @@ def main(check):
         for p in problemas:
             print("DERIVA:", p)
         return 1 if problemas else 0
-    with open(INDEX, "w") as fh:
-        fh.write(nuevo)
+    escribir(INDEX, nuevo)
     if os.path.isdir(UNIVOZ_VIEWER):
         for f in archivos_visor():
             shutil.copy2(os.path.join(VIEWER, f), os.path.join(UNIVOZ_VIEWER, f))

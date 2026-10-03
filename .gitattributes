@@ -1,0 +1,18 @@
+# Finales de linea estables en Linux y Windows. Los scripts de sincronia
+# (inline_viewer_modules.py, sincronizar_kotlin.py) comparan byte a byte:
+# un checkout con CRLF daria diferencias falsas.
+*.html  text eol=lf
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.dart  text eol=lf
+*.kt    text eol=lf
+*.py    text eol=lf
+*.json  text eol=lf
+*.jsonl text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.task  binary
+*.vrm   binary
