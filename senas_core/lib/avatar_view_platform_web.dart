@@ -1,7 +1,7 @@
-import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
+import 'package:web/web.dart' as web;
 
 import 'avatar_bridge.dart';
 
@@ -14,14 +14,15 @@ Widget buildAvatarViewport({
   final viewType = 'univoz-avatar-${identityHashCode(bridge)}';
   if (_registeredViews.add(viewType)) {
     ui_web.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
-      final frame = html.IFrameElement()
+      final frame = web.HTMLIFrameElement()
         ..src = Uri.base
             .resolve('assets/assets/avatar_viewer/index.html?standalone=1')
             .toString()
-        ..setAttribute('allow', 'camera; microphone')
-        ..style.border = '0'
-        ..style.width = '100%'
-        ..style.height = '100%';
+        ..setAttribute('allow', 'camera; microphone');
+      frame.style
+        ..border = '0'
+        ..width = '100%'
+        ..height = '100%';
       return frame;
     });
   }

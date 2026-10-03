@@ -28,6 +28,8 @@ dependencies:
   http: ^1.2.0
   # sha1, para generar el mismo UUID de firmante que ingest_video.py.
   crypto: ^3.0.3
+  # DOM para el visor del avatar en Flutter Web (reemplaza dart:html).
+  web: ^1.1.0
   # Texto a voz para decir la seña reconocida en voz alta (lib/voz.dart).
   # Usa el motor de TTS que ya trae el sistema operativo -- no descarga
   # voces nuevas ni necesita red.
