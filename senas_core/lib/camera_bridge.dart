@@ -241,10 +241,11 @@ class LandmarkFrame {
 
   /// SignSpaceFrame v1 para el avatar (independiente del cuerpo), o null.
   /// No reemplaza a [normalize]: el reconocimiento sigue usando 152D.
-  SignSpaceFrame? signSpace() =>
+  /// Con [profileMeasures] (BodyProfileV1.measures) reconstruye codos ocultos.
+  SignSpaceFrame? signSpace({Map<String, double?>? profileMeasures}) =>
       (!fusionAceptada || pose == null || poseMundo == null)
           ? null
-          : signSpaceFrame(pose!, poseMundo!);
+          : signSpaceFrame(pose!, poseMundo!, profileMeasures: profileMeasures);
 
   bool get fusionAceptada => (sourceSkewMs ?? 0).abs() <= 120;
   bool get requiereProyeccionRender {

@@ -50,6 +50,8 @@ export function mirrorSignSpaceFrame(frame) {
   out[c + SS.C_CHEST_R] = v[c + SS.C_CHEST_L];
   out[c + SS.C_HANDS] = v[c + SS.C_HANDS];
   const m = frame.mask;
+  const r = frame.reconstructed ?? {};
   return {...frame, values: out, mask: {armL: m.armR, armR: m.armL,
-    handL: m.handR, handR: m.handL, face: m.face}};
+    handL: m.handR, handR: m.handL, face: m.face},
+  reconstructed: {armL: r.armR === true, armR: r.armL === true}};
 }

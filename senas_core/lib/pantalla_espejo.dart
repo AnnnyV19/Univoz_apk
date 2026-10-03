@@ -214,7 +214,10 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
           if (f.poseTimestampMs != null) 'pose_t': f.poseTimestampMs,
           if (f.handsTimestampMs != null) 'hands_t': f.handsTimestampMs,
           if (f.sourceSkewMs != null) 'source_skew_ms': f.sourceSkewMs,
-          if (f.signSpace() case final ss?) 'sign_space': ss.toJson(),
+          if (f.signSpace(
+                  profileMeasures: _almacen.ajustes.perfilCorporal?.measures)
+              case final ss?)
+            'sign_space': ss.toJson(),
           // Cara (Holistic): el visor calcula cabeza y expresiones.
           if (f.face != null) 'face_pts': f.face,
           if (f.imageAspect != null) 'image_aspect': f.imageAspect,

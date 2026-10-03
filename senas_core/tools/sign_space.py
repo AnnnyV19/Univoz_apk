@@ -149,10 +149,40 @@ def _pos(base, p):
             _pto(q, fre) / escala]
 
 
+def _codo_por_ik(hombro, muneca, largo_brazo, largo_antebrazo, guia):
+    """Codo con las longitudes reales del usuario: IK de dos huesos entre
+    hombro y muneca (metros). El plano del codo sale de [guia] (el codo que
+    estimo MediaPipe aunque no lo vea); si es degenerado, hacia abajo."""
+    d = _resta(muneca, hombro)
+    dist = _largo(d)
+    if dist < EPS:
+        return None
+    u = [v / dist for v in d]
+    dist = min(max(dist, abs(largo_brazo - largo_antebrazo) + 1e-4),
+               largo_brazo + largo_antebrazo - 1e-4)
+    a = (largo_brazo ** 2 - largo_antebrazo ** 2 + dist ** 2) / (2 * dist)
+    h = math.sqrt(max(0.0, largo_brazo ** 2 - a * a))
+    perp = None
+    for polo in (_resta(guia, hombro), [0.0, 1.0, 0.0]):  # Y world = abajo
+        pr = _pto(polo, u)
+        perp = _unitario([polo[i] - u[i] * pr for i in range(3)])
+        if perp is not None:
+            break
+    if perp is None:
+        return None
+    return [hombro[i] + u[i] * a + perp[i] * h for i in range(3)]
+
+
 def sign_space_frame(pose, pose_mundo, min_visibility=MIN_VISIBILITY,
-                     hip_visibility=HIP_VISIBILITY):
-    """Devuelve {"version", "mode", "scale", "values", "mask"} o None si los
-    hombros no son visibles o el esqueleto es degenerado."""
+                     hip_visibility=HIP_VISIBILITY, profile=None):
+    """Devuelve {"version", "mode", "scale", "values", "mask",
+    "reconstructed"} o None si los hombros no son visibles o el esqueleto es
+    degenerado.
+
+    Con [profile] (BodyProfileV1), un codo no visible con hombro y muneca
+    visibles se reconstruye con las longitudes medidas del usuario y el brazo
+    queda en la mascara con reconstructed[armX] = True (no se oculta como
+    ausente ni se inventa como visto)."""
     if pose is None or len(pose) < 33:
         return None
     if pose_mundo is None or len(pose_mundo) < 33:
@@ -172,6 +202,8 @@ def sign_space_frame(pose, pose_mundo, min_visibility=MIN_VISIBILITY,
     out = [0.0] * SIGN_SPACE_DIM
     mask = {"armL": False, "armR": False, "handL": False, "handR": False,
             "face": False}
+    reconstruido = {"armL": False, "armR": False}
+    medidas = (profile or {}).get("measures") or {}
     palmas = {}
 
     for lado, hombro, codo, muneca, menique, indice, off_u, off_f, off_p, \
@@ -188,6 +220,19 @@ def sign_space_frame(pose, pose_mundo, min_visibility=MIN_VISIBILITY,
                 out[off_u:off_u + 3] = du
                 out[off_f:off_f + 3] = df
                 mask["arm" + lado] = True
+        elif (_visible(pose, muneca, min_visibility) and
+              medidas.get("upper" + lado) and medidas.get("fore" + lado)):
+            codo_ik = _codo_por_ik(w[hombro], w[muneca],
+                                   medidas["upper" + lado],
+                                   medidas["fore" + lado], w[codo])
+            if codo_ik is not None:
+                du = _dir(base, w[hombro], codo_ik)
+                df = _dir(base, codo_ik, w[muneca])
+                if du is not None and df is not None:
+                    out[off_u:off_u + 3] = du
+                    out[off_f:off_f + 3] = df
+                    mask["arm" + lado] = True
+                    reconstruido["arm" + lado] = True
         if _visible(pose, muneca, min_visibility):
             nudillos = _medio(w[menique], w[indice])
             dh = _dir(base, w[muneca], nudillos)
@@ -226,4 +271,5 @@ def sign_space_frame(pose, pose_mundo, min_visibility=MIN_VISIBILITY,
         "scale": base[4],
         "values": out,
         "mask": mask,
+        "reconstructed": reconstruido,
     }

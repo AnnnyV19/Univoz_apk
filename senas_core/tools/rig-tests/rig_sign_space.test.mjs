@@ -35,13 +35,14 @@ test('golden version and dimension match Python', () => {
 
 for (const c of golden.cases) {
   test(`SignSpaceFrame golden: ${c.name}`, () => {
-    const got = signSpaceFrame(c.pose, c.pose_mundo);
+    const got = signSpaceFrame(c.pose, c.pose_mundo, {profile: c.profile ?? null});
     if (c.expected === null) {
       assert.equal(got, null);
       return;
     }
     assert.equal(got.mode, c.expected.mode);
     assert.deepEqual(got.mask, c.expected.mask);
+    assert.deepEqual(got.reconstructed, c.expected.reconstructed);
     got.values.forEach((value, i) =>
       assert.ok(Math.abs(value - c.expected.values[i]) <= tol, `dim ${i}`));
   });

@@ -24,12 +24,15 @@ def ruido(rng, pose, mundo, amp=0.01):
     return pose, mundo
 
 
-def frame_case(rng, name, pose_mundo, mutar=None):
+def frame_case(rng, name, pose_mundo, mutar=None, profile=None):
     pose, mundo = ruido(rng, *pose_mundo)
     if mutar:
         mutar(pose, mundo)
-    return {"name": name, "pose": pose, "pose_mundo": mundo,
-            "expected": ss.sign_space_frame(pose, mundo)}
+    case = {"name": name, "pose": pose, "pose_mundo": mundo,
+            "expected": ss.sign_space_frame(pose, mundo, profile=profile)}
+    if profile is not None:
+        case["profile"] = profile
+    return case
 
 
 def build():
@@ -58,6 +61,20 @@ def build():
     cases.append(frame_case(rng, "codo_oculto", esqueleto(), codo_oculto))
     cases.append(frame_case(rng, "sin_cara", esqueleto(), sin_cara))
     cases.append(frame_case(rng, "sin_hombro", esqueleto(), sin_hombro))
+
+    def codo_der_oculto(pose, _):
+        pose[ss.R_ELBOW][3] = 0.1
+
+    perfil = {"version": "1.0.0", "measures": {
+        "upperL": 0.30, "foreL": 0.26, "upperR": 0.30, "foreR": 0.26}}
+    perfil_largo = {"version": "1.0.0", "measures": {
+        "upperL": 0.34, "foreL": 0.30, "upperR": 0.34, "foreR": 0.30}}
+    cases.append(frame_case(rng, "codo_oculto_con_perfil",
+                            esqueleto(palma=(0.10, 0.05, 0.20)),
+                            codo_der_oculto, perfil))
+    cases.append(frame_case(rng, "codo_oculto_perfil_largo",
+                            esqueleto(palma=(0.10, 0.05, 0.20)),
+                            codo_der_oculto, perfil_largo))
 
     def captura(n, **kw):
         frames = []

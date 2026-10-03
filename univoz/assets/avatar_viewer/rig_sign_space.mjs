@@ -82,12 +82,37 @@ function posIn(base, p) {
     dot(q, base.front) / base.scale];
 }
 
+// Codo con las longitudes reales del usuario (IK de dos huesos, metros);
+// plano del codo desde la estimacion de MediaPipe. Espejo de
+// _codo_por_ik en sign_space.py.
+function elbowByIk(shoulder, wrist, upper, fore, guide) {
+  const d = sub(wrist, shoulder);
+  let dist = len(d);
+  if (dist < EPS) return null;
+  const u = d.map((v) => v / dist);
+  dist = Math.min(Math.max(dist, Math.abs(upper - fore) + 1e-4), upper + fore - 1e-4);
+  const a = (upper * upper - fore * fore + dist * dist) / (2 * dist);
+  const h = Math.sqrt(Math.max(0, upper * upper - a * a));
+  let perp = null;
+  for (const pole of [sub(guide, shoulder), [0, 1, 0]]) { // Y world = abajo
+    const pr = dot(pole, u);
+    perp = unit([0, 1, 2].map((i) => pole[i] - u[i] * pr));
+    if (perp) break;
+  }
+  if (!perp) return null;
+  return [0, 1, 2].map((i) => shoulder[i] + u[i] * a + perp[i] * h);
+}
+
 /**
- * @returns {{version, mode, scale, values: number[], mask: object}|null}
+ * @param profile BodyProfileV1 opcional: con el, un codo no visible con
+ *   hombro y muneca visibles se reconstruye (reconstructed[armX] = true).
+ * @returns {{version, mode, scale, values: number[], mask: object,
+ *   reconstructed: object}|null}
  */
 export function signSpaceFrame(pose, poseWorld, {
   minVisibility = MIN_VISIBILITY,
   hipVisibility = HIP_VISIBILITY,
+  profile = null,
 } = {}) {
   if (!Array.isArray(pose) || pose.length < 33) return null;
   if (!Array.isArray(poseWorld) || poseWorld.length < 33) return null;
@@ -102,6 +127,8 @@ export function signSpaceFrame(pose, poseWorld, {
   const out = new Array(SIGN_SPACE_DIM).fill(0);
   const mask = {armL: false, armR: false, handL: false, handR: false,
     face: false};
+  const reconstructed = {armL: false, armR: false};
+  const measures = profile?.measures ?? {};
   const palms = {};
   const put = (off, v) => { out[off] = v[0]; out[off + 1] = v[1]; out[off + 2] = v[2]; };
 
@@ -118,6 +145,18 @@ export function signSpaceFrame(pose, poseWorld, {
         put(offU, du);
         put(offF, df);
         mask[`arm${side}`] = true;
+      }
+    } else if (visible(pose, wrist, minVisibility) &&
+        measures[`upper${side}`] && measures[`fore${side}`]) {
+      const ik = elbowByIk(w[shoulder], w[wrist], measures[`upper${side}`],
+        measures[`fore${side}`], w[elbow]);
+      const du = ik && dirIn(base, w[shoulder], ik);
+      const df = ik && dirIn(base, ik, w[wrist]);
+      if (du && df) {
+        put(offU, du);
+        put(offF, df);
+        mask[`arm${side}`] = true;
+        reconstructed[`arm${side}`] = true;
       }
     }
     if (visible(pose, wrist, minVisibility)) {
@@ -153,7 +192,7 @@ export function signSpaceFrame(pose, poseWorld, {
   }
 
   return {version: SIGN_SPACE_VERSION, mode: base.mode, scale: base.scale,
-    values: out, mask};
+    values: out, mask, reconstructed};
 }
 
 const MASK_KEYS = ['armL', 'armR', 'handL', 'handR', 'face'];
@@ -178,6 +217,9 @@ export function parseSignSpaceFrame(raw) {
     scale: Number(raw.scale),
     values: values.map(Number),
     mask: Object.fromEntries(MASK_KEYS.map((k) => [k, raw.mask[k]])),
+    // Opcional (frames viejos no lo traen): brazo con codo reconstruido.
+    reconstructed: {armL: raw.reconstructed?.armL === true,
+      armR: raw.reconstructed?.armR === true},
   };
 }
 

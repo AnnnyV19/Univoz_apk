@@ -66,12 +66,16 @@ class SignSpaceFrame {
   final List<double> values;
   final Map<String, bool> mask;
 
+  /// Brazos cuyo codo no se veia y se reconstruyo con el perfil corporal.
+  final Map<String, bool> reconstructed;
+
   const SignSpaceFrame({
     required this.version,
     required this.mode,
     required this.scale,
     required this.values,
     required this.mask,
+    this.reconstructed = const {'armL': false, 'armR': false},
   });
 
   Map<String, dynamic> toJson() => {
@@ -80,6 +84,7 @@ class SignSpaceFrame {
         'scale': scale,
         'values': values,
         'mask': mask,
+        'reconstructed': reconstructed,
       };
 }
 
@@ -163,14 +168,46 @@ _Base? _base(List<List<double>> pose, List<List<double>> w, double hipVis) {
   return _Base(der, arr, fre, origen, escala, modo);
 }
 
+/// Codo con las longitudes reales del usuario (IK de dos huesos, metros);
+/// plano del codo desde la estimacion de MediaPipe. Espejo de _codo_por_ik.
+_V? _codoPorIk(_V hombro, _V muneca, double brazo, double antebrazo, _V guia) {
+  final d = _resta(muneca, hombro);
+  var dist = _largo(d);
+  if (dist < _kEps) return null;
+  final u = [d[0] / dist, d[1] / dist, d[2] / dist];
+  dist = math.min(math.max(dist, (brazo - antebrazo).abs() + 1e-4),
+      brazo + antebrazo - 1e-4);
+  final a = (brazo * brazo - antebrazo * antebrazo + dist * dist) / (2 * dist);
+  final h = math.sqrt(math.max(0.0, brazo * brazo - a * a));
+  _V? perp;
+  for (final polo in [
+    _resta(guia, hombro),
+    const [0.0, 1.0, 0.0]
+  ]) {
+    final pr = _pto(polo, u);
+    perp = _unitario([
+      polo[0] - u[0] * pr,
+      polo[1] - u[1] * pr,
+      polo[2] - u[2] * pr,
+    ]);
+    if (perp != null) break;
+  }
+  if (perp == null) return null;
+  return [
+    for (var i = 0; i < 3; i++) hombro[i] + u[i] * a + perp[i] * h,
+  ];
+}
+
 /// Calcula el frame. Null si los hombros no son visibles o el esqueleto es
-/// degenerado. [pose]: 33 landmarks de imagen con visibility; [poseMundo]:
+/// degenerado. Con [profile] (medidas de BodyProfileV1) un codo no visible
+/// se reconstruye y queda marcado en `reconstructed`. [pose]: 33 landmarks de imagen con visibility; [poseMundo]:
 /// 33 worldLandmarks metricos.
 SignSpaceFrame? signSpaceFrame(
   List<List<double>>? pose,
   List<List<double>>? poseMundo, {
   double minVisibility = kSsMinVisibility,
   double hipVisibility = kSsHipVisibility,
+  Map<String, double?>? profileMeasures,
 }) {
   if (pose == null || pose.length < 33) return null;
   if (poseMundo == null || poseMundo.length < 33) return null;
@@ -188,6 +225,8 @@ SignSpaceFrame? signSpaceFrame(
   final w = poseMundo;
   final out = List<double>.filled(kSignSpaceDim, 0.0);
   final mask = {for (final k in kSsMaskKeys) k: false};
+  final reconstruido = {'armL': false, 'armR': false};
+  final medidas = profileMeasures ?? const <String, double?>{};
   final palmas = <String, _V>{};
 
   void escribir(int off, _V v) {
@@ -238,6 +277,21 @@ SignSpaceFrame? signSpaceFrame(
         escribir(offF, df);
         mask['arm$nombre'] = true;
       }
+    } else if (_visible(pose, muneca, minVisibility) &&
+        (medidas['upper$nombre'] ?? 0) > 0 &&
+        (medidas['fore$nombre'] ?? 0) > 0) {
+      final ik = _codoPorIk(w[hombro], w[muneca], medidas['upper$nombre']!,
+          medidas['fore$nombre']!, w[codo]);
+      if (ik != null) {
+        final du = base.dir(w[hombro], ik);
+        final df = base.dir(ik, w[muneca]);
+        if (du.isNotEmpty && df.isNotEmpty) {
+          escribir(offU, du);
+          escribir(offF, df);
+          mask['arm$nombre'] = true;
+          reconstruido['arm$nombre'] = true;
+        }
+      }
     }
     if (_visible(pose, muneca, minVisibility)) {
       final nudillos = _medio([w[menique], w[indice]]);
@@ -286,5 +340,6 @@ SignSpaceFrame? signSpaceFrame(
     scale: base.escala,
     values: out,
     mask: mask,
+    reconstructed: reconstruido,
   );
 }

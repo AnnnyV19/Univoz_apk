@@ -34,7 +34,7 @@ void main() {
     expect(html, contains('// ---- inicio rig_sign_space.mjs'));
     expect(html, contains('// ---- inicio rig_retarget.mjs'));
     // Web calcula SignSpace; Android lo recibe validado por el puente.
-    expect(html, contains('signSpaceFrame(pose, poseMundo), timestampMs)'));
+    expect(html, contains('signSpaceFrame(pose, poseMundo, {profile: perfilCorporal})'));
     expect(html,
         contains('parseSignSpaceFrame(sourceMeta?.sign_space), frameVivoTimestampMs)'));
     expect(html, contains('filtroSignSpace.reset()'));

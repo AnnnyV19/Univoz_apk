@@ -29,7 +29,10 @@ void main() {
 
   for (final c in (data['cases'] as List).cast<Map<String, dynamic>>()) {
     test('SignSpaceFrame golden: ${c['name']}', () {
-      final got = signSpaceFrame(_pts(c['pose']), _pts(c['pose_mundo']));
+      final perfil = (c['profile'] as Map?)?['measures'] as Map?;
+      final got = signSpaceFrame(_pts(c['pose']), _pts(c['pose_mundo']),
+          profileMeasures: perfil
+              ?.map((k, v) => MapEntry(k as String, (v as num?)?.toDouble())));
       final exp = c['expected'] as Map<String, dynamic>?;
       if (exp == null) {
         expect(got, isNull);
@@ -38,6 +41,8 @@ void main() {
       expect(got, isNotNull);
       expect(got!.mode, exp['mode']);
       expect(got.mask, Map<String, bool>.from(exp['mask'] as Map));
+      expect(got.reconstructed,
+          Map<String, bool>.from(exp['reconstructed'] as Map));
       final ev = (exp['values'] as List).cast<num>();
       expect(got.values.length, ev.length);
       for (var i = 0; i < ev.length; i++) {

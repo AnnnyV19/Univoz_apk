@@ -45,3 +45,10 @@ test('mirrorSignSpaceFrame swaps sides, negates x and keeps contacts', () => {
   assert.equal(h.mask.armL, true);
   assert.equal(mirrorSignSpaceFrame(null), null);
 });
+
+test('mirrorSignSpaceFrame swaps reconstructed arms too', () => {
+  const c = space.cases.find((x) => x.name === 'codo_oculto_con_perfil');
+  const f = signSpaceFrame(c.pose, c.pose_mundo, {profile: c.profile});
+  assert.deepEqual(f.reconstructed, {armL: false, armR: true});
+  assert.deepEqual(mirrorSignSpaceFrame(f).reconstructed, {armL: true, armR: false});
+});

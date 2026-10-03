@@ -171,15 +171,57 @@ def test_golden():
             else:
                 assert abs(got["measures"][k] - v) <= data["tolerance"], k
     for case in data["cases"]:
-        got = ss.sign_space_frame(case["pose"], case["pose_mundo"])
+        got = ss.sign_space_frame(case["pose"], case["pose_mundo"],
+                                  profile=case.get("profile"))
         exp = case["expected"]
         if exp is None:
             assert got is None, case["name"]
             continue
         assert got["mode"] == exp["mode"], case["name"]
         assert got["mask"] == exp["mask"], case["name"]
+        assert got["reconstructed"] == exp["reconstructed"], case["name"]
         assert cerca(got["values"], exp["values"], data["tolerance"]), \
             case["name"]
+
+
+def _perfil(brazo=0.30, antebrazo=0.26):
+    m = {"upperL": brazo, "foreL": antebrazo, "upperR": brazo,
+         "foreR": antebrazo}
+    return {"version": "1.0.0", "measures": m}
+
+
+def test_codo_oculto_se_reconstruye_con_el_perfil():
+    pose, mundo = esqueleto(palma=(0.10, 0.05, 0.20))
+    visto = ss.sign_space_frame(pose, mundo)
+    pose[ss.R_ELBOW][3] = 0.1
+    sin = ss.sign_space_frame(pose, mundo)
+    assert sin["mask"]["armR"] is False
+    con = ss.sign_space_frame(pose, mundo, profile=_perfil())
+    assert con["mask"]["armR"] is True
+    assert con["reconstructed"] == {"armL": False, "armR": True}
+    # longitudes reales + plano del codo estimado => misma direccion
+    for off in (ss.OFF_UPPER_R, ss.OFF_FORE_R):
+        assert cerca(con["values"][off:off + 3], visto["values"][off:off + 3], 1e-6)
+
+
+def test_sin_muneca_no_se_reconstruye():
+    pose, mundo = esqueleto()
+    pose[ss.R_ELBOW][3] = 0.1
+    pose[ss.R_WRIST][3] = 0.1
+    f = ss.sign_space_frame(pose, mundo, profile=_perfil())
+    assert f["mask"]["armR"] is False
+    assert f["reconstructed"]["armR"] is False
+
+
+def test_reconstruccion_respeta_largos_del_usuario():
+    # perfil con brazos distintos al esqueleto: el codo cae a la distancia
+    # del perfil, la direccion cambia pero sigue unitaria y finita
+    pose, mundo = esqueleto(palma=(0.10, 0.05, 0.20))
+    pose[ss.R_ELBOW][3] = 0.1
+    f = ss.sign_space_frame(pose, mundo, profile=_perfil(0.34, 0.30))
+    for off in (ss.OFF_UPPER_R, ss.OFF_FORE_R):
+        v = f["values"][off:off + 3]
+        assert abs(math.sqrt(sum(x * x for x in v)) - 1) < 1e-9
 
 
 if __name__ == "__main__":
