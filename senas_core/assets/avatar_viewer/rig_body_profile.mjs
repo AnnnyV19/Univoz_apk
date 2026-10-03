@@ -128,14 +128,18 @@ export const BODY_CAPTURE_PHASES = Object.freeze([
  */
 export function createBodyProfileCapture({
   framesPerPhase = 45,
+  maxFrames = 900,          // ~30 s a 30 FPS: luego termina con lo que haya
   declared = {},
   minVisibility = MIN_VISIBILITY,
 } = {}) {
   let state = 'idle';
   let phase = 0;
   let count = 0;
+  let seen = 0;
   let frames = [];
   let profile = null;
+  let hint = null;
+  let complete = false;
 
   const status = () => ({
     state,
@@ -143,8 +147,20 @@ export function createBodyProfileCapture({
     instruction: BODY_CAPTURE_PHASES[phase]?.instruction ?? null,
     progress: state === 'done' ? 1 :
       (phase * framesPerPhase + count) / (BODY_CAPTURE_PHASES.length * framesPerPhase),
+    // 'arms_not_visible': hay hombros pero ningun brazo completo en cuadro.
+    hint,
+    complete,
     profile,
   });
+
+  const finish = () => {
+    profile = estimateBodyProfile(frames, {declared,
+      minSamples: Math.min(MIN_SAMPLES, framesPerPhase), minVisibility});
+    frames = []; // no se conservan landmarks
+    state = 'done';
+    phase = Math.min(phase, BODY_CAPTURE_PHASES.length - 1);
+    hint = null;
+  };
 
   return {
     start({consent = false} = {}) {
@@ -152,8 +168,11 @@ export function createBodyProfileCapture({
       state = 'capturing';
       phase = 0;
       count = 0;
+      seen = 0;
       frames = [];
       profile = null;
+      hint = null;
+      complete = false;
       return status();
     },
     push(pose, world) {
@@ -161,19 +180,28 @@ export function createBodyProfileCapture({
       if (!Array.isArray(pose) || pose.length < 33 ||
           visibility(pose[I.L_SHOULDER]) < minVisibility ||
           visibility(pose[I.R_SHOULDER]) < minVisibility) return status();
+      seen += 1;
       frames.push([pose, world]);
-      count += 1;
-      if (count >= framesPerPhase) {
-        phase += 1;
-        count = 0;
-        if (phase >= BODY_CAPTURE_PHASES.length) {
-          profile = estimateBodyProfile(frames, {declared,
-            minSamples: Math.min(MIN_SAMPLES, framesPerPhase), minVisibility});
-          frames = []; // no se conservan landmarks
-          state = 'done';
-          phase = BODY_CAPTURE_PHASES.length - 1;
+      // Solo avanzan los frames con al menos un brazo completo visible: sin
+      // brazos no hay nada que medir de ellos (sesion 20261003T162413Z).
+      const arm = (e, w) => visibility(pose[e]) >= minVisibility &&
+        visibility(pose[w]) >= minVisibility;
+      if (arm(I.L_ELBOW, I.L_WRIST) || arm(I.R_ELBOW, I.R_WRIST)) {
+        hint = null;
+        count += 1;
+        if (count >= framesPerPhase) {
+          phase += 1;
+          count = 0;
+          if (phase >= BODY_CAPTURE_PHASES.length) {
+            complete = true;
+            finish();
+            return status();
+          }
         }
+      } else {
+        hint = 'arms_not_visible';
       }
+      if (seen >= maxFrames) finish();
       return status();
     },
     cancel() {
@@ -183,4 +211,28 @@ export function createBodyProfileCapture({
     },
     status,
   };
+}
+
+/**
+ * Combina un perfil nuevo con el anterior sin perder datos buenos: una medida
+ * que la captura nueva no pudo tomar (null) conserva la anterior; una
+ * capacidad 'ok' no baja a 'partial'/'not_observed' por una captura peor; lo
+ * declarado por el usuario se mantiene.
+ */
+export function mergeBodyProfile(previous, next) {
+  if (!previous?.measures) return next;
+  if (!next?.measures) return previous;
+  const keep = (a, b) => Object.fromEntries(
+    [...new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])]
+      .map((k) => [k, b?.[k] ?? a?.[k] ?? null]));
+  const weak = new Set(['partial', 'not_observed']);
+  const capability = {...next.capability};
+  for (const [k, v] of Object.entries(previous.capability ?? {})) {
+    if (v === 'ok' && weak.has(capability[k])) capability[k] = 'ok';
+  }
+  const declared = {...(previous.declared ?? {}), ...(next.declared ?? {})};
+  for (const [k, v] of Object.entries(declared)) capability[k] = v;
+  return {...next, samples: (previous.samples ?? 0) + (next.samples ?? 0),
+    measures: keep(previous.measures, next.measures),
+    rom: keep(previous.rom, next.rom), capability, declared};
 }

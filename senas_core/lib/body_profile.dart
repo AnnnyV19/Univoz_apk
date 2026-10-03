@@ -208,13 +208,20 @@ class BodyProfileCapture {
   final double minVisibility;
 
   BodyCaptureState _state = BodyCaptureState.idle;
+  String? _hint;
+  bool _complete = false;
+  int _vistos = 0;
   int _phase = 0;
   int _count = 0;
   List<(List<List<double>>, List<List<double>>)> _frames = [];
   BodyProfile? _profile;
 
+  /// Tope de frames con hombros (~30 s): luego termina con lo que haya.
+  final int maxFrames;
+
   BodyProfileCapture({
     this.framesPerPhase = 45,
+    this.maxFrames = 900,
     this.declared = const {},
     this.minVisibility = kSsMinVisibility,
   });
@@ -235,8 +242,28 @@ class BodyProfileCapture {
     _state = BodyCaptureState.capturing;
     _phase = 0;
     _count = 0;
+    _vistos = 0;
+    _hint = null;
+    _complete = false;
     _frames = [];
     _profile = null;
+  }
+
+  /// `arms_not_visible` si hay hombros pero ningun brazo completo en cuadro.
+  String? get hint => _hint;
+
+  /// True si se cubrieron las 3 fases con brazos visibles (no por tiempo).
+  bool get complete => _complete;
+
+  void _terminar() {
+    _profile = estimateBodyProfile(_frames,
+        declared: declared,
+        minSamples: math.min(kBpMinSamples, framesPerPhase),
+        minVisibility: minVisibility);
+    _frames = []; // no se conservan landmarks
+    _state = BodyCaptureState.done;
+    _phase = math.min(_phase, kBodyCapturePhases.length - 1);
+    _hint = null;
   }
 
   void push(List<List<double>>? pose, List<List<double>>? world) {
@@ -244,24 +271,58 @@ class BodyProfileCapture {
     if (pose == null || world == null || pose.length < 33) return;
     bool vis(int i) => pose[i].length >= 4 && pose[i][3] >= minVisibility;
     if (!vis(kSsLShoulder) || !vis(kSsRShoulder)) return;
+    _vistos++;
     _frames.add((pose, world));
-    _count++;
-    if (_count < framesPerPhase) return;
-    _phase++;
-    _count = 0;
-    if (_phase >= kBodyCapturePhases.length) {
-      _profile = estimateBodyProfile(_frames,
-          declared: declared,
-          minSamples: math.min(kBpMinSamples, framesPerPhase),
-          minVisibility: minVisibility);
-      _frames = []; // no se conservan landmarks
-      _state = BodyCaptureState.done;
-      _phase = kBodyCapturePhases.length - 1;
+    // Solo avanzan frames con al menos un brazo completo visible.
+    if ((vis(kSsLElbow) && vis(kSsLWrist)) ||
+        (vis(kSsRElbow) && vis(kSsRWrist))) {
+      _hint = null;
+      _count++;
+      if (_count >= framesPerPhase) {
+        _phase++;
+        _count = 0;
+        if (_phase >= kBodyCapturePhases.length) {
+          _complete = true;
+          _terminar();
+          return;
+        }
+      }
+    } else {
+      _hint = 'arms_not_visible';
     }
+    if (_vistos >= maxFrames) _terminar();
   }
 
   void cancel() {
     _state = BodyCaptureState.idle;
     _frames = [];
   }
+}
+
+/// Combina un perfil nuevo con el anterior sin perder datos buenos (espejo de
+/// mergeBodyProfile en rig_body_profile.mjs).
+BodyProfile mergeBodyProfile(BodyProfile? previo, BodyProfile nuevo) {
+  if (previo == null) return nuevo;
+  Map<String, double?> conservar(
+          Map<String, double?> a, Map<String, double?> b) =>
+      {
+        for (final k in {...a.keys, ...b.keys}) k: b[k] ?? a[k]
+      };
+  final capacidad = Map<String, String>.of(nuevo.capability);
+  previo.capability.forEach((k, v) {
+    if (v == 'ok' &&
+        (capacidad[k] == 'partial' || capacidad[k] == 'not_observed')) {
+      capacidad[k] = 'ok';
+    }
+  });
+  final declarado = {...previo.declared, ...nuevo.declared};
+  capacidad.addAll(declarado);
+  return BodyProfile(
+    version: nuevo.version,
+    samples: previo.samples + nuevo.samples,
+    measures: conservar(previo.measures, nuevo.measures),
+    rom: conservar(previo.rom, nuevo.rom),
+    capability: capacidad,
+    declared: declarado,
+  );
 }

@@ -108,4 +108,60 @@ void main() {
     expect(capture.progress, 1.0);
     expect(capture.profile!.samples, 24);
   });
+
+  test('Fast User Capture no avanza sin brazos y nunca inventa medidas', () {
+    final perfil = (data['profiles'] as List).first as Map<String, dynamic>;
+    final frames = (perfil['frames'] as List).cast<Map<String, dynamic>>();
+    List<List<double>> sinBrazos(Map<String, dynamic> f) {
+      final pose = _pts(f['pose']);
+      for (final i in [13, 14, 15, 16]) {
+        pose[i][3] = 0.05;
+      }
+      return pose;
+    }
+
+    final capture = BodyProfileCapture(framesPerPhase: 4, maxFrames: 10);
+    capture.start(consent: true);
+    for (var i = 0; i < 9; i++) {
+      capture.push(sinBrazos(frames[i]), _pts(frames[i]['pose_mundo']));
+    }
+    expect(capture.state, BodyCaptureState.capturing);
+    expect(capture.progress, 0);
+    expect(capture.hint, 'arms_not_visible');
+    capture.push(sinBrazos(frames[9]), _pts(frames[9]['pose_mundo']));
+    expect(capture.state, BodyCaptureState.done);
+    expect(capture.complete, isFalse);
+    expect(capture.profile!.measures['upperL'], isNull);
+  });
+
+  test('mergeBodyProfile conserva medidas buenas y lo declarado', () {
+    const previo = BodyProfile(
+      version: kBodyProfileVersion,
+      samples: 100,
+      measures: {'upperL': .30, 'shoulderWidth': .36},
+      rom: {'armL': .9},
+      capability: {'armL': 'ok', 'armR': 'ok', 'handL': 'ok', 'handR': 'ok'},
+      declared: {'handR': 'absent'},
+    );
+    const nuevo = BodyProfile(
+      version: kBodyProfileVersion,
+      samples: 40,
+      measures: {'upperL': null, 'shoulderWidth': .35},
+      rom: {'armL': null},
+      capability: {
+        'armL': 'not_observed',
+        'armR': 'ok',
+        'handL': 'partial',
+        'handR': 'partial'
+      },
+      declared: {},
+    );
+    final m = mergeBodyProfile(previo, nuevo);
+    expect(m.measures['upperL'], .30);
+    expect(m.measures['shoulderWidth'], .35);
+    expect(m.rom['armL'], .9);
+    expect(m.capability['armL'], 'ok');
+    expect(m.capability['handR'], 'absent');
+    expect(m.samples, 140);
+  });
 }

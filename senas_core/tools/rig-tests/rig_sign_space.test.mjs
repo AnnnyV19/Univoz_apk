@@ -15,6 +15,7 @@ import {
   BODY_CAPTURE_PHASES,
   BODY_PROFILE_VERSION,
   createBodyProfileCapture,
+  mergeBodyProfile,
   estimateBodyProfile,
   parseBodyProfile,
 } from '../../assets/avatar_viewer/rig_body_profile.mjs';
@@ -244,4 +245,54 @@ test('face anchors come from the avatar eyes, scaled by eye distance', () => {
   assert.equal(faceAnchorsFromEyes({shoulderMid: [0, 0, 0], eyeL: [0, 0, 0],
     eyeR: [0, 0, 0], right: [1, 0, 0], up: [0, 1, 0], front: [0, 0, 1]}), null);
   assert.equal(faceAnchorsFromEyes({}), null);
+});
+
+// Reproduce la sesion 20261003T162413Z: hombros visibles, brazos fuera de
+// cuadro durante toda la medicion.
+const sinBrazos = (f) => {
+  const pose = f.pose.map((p) => p.slice());
+  for (const i of [13, 14, 15, 16]) pose[i][3] = 0.05;
+  return [pose, f.pose_mundo];
+};
+
+test('capture does not advance while arms are out of frame and says why', () => {
+  const capture = createBodyProfileCapture({framesPerPhase: 4, maxFrames: 1000});
+  capture.start({consent: true});
+  let st;
+  for (let i = 0; i < 30; i++) st = capture.push(...sinBrazos(golden.profiles[0].frames[i % 24]));
+  assert.equal(st.state, 'capturing');
+  assert.equal(st.progress, 0);
+  assert.equal(st.hint, 'arms_not_visible');
+  // en cuanto aparecen los brazos avanza
+  st = capture.push(golden.profiles[0].frames[0].pose, golden.profiles[0].frames[0].pose_mundo);
+  assert.ok(st.progress > 0);
+  assert.equal(st.hint, null);
+});
+
+test('capture ends at maxFrames without inventing arm measures', () => {
+  const capture = createBodyProfileCapture({framesPerPhase: 4, maxFrames: 10});
+  capture.start({consent: true});
+  let st;
+  for (let i = 0; i < 10; i++) st = capture.push(...sinBrazos(golden.profiles[0].frames[i]));
+  assert.equal(st.state, 'done');
+  assert.equal(st.complete, false);
+  assert.equal(st.profile.measures.upperL, null);
+});
+
+test('mergeBodyProfile never overwrites good measures with missing ones', () => {
+  const previous = {version: '1.0.0', samples: 100,
+    measures: {shoulderWidth: .36, upperL: .30, foreL: .26},
+    rom: {armL: .9}, capability: {armL: 'ok', armR: 'ok', handL: 'ok', handR: 'ok'},
+    declared: {handR: 'absent'}};
+  const next = {version: '1.0.0', samples: 40,
+    measures: {shoulderWidth: .35, upperL: null, foreL: null},
+    rom: {armL: null}, capability: {armL: 'not_observed', armR: 'ok',
+      handL: 'partial', handR: 'absent'}, declared: {}};
+  const m = mergeBodyProfile(previous, next);
+  assert.equal(m.measures.shoulderWidth, .35);
+  assert.equal(m.measures.upperL, .30);
+  assert.equal(m.rom.armL, .9);
+  assert.equal(m.capability.armL, 'ok');
+  assert.deepEqual(m.declared, {handR: 'absent'});
+  assert.deepEqual(mergeBodyProfile(null, next), next);
 });

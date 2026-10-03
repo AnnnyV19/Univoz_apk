@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'body_profile.dart' show mergeBodyProfile;
 import 'controlador_captura.dart';
 import 'muestras_locales.dart';
 import 'sesion_captura.dart' show sumideroArchivo;
@@ -55,7 +56,10 @@ Future<bool> activarSesionConConsentimiento(
   }
   final docs = await getApplicationDocumentsDirectory();
   ctrl.onPerfilCorporal = (perfil) {
-    final nuevos = almacen.ajustes.copiar()..perfilCorporal = perfil;
+    // Nunca perder medidas buenas por una captura con brazos ocultos.
+    final nuevos = almacen.ajustes.copiar()
+      ..perfilCorporal =
+          mergeBodyProfile(almacen.ajustes.perfilCorporal, perfil);
     unawaited(almacen.guardarAjustes(nuevos));
   };
   ctrl.activarSesionAutomatica(
