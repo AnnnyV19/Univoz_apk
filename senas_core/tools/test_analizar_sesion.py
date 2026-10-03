@@ -82,3 +82,19 @@ def test_baseline_y_comparar():
     d = an.comparar(r, r2)
     assert d["fps"]["delta"] == 10
     assert "frames" not in d
+
+
+def test_resumen_incluye_auditoria_con_perfil():
+    from sintetico_cuerpo import esqueleto
+    regs = [{"kind": "session_start", "session_id": "au"}]
+    for i, brazo in enumerate([0.30, 0.30, 0.42]):
+        pose, mundo = esqueleto(brazo=brazo)
+        regs.append({"kind": "frame", "t": i * 33, "pose": pose, "world": mundo,
+                     "errors": [], "ms": {}})
+    regs.append({"kind": "event", "type": "body_profile", "profile": {
+        "measures": {"upperL": 0.30, "foreL": 0.26, "upperR": 0.30,
+                     "foreR": 0.26, "shoulderWidth": 0.36}}})
+    r = an.resumir(regs)
+    assert r["audit"]["frames"] == 3
+    assert r["audit"]["codes"]["bone_length_upperL"] == 1
+    assert 30 < r["audit"]["anomalous_pct"] < 40

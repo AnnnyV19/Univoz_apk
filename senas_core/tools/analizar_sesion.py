@@ -19,6 +19,9 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+import auditoria  # noqa: E402
 SESIONES = os.path.join(HERE, "..", "sesiones")
 
 
@@ -130,6 +133,19 @@ def resumir(registros):
     if perfil:
         out["body_profile"] = {"measures": perfil.get("measures"),
                                "capability": perfil.get("capability")}
+    # Audit Sentinel: perfil medido en esta sesion, o el que traia la meta.
+    perfil_audit = perfil or (cab.get("meta") or {}).get("body_profile")
+    if n and perfil_audit:
+        res = [r for r in auditoria.auditar(frames, perfil_audit) if r]
+        if res:
+            ds = [r["d"] for r in res]
+            out["audit"] = {
+                "frames": len(res),
+                "d_p50": round(pct(ds, .5), 2),
+                "d_p95": round(pct(ds, .95), 2),
+                "anomalous_pct": round(100.0 * sum(1 for d in ds if d > 2) / len(ds), 1),
+                "codes": dict(collections.Counter(c for r in res for c in r["codes"])),
+            }
     return out
 
 
@@ -162,6 +178,7 @@ def baseline(res):
         "depth": res.get("depth"),
         "head_range_deg": res.get("head_range_deg"),
         "top_errors": res.get("top_errors"),
+        "audit": res.get("audit"),
     }
 
 
