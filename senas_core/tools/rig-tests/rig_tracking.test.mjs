@@ -415,3 +415,19 @@ test('source skew boundaries select direct, projected and rejected fusion', () =
   assert.equal(classifySourceSkew(120).mode, 'project');
   assert.equal(classifySourceSkew(121).mode, 'reject');
 });
+
+test('single hand prefers the arm whose pose wrist is actually visible', () => {
+  const P = (x, y) => ({x, y, z: 0});
+  const hand = (x, y) => ({landmarks: Array.from({length: 21}, (_, i) =>
+    P(x + i * .001, y - i * .002)), side: '', confidence: .9});
+  // MediaPipe estima la muneca izquierda oculta justo sobre la mano real
+  // (derecha, visible). Sin visibilidad gana la izquierda por geometria.
+  const result = assignHandsByArmChain([hand(.50, .45)], {
+    leftShoulder: P(.6, .4), rightShoulder: P(.4, .4),
+    leftElbow: P(.62, .55), rightElbow: P(.38, .55),
+    leftWrist: P(.50, .45), rightWrist: P(.52, .47),
+    leftWristVisibility: .1, rightWristVisibility: .95,
+    shoulderWidth: .2,
+  });
+  assert.equal(result.sideByIndex[0], 'right');
+});

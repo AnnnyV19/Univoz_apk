@@ -1791,7 +1791,11 @@
         const expectedLower = distance(elbow, expectedWrist);
         const observedLower = distance(elbow, wrist);
         const chain = Math.abs(observedLower - expectedLower) / shoulderWidth;
-        return endpoint + direction * .35 + chain * .20;
+        // Una muneca que la pose no ve es una estimacion (MediaPipe la inventa,
+        // a veces encima de la otra mano): pesa menos que una visible.
+        const visibility = Number(pose?.[`${side}WristVisibility`]);
+        const unseen = Number.isFinite(visibility) ? (1 - clamp(visibility)) * .6 : 0;
+        return endpoint + direction * .35 + chain * .20 + unseen;
       }
 
       /** Assigns complete hand detections to physical sides using pose arm chains. */
@@ -6009,6 +6013,8 @@
         rightElbow: webCoord(pose?.[14]),
         leftWrist: webCoord(pose?.[15]),
         rightWrist: webCoord(pose?.[16]),
+        leftWristVisibility: Number(pose?.[15]?.visibility ?? 1),
+        rightWristVisibility: Number(pose?.[16]?.visibility ?? 1),
         shoulderWidth: anchoHombros,
       });
       webCameraState.handAssignmentMode = asignacion.mode === 'pose_arm_chain' ||

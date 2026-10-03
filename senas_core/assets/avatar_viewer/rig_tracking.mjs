@@ -239,7 +239,11 @@ function armChainCost(candidate, side, pose, shoulderWidth) {
   const expectedLower = distance(elbow, expectedWrist);
   const observedLower = distance(elbow, wrist);
   const chain = Math.abs(observedLower - expectedLower) / shoulderWidth;
-  return endpoint + direction * .35 + chain * .20;
+  // Una muneca que la pose no ve es una estimacion (MediaPipe la inventa,
+  // a veces encima de la otra mano): pesa menos que una visible.
+  const visibility = Number(pose?.[`${side}WristVisibility`]);
+  const unseen = Number.isFinite(visibility) ? (1 - clamp(visibility)) * .6 : 0;
+  return endpoint + direction * .35 + chain * .20 + unseen;
 }
 
 /** Assigns complete hand detections to physical sides using pose arm chains. */
