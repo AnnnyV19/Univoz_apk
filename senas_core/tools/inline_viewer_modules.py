@@ -26,11 +26,12 @@ UNIVOZ_VIEWER = os.path.normpath(
 INDEX = os.path.join(VIEWER, "index.html")
 
 MODULES = ["rig_math", "rig_metrics", "rig_diagnostics", "rig_safety",
-           "rig_tracking", "rig_sign_space", "rig_body_profile",
+           "rig_tracking", "rig_sign_space", "rig_mirror", "rig_body_profile",
            "rig_retarget"]
 # Modulos nuevos: exponen todos sus exports. Los historicos conservan la
 # lista de nombres de su bloque (algunos exports no se usan en la pagina).
-EXPORT_ALL = {"rig_sign_space", "rig_body_profile", "rig_retarget"}
+EXPORT_ALL = {"rig_sign_space", "rig_mirror", "rig_body_profile",
+              "rig_retarget"}
 INDENT = "      "
 FIN_MODULOS = "    // ---- fin modulos inline ----"
 

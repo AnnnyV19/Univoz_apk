@@ -181,6 +181,20 @@ class AvatarBridge {
     await webView.runJavaScript('window.configurarManos($izquierda, $derecha)');
   }
 
+  /// Vista del avatar en vivo. `espejo: true` lo mueve como tu reflejo (para
+  /// practicar o verte a ti mismo); `false` (defecto) como una persona frente
+  /// a ti, que es lo correcto al traducir para otra persona.
+  Future<void> configurarVista({required bool espejo}) async {
+    final vista = espejo ? 'espejo' : 'interlocutor';
+    if (kIsWeb) {
+      postAvatarCommand({'action': 'configurarVista', 'vista': vista});
+      return;
+    }
+    final webView = controller;
+    if (webView == null) return;
+    await webView.runJavaScript("window.configurarVista('$vista')");
+  }
+
   /// Reproduce una secuencia completa (lista de frames de 152 dimensiones
   /// cada uno, tal cual Template.seq en dtw.dart / plantillas.dart).
   ///

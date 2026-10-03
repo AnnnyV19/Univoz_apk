@@ -38,7 +38,8 @@ void main() {
     expect(html,
         contains('parseSignSpaceFrame(sourceMeta?.sign_space), frameVivoTimestampMs)'));
     expect(html, contains('filtroSignSpace.reset()'));
-    expect(html, contains('signSpace: signSpaceVivo'));
+    expect(html, contains('mirrorSignSpaceFrame(signSpaceVivo)'));
+    expect(html, contains(': signSpaceVivo,'));
     // resolverBrazo cae a legacy si no hay retarget.
     expect(html, contains('deltaMunecaRetarget(lado, meta.signSpace) ??'));
     // Apagado por defecto hasta validar en camara fisica.
@@ -64,5 +65,14 @@ void main() {
     expect(html, contains('window.confirm('));
     expect(html, contains('iniciarCapturaPerfil({consent: true})'));
     expect(html, contains('alimentarCapturaPerfil(pose, poseMundo)'));
+  });
+
+  test('vista espejo solo para el frame en vivo, interlocutor por defecto', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains("let vistaAvatar = 'interlocutor';"));
+    expect(html, contains('window.configurarVista'));
+    expect(html, contains('espejo ? mirrorMotionFrame(frameVivo) : frameVivo'));
+    // la reproduccion de biblioteca no se espeja
+    expect(html, contains('RigBodyEngine.aplicarFrame(colaFrames[frameActual], {'));
   });
 }

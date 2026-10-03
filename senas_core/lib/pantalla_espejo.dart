@@ -131,6 +131,9 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
       await _ctrl.iniciar(frontal: _almacen.ajustes.camaraFrontal);
       if (!_ctrl.lista) return;
       await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
+      // Esta pantalla es para verte a ti mismo: el avatar actua como reflejo.
+      // Las pantallas de traduccion dejan la vista de interlocutor.
+      await _bridge.configurarVista(espejo: true);
       await _bridge.configurarDiagnostico(
         _almacen.ajustes.rigDiagnosticMode || widget.iniciarCalibracion,
       );
