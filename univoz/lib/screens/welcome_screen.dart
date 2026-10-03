@@ -104,6 +104,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       return;
     }
     if (command == VoiceCommand.start || command == VoiceCommand.yes) {
+      if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const PurposeScreen()),
       );

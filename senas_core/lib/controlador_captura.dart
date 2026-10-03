@@ -17,6 +17,10 @@ import 'camera_bridge.dart';
 import 'motion_contract.dart';
 import 'sign_norm.dart' show fillGaps, kTFrames, resample;
 
+/// Observable camera lifecycle. [lista] alone cannot distinguish a native
+/// camera that bound successfully from one that never emits its first frame.
+enum EstadoCamara { detenida, inicializando, enlazada, lista, error }
+
 /// Resultado completo de una captura. La secuencia normalizada alimenta DTW
 /// y el modelo; los landmarks crudos permiten auditar o re-normalizar sin
 /// guardar video.
@@ -64,12 +68,16 @@ class ControladorCaptura extends ChangeNotifier {
       ValueNotifier<LandmarkFrame?>(null);
 
   CamaraIniciada? iniciada;
+  EstadoCamara estado = EstadoCamara.detenida;
   String? error;
   bool grabando = false;
   bool _apagado = false;
+  bool _primerFrameRecibido = false;
+  int _inicioActual = 0;
 
-  StreamSubscription? _subPreview;
-  StreamSubscription? _subGrabacion;
+  Timer? _watchdogPreview;
+  StreamSubscription<LandmarkFrame>? _subPreview;
+  StreamSubscription<LandmarkFrame>? _subGrabacion;
   final List<List<double>> _buffer = [];
   final List<List<double>?> _bufferConHuecos = [];
   final List<LandmarkFrame> _framesCrudos = [];
@@ -80,30 +88,76 @@ class ControladorCaptura extends ChangeNotifier {
   int get framesRecibidos => _framesCrudos.length;
   int get framesInvalidos => _framesInvalidos;
   bool get lista => iniciada != null;
+  bool get primerFrameRecibido => _primerFrameRecibido;
 
   Future<void> iniciar({bool frontal = true, bool cruzarManos = false}) async {
     // Parámetro legado para no romper llamadas existentes. El motor resuelve
     // lado anatómico por cadena hombro-codo-muñeca y nunca cruza frames.
     camara.cruzarManos = false;
+    final inicio = ++_inicioActual;
+    _watchdogPreview?.cancel();
+    _watchdogPreview = null;
+    await _subPreview?.cancel();
+    _subPreview = null;
+    if (iniciada != null) await camara.detener();
     iniciada = null;
     error = null;
+    estado = EstadoCamara.inicializando;
+    _primerFrameRecibido = false;
+    frame.value = null;
     _notificar();
+
+    // Subscribe before binding CameraX so the first preview event cannot be
+    // lost while the platform texture is coming online.
+    _subPreview = camara.framesPreview.listen(
+      (f) {
+        if (_apagado || inicio != _inicioActual) return;
+        frame.value = f;
+        if (!_primerFrameRecibido) {
+          _primerFrameRecibido = true;
+          _watchdogPreview?.cancel();
+          _watchdogPreview = null;
+          estado = EstadoCamara.lista;
+          _notificar();
+        }
+      },
+      onError: (Object e, StackTrace stack) {
+        if (_apagado || inicio != _inicioActual) return;
+        _marcarError(e);
+      },
+    );
     try {
       final c = await camara.iniciar(frontal: frontal);
-      _subPreview = camara.framesPreview.listen(
-        (f) {
-          if (_apagado) return;
-          frame.value = f;
-        },
-        onError: (e) {
-          error = e.toString();
-          _notificar();
-        },
-      );
+      if (_apagado || inicio != _inicioActual) {
+        await camara.detener();
+        return;
+      }
       iniciada = c;
+      estado = EstadoCamara.enlazada;
+      _watchdogPreview = Timer(const Duration(seconds: 5), () {
+        if (!_primerFrameRecibido && inicio == _inicioActual) {
+          _marcarError(
+            StateError('La cámara se conectó pero no envió imagen.'),
+          );
+          unawaited(camara.detener());
+        }
+      });
     } catch (e) {
-      error = e.toString();
+      if (inicio == _inicioActual) {
+        _marcarError(e);
+        await _subPreview?.cancel();
+        _subPreview = null;
+      }
     }
+    _notificar();
+  }
+
+  void _marcarError(Object e) {
+    error = mensajeErrorCamara(e);
+    estado = EstadoCamara.error;
+    iniciada = null;
+    _watchdogPreview?.cancel();
+    _watchdogPreview = null;
     _notificar();
   }
 
@@ -196,6 +250,9 @@ class ControladorCaptura extends ChangeNotifier {
     await _subGrabacion?.cancel();
     _subGrabacion = null;
     grabando = false;
+    _inicioActual++;
+    _watchdogPreview?.cancel();
+    _watchdogPreview = null;
     await _subPreview?.cancel();
     _subPreview = null;
     await camara.detener();
@@ -204,11 +261,17 @@ class ControladorCaptura extends ChangeNotifier {
 
   Future<void> apagar() async {
     _apagado = true;
+    _inicioActual++;
+    _watchdogPreview?.cancel();
+    _watchdogPreview = null;
     await _subPreview?.cancel();
     await _subGrabacion?.cancel();
     _subPreview = null;
     _subGrabacion = null;
     await camara.detener();
+    iniciada = null;
+    estado = EstadoCamara.detenida;
+    frame.value = null;
   }
 
   void _notificar() {
@@ -217,7 +280,7 @@ class ControladorCaptura extends ChangeNotifier {
 
   @override
   void dispose() {
-    apagar();
+    unawaited(apagar());
     frame.dispose();
     super.dispose();
   }

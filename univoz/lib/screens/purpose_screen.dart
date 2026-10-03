@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:senas_core/skeleton_painter.dart' show PantallaDeTranslacion;
 import 'profile_selection_screen.dart';
@@ -108,15 +109,16 @@ class _PurposeScreenState extends State<PurposeScreen> {
         // El perfil "ciego" ya se asumió por TalkBack, así que saltamos
         // la cuadrícula de selección de perfil y vamos directo a elegir
         // con quién se va a comunicar.
+        if (!mounted) return;
         Navigator.of(context).push(
-          MaterialPageRoute(
-              builder: (_) => const OtherPersonProfileScreen()),
+          MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),
         );
         return;
       }
       if (text.contains('aprend') ||
           text.contains('seña') ||
           text.contains('lsm')) {
+        if (!mounted) return;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => const MainShellScreen(initialIndex: 0),
@@ -194,6 +196,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
   /// (mismo patrón que TraducirSenasScreen/ComunicarseScreen). Devuelve
   /// true si ya se puede continuar.
   Future<bool> _asegurarPermisoCamara() async {
+    if (kIsWeb) return true;
     final status = await Permission.camera.status;
     if (status.isGranted) return true;
     setState(() => _pidiendoPermisoCamara = true);
@@ -268,12 +271,12 @@ class _PurposeScreenState extends State<PurposeScreen> {
                 ),
               ),
               const SizedBox(height: 28),
-
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(
                     children: [
                       _buildOptionCard(
+                        key: const ValueKey('purpose-comunicarse'),
                         purpose: CommunicationPurpose.comunicarse,
                         icon: Icons.chat_bubble_outline,
                         iconBgColor: const Color(0xFFA8C5F0),
@@ -285,6 +288,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
+                        key: const ValueKey('purpose-aprender-lsm'),
                         purpose: CommunicationPurpose.aprenderLsm,
                         icon: Icons.pan_tool,
                         iconBgColor: const Color(0xFFE88BC2),
@@ -295,6 +299,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
+                        key: const ValueKey('purpose-traducir-senas'),
                         purpose: CommunicationPurpose.traducirSenas,
                         icon: Icons.camera_alt,
                         iconBgColor: const Color(0xFF6C63FF),
@@ -306,6 +311,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
+                        key: const ValueKey('purpose-configuracion'),
                         purpose: CommunicationPurpose.configuracion,
                         icon: Icons.settings,
                         iconBgColor: const Color(0xFF3FBF8F),
@@ -324,7 +330,6 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
@@ -357,6 +362,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
   }
 
   Widget _buildOptionCard({
+    Key? key,
     required CommunicationPurpose purpose,
     required IconData icon,
     required Color iconBgColor,
@@ -367,6 +373,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
   }) {
     final bool isSelected = _selected == purpose;
     return GestureDetector(
+      key: key,
       onTap: () => setState(() => _selected = purpose),
       child: Container(
         width: double.infinity,
@@ -374,9 +381,8 @@ class _PurposeScreenState extends State<PurposeScreen> {
         decoration: BoxDecoration(
           color: cardColor,
           borderRadius: BorderRadius.circular(18),
-          border: isSelected
-              ? Border.all(color: Colors.black87, width: 3)
-              : null,
+          border:
+              isSelected ? Border.all(color: Colors.black87, width: 3) : null,
         ),
         child: Row(
           children: [

@@ -325,7 +325,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorDiccionario = e.toString());
+      setState(() => _errorDiccionario =
+          'No se pudo cargar el diccionario local. Reintenta más tarde.');
     }
   }
 

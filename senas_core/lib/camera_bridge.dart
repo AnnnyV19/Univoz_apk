@@ -7,6 +7,7 @@ library camera_bridge;
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import 'sign_norm.dart';
@@ -23,6 +24,45 @@ const String kCanalEventos = 'univoz/landmarks';
 // ligeramente distintos). Es el que hay que usar para pintar el esqueleto
 // en pantalla: se siente a tiempo real. No usar para guardar datos.
 const String kCanalEventosPreview = 'univoz/landmarks_preview';
+
+/// Error for a native-only capability requested from an unsupported target.
+class UnsupportedFeatureException implements Exception {
+  final String feature;
+  final String message;
+
+  const UnsupportedFeatureException({
+    required this.feature,
+    required this.message,
+  });
+
+  const UnsupportedFeatureException.camara()
+      : feature = 'camara',
+        message = 'La cámara de señas está disponible en Android.';
+
+  @override
+  String toString() => message;
+}
+
+/// Maps platform failures to safe, user-facing messages.
+String mensajeErrorCamara(Object error) {
+  if (error is UnsupportedFeatureException) return error.message;
+  if (error is StateError &&
+      error.message == 'La cámara se conectó pero no envió imagen.') {
+    return 'La cámara se conectó pero no envió imagen. Revisa el encuadre y reintenta.';
+  }
+  if (error is PlatformException) {
+    return switch (error.code) {
+      'camera_permission' => 'Concede permiso de cámara para continuar.',
+      'camera_busy' =>
+        'La cámara está siendo usada por otra aplicación. Ciérrala y reintenta.',
+      'camera_unavailable' =>
+        'La cámara no está disponible en este dispositivo.',
+      'camera_start_cancelled' => 'El inicio de cámara fue cancelado.',
+      _ => 'No se pudo iniciar la cámara. Revisa permisos y reintenta.',
+    };
+  }
+  return 'No se pudo iniciar la cámara. Revisa permisos y reintenta.';
+}
 
 /// Un frame crudo tal como llega del lado nativo.
 class LandmarkFrame {
@@ -249,13 +289,16 @@ class CameraBridge {
 
   Stream<LandmarkFrame>? _stream;
   Stream<LandmarkFrame>? _streamPreview;
+  int _session = 0;
 
   /// Pide permiso de camara antes de llamar esto (por ejemplo con
   /// permission_handler). El lado nativo no lo solicita.
   Future<CamaraIniciada> iniciar({bool frontal = true}) async {
+    if (kIsWeb) throw const UnsupportedFeatureException.camara();
+    final session = ++_session;
     final r = await _metodos.invokeMapMethod<String, Object?>(
       'iniciar',
-      {'frontal': frontal},
+      {'frontal': frontal, 'session': session},
     );
     if (r == null) throw StateError('la camara no devolvio textura');
     return CamaraIniciada(
@@ -267,9 +310,20 @@ class CameraBridge {
   }
 
   Future<void> detener() async {
-    await _metodos.invokeMethod<void>('detener');
-    _stream = null;
-    _streamPreview = null;
+    final session = ++_session;
+    try {
+      if (!kIsWeb) {
+        await _metodos.invokeMethod<void>('detener', {'session': session});
+      }
+    } on MissingPluginException {
+      // Cleanup must remain idempotent when screen is disposed on a platform
+      // without native camera registration.
+    } on PlatformException {
+      // Native shutdown errors must not turn route disposal into a crash.
+    } finally {
+      _stream = null;
+      _streamPreview = null;
+    }
   }
 
   /// Stream de frames FUSIONADOS: pose y manos garantizadas del mismo
@@ -277,10 +331,11 @@ class CameraBridge {
   /// guardar muestras a la vez. Para pintar el esqueleto en vivo usa
   /// [framesPreview], que responde mucho mas rapido.
   Stream<LandmarkFrame> get frames {
+    if (kIsWeb) return _stream ??= Stream<LandmarkFrame>.empty();
     return _stream ??= _eventos
         .receiveBroadcastStream()
-        .map((e) => LandmarkFrame.fromMap(e as Map<Object?, Object?>,
-            swapHands: false))
+        .map((e) =>
+            LandmarkFrame.fromMap(e as Map<Object?, Object?>, swapHands: false))
         .asBroadcastStream();
   }
 
@@ -291,10 +346,11 @@ class CameraBridge {
   /// pantalla se sienta a tiempo real. No usar esto para normalizar ni
   /// guardar muestras (usa [frames] para eso).
   Stream<LandmarkFrame> get framesPreview {
+    if (kIsWeb) return _streamPreview ??= Stream<LandmarkFrame>.empty();
     return _streamPreview ??= _eventosPreview
         .receiveBroadcastStream()
-        .map((e) => LandmarkFrame.fromMap(e as Map<Object?, Object?>,
-            swapHands: false))
+        .map((e) =>
+            LandmarkFrame.fromMap(e as Map<Object?, Object?>, swapHands: false))
         .asBroadcastStream();
   }
 

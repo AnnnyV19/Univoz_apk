@@ -13,6 +13,9 @@ void main() {
     final plugin = File(
       'android/app/src/main/kotlin/com/univoz/senas/LandmarkPlugin.kt',
     ).readAsStringSync();
+    final appPlugin = File(
+      '../univoz/android/app/src/main/kotlin/LandmarkPlugin.kt',
+    ).readAsStringSync();
 
     expect(source, contains('val normal = costos[0].first + costos[1].second'));
     expect(
@@ -37,6 +40,12 @@ void main() {
     expect(source, contains('"pose_pending"'));
     expect(source, isNot(contains('private fun ladoFisicoMano(')));
     expect(source, isNot(contains('private fun ladoPorMunecaPose(')));
+    for (final implementation in [plugin, appPlugin]) {
+      expect(implementation, contains('sessionToken'));
+      expect(implementation, contains('camera_start_cancelled'));
+      expect(implementation, contains('camera_permission'));
+      expect(implementation, contains('limpiarRecursos'));
+    }
   });
 
   test('CameraX keeps hand cadence and halves pose workload', () {

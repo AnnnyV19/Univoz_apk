@@ -143,9 +143,15 @@ class SupabaseApi {
       Uri.parse('$url/rest/v1/$recurso').replace(queryParameters: params);
 
   Never _fallo(String que, http.Response r) {
-    // El cuerpo de PostgREST trae el motivo real (politica RLS que falto,
-    // columna que no existe, etc). Mostrarlo entero ahorra horas.
-    throw SupabaseError('$que falló (HTTP ${r.statusCode}): ${r.body}');
+    final detalle = switch (r.statusCode) {
+      401 || 403 => 'Revisa permisos y políticas RLS.',
+      408 || 429 => 'Reintenta en unos segundos.',
+      >= 500 => 'El servicio no está disponible; reintenta más tarde.',
+      _ => 'Revisa conexión y configuración.',
+    };
+    // Never surface PostgREST body: it may contain SQL, policy details or
+    // internal infrastructure information.
+    throw SupabaseError('$que no se pudo completar. $detalle');
   }
 
   /// Pedido minimo para saber si hay red, si la URL/clave sirven y si las

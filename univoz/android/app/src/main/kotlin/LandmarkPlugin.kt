@@ -63,6 +63,7 @@ class LandmarkPlugin(
     private var engine: LandmarkEngine? = null
     private var entry: TextureRegistry.SurfaceTextureEntry? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    private var sessionToken = 0L
     private var ultimoTimestamp = 0L
     private var ultimoPoseEnviadoNs = 0L
 
@@ -91,10 +92,13 @@ class LandmarkPlugin(
         when (call.method) {
             "iniciar" -> {
                 val frontal = call.argument<Boolean>("frontal") ?: true
-                iniciar(frontal, result)
+                val session = call.argument<Number>("session")?.toLong()
+                    ?: ++sessionToken
+                iniciar(frontal, session, result)
             }
             "detener" -> {
-                detener()
+                val session = call.argument<Number>("session")?.toLong()
+                detener(session)
                 result.success(null)
             }
             else -> result.notImplemented()
@@ -107,11 +111,21 @@ class LandmarkPlugin(
         sink = null
     }
     @SuppressLint("UnsafeOptInUsageError")
-    private fun iniciar(frontal: Boolean, result: MethodChannel.Result) {
+    private fun iniciar(
+        frontal: Boolean,
+        requestedSession: Long,
+        result: MethodChannel.Result,
+    ) {
+        sessionToken = maxOf(sessionToken, requestedSession)
+        limpiarRecursos()
         val futuro = ProcessCameraProvider.getInstance(context)
         futuro.addListener({
             try {
                 val provider = futuro.get()
+                if (requestedSession != sessionToken) {
+                    result.error("camera_start_cancelled", null, null)
+                    return@addListener
+                }
                 cameraProvider = provider
                 provider.unbindAll()
                 val texEntry = textureRegistry.createSurfaceTexture()
@@ -148,7 +162,17 @@ class LandmarkPlugin(
                 analysis.setAnalyzer(ejecutor) { proxy -> procesar(proxy) }
                 val selector = if (frontal) CameraSelector.DEFAULT_FRONT_CAMERA
                 else CameraSelector.DEFAULT_BACK_CAMERA
+                if (requestedSession != sessionToken) {
+                    limpiarRecursos()
+                    result.error("camera_start_cancelled", null, null)
+                    return@addListener
+                }
                 provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+                if (requestedSession != sessionToken) {
+                    limpiarRecursos()
+                    result.error("camera_start_cancelled", null, null)
+                    return@addListener
+                }
 
                 val info = preview.resolutionInfo
                 val res = info?.resolution
@@ -167,8 +191,18 @@ class LandmarkPlugin(
                         "alto" to alto,
                     )
                 )
+            } catch (e: SecurityException) {
+                limpiarRecursos()
+                result.error("camera_permission", null, null)
+            } catch (e: IllegalArgumentException) {
+                limpiarRecursos()
+                result.error("camera_unavailable", null, null)
+            } catch (e: IllegalStateException) {
+                limpiarRecursos()
+                result.error("camera_busy", null, null)
             } catch (e: Exception) {
-                result.error("camara", e.message, null)
+                limpiarRecursos()
+                result.error("camera_start_failed", null, null)
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -238,7 +272,12 @@ class LandmarkPlugin(
         payload["errors"] = f.errors
         return payload
     }
-    private fun detener() {
+    private fun detener(requestedSession: Long? = null) {
+        sessionToken = requestedSession?.let { maxOf(sessionToken, it) }
+            ?: (sessionToken + 1)
+        limpiarRecursos()
+    }
+    private fun limpiarRecursos() {
         cameraProvider?.unbindAll()
         cameraProvider = null
         engine?.cerrar()

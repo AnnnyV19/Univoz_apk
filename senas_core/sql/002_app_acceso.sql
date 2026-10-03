@@ -8,7 +8,7 @@
 -- una segura: prende RLS y deja pasar solo lo que la app necesita.
 --
 -- Lo que queda permitido para la app (rol anon):
---   * leer el lexico y las muestras
+--   * leer el lexico y solo muestras aprobadas
 --   * dar de alta senas nuevas
 --   * subir muestras, pero SIEMPRE en estado 'pendiente'
 -- Lo que queda prohibido:
@@ -60,7 +60,7 @@ CREATE POLICY signs_alta ON signs
 DROP POLICY IF EXISTS samples_lectura ON sign_samples;
 CREATE POLICY samples_lectura ON sign_samples
     FOR SELECT TO anon, authenticated
-    USING (true);
+    USING (estado = 'aprobada');
 
 DROP POLICY IF EXISTS samples_alta ON sign_samples;
 CREATE POLICY samples_alta ON sign_samples
@@ -70,11 +70,19 @@ CREATE POLICY samples_alta ON sign_samples
 DROP POLICY IF EXISTS landmarks_lectura ON sample_landmarks;
 CREATE POLICY landmarks_lectura ON sample_landmarks
     FOR SELECT TO anon, authenticated
-    USING (true);
+    USING (EXISTS (
+        SELECT 1
+        FROM sign_samples ss
+        WHERE ss.id = sample_landmarks.sample_id
+          AND ss.estado = 'aprobada'
+    ));
 
 DROP POLICY IF EXISTS landmarks_alta ON sample_landmarks;
 CREATE POLICY landmarks_alta ON sample_landmarks
     FOR INSERT TO anon, authenticated
+    -- The FK binds this row to a real sample. Pending rows are intentionally
+    -- not readable by the client; the sample insert is the only client path.
+    -- No UPDATE/DELETE policy exists, and the PK prevents a second payload.
     WITH CHECK (true);
 
 -- No hay ninguna politica de UPDATE ni de DELETE a proposito: con RLS

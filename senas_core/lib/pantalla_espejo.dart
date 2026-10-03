@@ -112,21 +112,36 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
   }
 
   Future<void> _arrancar() async {
-    await AlmacenMuestras.instancia.cargar();
-    final permiso = await Permission.camera.request();
-    if (!permiso.isGranted) {
+    if (!_bridge.disponible) {
       if (mounted) {
-        setState(() => _aviso = 'Sin permiso de camara no puedo hacer espejo.');
+        setState(() => _aviso = 'El modo espejo está disponible en Android.');
       }
       return;
     }
-    await _ctrl.iniciar(frontal: _almacen.ajustes.camaraFrontal);
-    await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
-    await _bridge.configurarDiagnostico(
-      _almacen.ajustes.rigDiagnosticMode || widget.iniciarCalibracion,
-    );
-    if (widget.iniciarCalibracion) {
-      await _bridge.iniciarCalibracionPulgares();
+    try {
+      await AlmacenMuestras.instancia.cargar();
+      final permiso = await Permission.camera.request();
+      if (!permiso.isGranted) {
+        if (mounted) {
+          setState(
+              () => _aviso = 'Sin permiso de cámara no puedo hacer espejo.');
+        }
+        return;
+      }
+      await _ctrl.iniciar(frontal: _almacen.ajustes.camaraFrontal);
+      if (!_ctrl.lista) return;
+      await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
+      await _bridge.configurarDiagnostico(
+        _almacen.ajustes.rigDiagnosticMode || widget.iniciarCalibracion,
+      );
+      if (widget.iniciarCalibracion) {
+        await _bridge.iniciarCalibracionPulgares();
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _aviso = 'No se pudo iniciar el modo espejo.');
+      }
+      return;
     }
     if (!mounted) return;
     _empezarEspejo();
@@ -260,7 +275,9 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
                   style: const TextStyle(color: Colors.white, fontSize: 13)),
             ),
           Expanded(
-            child: WebViewWidget(controller: _bridge.controller),
+            child: _bridge.disponible
+                ? WebViewWidget(controller: _bridge.controller!)
+                : const _EspejoNoDisponible(),
           ),
           _barra(),
         ],
@@ -376,4 +393,23 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
       ),
     ]);
   }
+}
+
+class _EspejoNoDisponible extends StatelessWidget {
+  const _EspejoNoDisponible();
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+        color: Colors.black87,
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'El modo espejo está disponible en Android',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 18),
+            ),
+          ),
+        ),
+      );
 }

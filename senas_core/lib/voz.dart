@@ -99,9 +99,15 @@ class LectorVoz {
       }
       return null;
     } catch (e) {
-      return e.toString();
+      return 'No se pudo reproducir el resultado por voz. Revisa los servicios de voz.';
     }
   }
 
-  Future<void> detener() => _tts.stop();
+  Future<void> detener() async {
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // Voice is optional; disposal must never crash route navigation.
+    }
+  }
 }

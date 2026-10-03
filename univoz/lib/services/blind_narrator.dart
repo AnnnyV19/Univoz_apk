@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -105,8 +104,15 @@ class BlindNarrator {
   /// a la siguiente pantalla).
   static Future<void> interruptFlow() async {
     beginFlow();
-    await stop();
-    await cancelListening();
+    // Optional speech plugins can remain unresolved on web/desktop test
+    // harnesses. Never block a navigation action on plugin cleanup.
+    try {
+      await Future.wait<void>([stop(), cancelListening()]).timeout(
+        const Duration(milliseconds: 250),
+      );
+    } on TimeoutException {
+      debugPrint('[BlindNarrator] cleanup de voz excedió timeout');
+    }
   }
 
   static Future<void> _ensureTts() async {
@@ -229,7 +235,16 @@ class BlindNarrator {
   }
 
   /// Detiene la narración en curso (sin deshabilitarla).
-  static Future<void> stop() => _tts.stop();
+  static Future<void> stop() async {
+    try {
+      await _tts.stop();
+    } on MissingPluginException {
+      // Desktop/web test harnesses may not provide TTS. Navigation must not
+      // depend on an optional narration plugin being registered.
+    } on PlatformException catch (e) {
+      debugPrint('[BlindNarrator] no se pudo detener TTS: ${e.code}');
+    }
+  }
 
   /// Interrumpe de inmediato una escucha en curso (por ejemplo, si la
   /// persona cambia de pestaña a mitad de una pregunta) sin procesar lo
@@ -346,7 +361,7 @@ class BlindNarrator {
     int maxAttempts = 3,
     String lowConfidenceRetryPrompt =
         'No te escuché bien. Habla un poco más fuerte y despacio, cerca '
-        'del micrófono, y dime tu mensaje otra vez.',
+            'del micrófono, y dime tu mensaje otra vez.',
     String silenceRetryPrompt =
         'No escuché nada. Dime el mensaje que quieres comunicar.',
     bool Function()? isCancelled,
@@ -395,8 +410,7 @@ class BlindNarrator {
       await _stt.stop();
       if (isCancelled != null && isCancelled()) return '';
       final text = result.trim();
-      final bool lowConfidence =
-          confidence >= 0 && confidence < _minConfidence;
+      final bool lowConfidence = confidence >= 0 && confidence < _minConfidence;
       if (text.isNotEmpty && !lowConfidence) {
         return text;
       }
@@ -427,8 +441,7 @@ class BlindNarrator {
     bool Function()? isCancelled,
   }) async {
     if (isCancelled != null && isCancelled()) return VoiceCommand.unknown;
-    var command =
-        parseCommand(await ask(prompt, isCancelled: isCancelled));
+    var command = parseCommand(await ask(prompt, isCancelled: isCancelled));
     if (isCancelled != null && isCancelled()) return command;
     if (_microphonePermanentlyDenied) {
       await speak('No tengo permiso para usar el micrófono. Usa los '

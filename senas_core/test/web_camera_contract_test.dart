@@ -83,8 +83,9 @@ void main() {
     expect(html, contains('mano.parent.getWorldQuaternion'));
     expect(html, contains('usarMuneca: true'));
     expect(html, contains('function ponerMunecaReposo'));
-    expect(html, contains('id="sMuneca"'));
-    expect(html, contains("cal.usarMuneca = \$('sMuneca').checked"));
+    // The pose editor was removed from this viewer. Keep the standalone
+    // camera/rig contract focused on runtime behavior, not deleted controls.
+    expect(html, isNot(contains('id="sMuneca"')));
     expect(html, contains('function calcularCalidadFrameWeb'));
     expect(html, contains('lastValidAt'));
     expect(html, contains('kFrameStaleMs'));
@@ -118,5 +119,15 @@ void main() {
     final html = File('index.html').readAsStringSync();
 
     expect(html, contains('assets/avatar_viewer/index.html?standalone=1'));
+  });
+
+  test('puentes nativos tienen guards web antes de plugins', () {
+    final camera = File('lib/camera_bridge.dart').readAsStringSync();
+    final storage = File('lib/muestras_locales.dart').readAsStringSync();
+    final avatar = File('lib/avatar_bridge.dart').readAsStringSync();
+
+    expect(camera, contains('if (kIsWeb) throw'));
+    expect(storage, contains('if (kIsWeb)'));
+    expect(avatar, contains('if (kIsWeb)'));
   });
 }

@@ -294,6 +294,7 @@ class AlmacenMuestras extends ChangeNotifier {
   List<MuestraLocal> get muestras => List.unmodifiable(_muestras);
   bool get cargado => _cargado;
   int get total => _muestras.length;
+  bool get persistenciaLocalDisponible => !kIsWeb;
 
   /// Las que todavia no viajaron a Supabase.
   List<MuestraLocal> get sinSubir => _muestras.where((m) => !m.subida).toList();
@@ -372,27 +373,40 @@ class AlmacenMuestras extends ChangeNotifier {
 
   Future<void> cargar() async {
     if (_cargado) return;
-    final f = _archivo ??= await _rutaArchivo();
-    if (await f.exists()) {
-      try {
-        final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-        ajustes = Ajustes.fromJson(
-            (j['ajustes'] as Map?)?.cast<String, dynamic>() ?? const {});
-        _muestras
-          ..clear()
-          ..addAll(((j['muestras'] as List?) ?? const []).map((m) {
-            try {
-              return MuestraLocal.fromJson((m as Map).cast<String, dynamic>());
-            } catch (_) {
-              return null;
-            }
-          }).whereType<MuestraLocal>());
-      } catch (_) {
-        // Archivo corrupto o de una version incompatible: se ignora y se
-        // arranca limpio. Perder muestras locales es malo, pero dejar la
-        // app inutilizable por un JSON roto es peor -- y el original sigue
-        // en disco por si hay que recuperarlo a mano.
+    if (kIsWeb) {
+      // Web is a navigation/test harness. Keep the in-memory dictionary
+      // usable, but never call path_provider or dart:io-backed storage.
+      _cargado = true;
+      notifyListeners();
+      return;
+    }
+    try {
+      final f = _archivo ??= await _rutaArchivo();
+      if (await f.exists()) {
+        try {
+          final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+          ajustes = Ajustes.fromJson(
+              (j['ajustes'] as Map?)?.cast<String, dynamic>() ?? const {});
+          _muestras
+            ..clear()
+            ..addAll(((j['muestras'] as List?) ?? const []).map((m) {
+              try {
+                return MuestraLocal.fromJson(
+                    (m as Map).cast<String, dynamic>());
+              } catch (_) {
+                return null;
+              }
+            }).whereType<MuestraLocal>());
+        } catch (_) {
+          // Archivo corrupto o de una version incompatible: se ignora y se
+          // arranca limpio. Perder muestras locales es malo, pero dejar la
+          // app inutilizable por un JSON roto es peor -- y el original sigue
+          // en disco por si hay que recuperarlo a mano.
+        }
       }
+    } catch (_) {
+      // Storage plugin unavailable: keep the in-memory store usable and let
+      // the next explicit save retry on a supported platform.
     }
     await _cargarSincronizadas();
     _cargado = true;
@@ -400,6 +414,7 @@ class AlmacenMuestras extends ChangeNotifier {
   }
 
   Future<void> _cargarSincronizadas() async {
+    if (kIsWeb) return;
     try {
       final dir = await getApplicationDocumentsDirectory();
       final f = File('${dir.path}/$kNombreArchivoSync');
@@ -421,6 +436,14 @@ class AlmacenMuestras extends ChangeNotifier {
 
   /// Reemplaza la cache del diccionario con lo que se acaba de bajar.
   Future<void> guardarSincronizadas(List<PlantillaRemota> plantillas) async {
+    if (kIsWeb) {
+      sincronizadoEn = DateTime.now().toIso8601String();
+      sincronizadas
+        ..clear()
+        ..addAll(plantillas);
+      notifyListeners();
+      return;
+    }
     final dir = await getApplicationDocumentsDirectory();
     final f = File('${dir.path}/$kNombreArchivoSync');
     sincronizadoEn = DateTime.now().toIso8601String();
@@ -471,6 +494,7 @@ class AlmacenMuestras extends ChangeNotifier {
   }
 
   Future<void> _guardar() async {
+    if (kIsWeb) return;
     final f = _archivo ??= await _rutaArchivo();
     await f.writeAsString(jsonEncode({
       'version': kVersionArchivo,
@@ -497,7 +521,7 @@ class AlmacenMuestras extends ChangeNotifier {
     }
     final id = '${DateTime.now().microsecondsSinceEpoch}_${_contador++}';
     String? rawFramesPath;
-    if (captura != null && captura.framesCrudos.isNotEmpty) {
+    if (!kIsWeb && captura != null && captura.framesCrudos.isNotEmpty) {
       final dir = await _directorioRaw();
       rawFramesPath = '$kDirectorioRaw/$id.json.gz';
       final raw = jsonEncode(
@@ -554,6 +578,12 @@ class AlmacenMuestras extends ChangeNotifier {
   }
 
   Future<Directory> _directorioRaw() async {
+    if (kIsWeb) {
+      throw const UnsupportedFeatureException(
+        feature: 'almacenamiento_raw',
+        message: 'El almacenamiento de landmarks está disponible en Android.',
+      );
+    }
     final dir = await getApplicationDocumentsDirectory();
     final raw = Directory('${dir.path}/$kDirectorioRaw');
     await raw.create(recursive: true);
@@ -561,6 +591,7 @@ class AlmacenMuestras extends ChangeNotifier {
   }
 
   Future<void> _borrarRaw(MuestraLocal muestra) async {
+    if (kIsWeb) return;
     final path = muestra.rawFramesPath;
     if (path == null || path.contains('..')) return;
     final dir = await getApplicationDocumentsDirectory();
@@ -570,6 +601,7 @@ class AlmacenMuestras extends ChangeNotifier {
 
   /// Devuelve bytes gzip del sidecar para una subida explícita a Storage.
   Future<Uint8List?> cargarRawComprimido(MuestraLocal muestra) async {
+    if (kIsWeb) return null;
     final path = muestra.rawFramesPath;
     if (path == null || path.contains('..')) return null;
     final dir = await getApplicationDocumentsDirectory();
@@ -580,6 +612,7 @@ class AlmacenMuestras extends ChangeNotifier {
 
   /// Lee sidecar de landmarks sin video para auditoría o re-normalización.
   Future<List<LandmarkFrame>> cargarFramesCrudos(MuestraLocal muestra) async {
+    if (kIsWeb) return const [];
     final path = muestra.rawFramesPath;
     if (path == null || path.contains('..')) return const [];
     final dir = await getApplicationDocumentsDirectory();
@@ -596,6 +629,12 @@ class AlmacenMuestras extends ChangeNotifier {
   /// Escribe un archivo en la carpeta temporal listo para compartir e
   /// importar con tools/importar_muestras.py. Devuelve la ruta.
   Future<File> exportar() async {
+    if (kIsWeb) {
+      throw const UnsupportedFeatureException(
+        feature: 'exportacion',
+        message: 'La exportación de muestras está disponible en Android.',
+      );
+    }
     final dir = await getTemporaryDirectory();
     final sello =
         DateTime.now().toIso8601String().replaceAll(RegExp(r'[:.]'), '-');

@@ -1,30 +1,39 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:univoz/main.dart';
+import 'package:univoz/screens/purpose_screen.dart';
+import 'package:univoz/screens/traducir_senas_screen.dart';
+import 'package:univoz/screens/welcome_screen.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('welcome navigates to purpose selection', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: WelcomeScreen()));
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('COMENZAR'), findsOneWidget);
+    await tester.tap(find.text('COMENZAR'));
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    expect(find.byType(PurposeScreen), findsOneWidget);
+    expect(find.text('¿Para qué quieres\nusar UNIVOZ?'), findsOneWidget);
+  });
+
+  testWidgets('purpose selection opens configuration without camera',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: PurposeScreen()));
+
+    final configuracion = find.byKey(const ValueKey('purpose-configuracion'));
+    await tester.ensureVisible(configuracion);
+    await tester.tap(configuracion);
     await tester.pump();
+    expect(
+      tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.text('Comenzar ahora'));
+    await tester.pumpAndSettle();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.byType(TraducirSenasScreen), findsOneWidget);
+    expect(
+        find.text('Configuración de reconocimiento de señas'), findsOneWidget);
   });
 }

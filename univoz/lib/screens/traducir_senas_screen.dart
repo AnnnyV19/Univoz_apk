@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:senas_core/pantalla_ajustes.dart';
 import 'package:senas_core/pantalla_captura.dart';
@@ -35,6 +36,7 @@ class _TraducirSenasScreenState extends State<TraducirSenasScreen> {
   /// Pide permiso de cámara antes de abrir cualquier pantalla que la use.
   /// Devuelve true si ya se puede continuar.
   Future<bool> _asegurarPermisoCamara() async {
+    if (kIsWeb) return true;
     final status = await Permission.camera.status;
     if (status.isGranted) return true;
     setState(() => _pidiendoPermiso = true);
