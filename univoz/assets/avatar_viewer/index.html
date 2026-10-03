@@ -2385,6 +2385,413 @@
     })();
     // ---- fin rig_tracking.mjs ----
 
+    // ---- inicio rig_sign_space.mjs (antes importado por separado) ----
+    const {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame} = (() => {
+      // SignSpaceFrame v1: representacion de la sena independiente del cuerpo.
+      // Espejo exacto de tools/sign_space.py y lib/sign_space.dart; golden en
+      // test/golden/sign_space_cases.json. MotionFrameV2 152D no cambia.
+      // Acepta landmarks como arrays [x, y, z, visibility] o como objetos de
+      // MediaPipe JS {x, y, z, visibility}.
+
+      const SIGN_SPACE_VERSION = '1.0.0';
+      const SIGN_SPACE_DIM = 35;
+      const SS = Object.freeze({
+        NOSE: 0, MOUTH_L: 9, MOUTH_R: 10,
+        L_SHOULDER: 11, R_SHOULDER: 12, L_ELBOW: 13, R_ELBOW: 14,
+        L_WRIST: 15, R_WRIST: 16, L_PINKY: 17, R_PINKY: 18,
+        L_INDEX: 19, R_INDEX: 20, L_HIP: 23, R_HIP: 24,
+        OFF_UPPER_L: 0, OFF_FORE_L: 3, OFF_UPPER_R: 6, OFF_FORE_R: 9,
+        OFF_PALM_L: 12, OFF_PALM_R: 15, OFF_NOSE: 18, OFF_MOUTH: 21,
+        OFF_HANDDIR_L: 24, OFF_HANDDIR_R: 27, OFF_CONTACT: 30,
+        C_FACE_L: 0, C_FACE_R: 1, C_CHEST_L: 2, C_CHEST_R: 3, C_HANDS: 4,
+      });
+      const SS_CHEST = Object.freeze([0, -0.40, 0.10]);
+
+      const MIN_VISIBILITY = 0.5;
+      const HIP_VISIBILITY = 0.5;
+      const CONTACT_FACE = 0.30;
+      const CONTACT_CHEST = 0.30;
+      const CONTACT_HANDS = 0.25;
+      const EPS = 1e-6;
+
+      const pt = (p) => Array.isArray(p) ? [+p[0], +p[1], +p[2]] :
+        [+p?.x, +p?.y, +p?.z];
+      const visibility = (p) => Array.isArray(p) ? (p.length >= 4 ? +p[3] : NaN) :
+        +(p?.visibility ?? NaN);
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const cross = (a, b) => [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+      ];
+      const len = (a) => Math.sqrt(dot(a, a));
+      const unit = (a) => {
+        const m = len(a);
+        return m < EPS ? null : [a[0] / m, a[1] / m, a[2] / m];
+      };
+      const mid = (...ps) => [0, 1, 2].map((i) =>
+        ps.reduce((s, p) => s + p[i], 0) / ps.length);
+
+      function visible(pose, idx, min) {
+        return visibility(pose[idx]) >= min;
+      }
+
+      function bodyBase(pose, w, hipVisibility) {
+        const hi = w[SS.L_SHOULDER], hd = w[SS.R_SHOULDER];
+        const right = unit(sub(hd, hi));
+        if (!right) return null;
+        const scale = len(sub(hd, hi));
+        const origin = mid(hi, hd);
+        let trunk, mode;
+        if (visible(pose, SS.L_HIP, hipVisibility) &&
+            visible(pose, SS.R_HIP, hipVisibility)) {
+          trunk = sub(origin, mid(w[SS.L_HIP], w[SS.R_HIP]));
+          mode = 'full';
+        } else {
+          trunk = [0, -1, 0]; // vertical de la camara
+          mode = 'upper';
+        }
+        const proj = dot(trunk, right);
+        const up = unit([0, 1, 2].map((i) => trunk[i] - right[i] * proj));
+        if (!up) return null;
+        const front = unit(cross(up, right));
+        if (!front) return null;
+        return {right, up, front, origin, scale, mode};
+      }
+
+      function dirIn(base, a, b) {
+        const d = unit(sub(b, a));
+        return d ? [dot(d, base.right), dot(d, base.up), dot(d, base.front)] : null;
+      }
+
+      function posIn(base, p) {
+        const q = sub(p, base.origin);
+        return [dot(q, base.right) / base.scale, dot(q, base.up) / base.scale,
+          dot(q, base.front) / base.scale];
+      }
+
+      /**
+       * @returns {{version, mode, scale, values: number[], mask: object}|null}
+       */
+      function signSpaceFrame(pose, poseWorld, {
+        minVisibility = MIN_VISIBILITY,
+        hipVisibility = HIP_VISIBILITY,
+      } = {}) {
+        if (!Array.isArray(pose) || pose.length < 33) return null;
+        if (!Array.isArray(poseWorld) || poseWorld.length < 33) return null;
+        if (!visible(pose, SS.L_SHOULDER, minVisibility) ||
+            !visible(pose, SS.R_SHOULDER, minVisibility)) return null;
+        const w = poseWorld.map(pt);
+        if (w.slice(0, 25).some((p) => !p.every(Number.isFinite))) return null;
+
+        const base = bodyBase(pose, w, hipVisibility);
+        if (!base) return null;
+
+        const out = new Array(SIGN_SPACE_DIM).fill(0);
+        const mask = {armL: false, armR: false, handL: false, handR: false,
+          face: false};
+        const palms = {};
+        const put = (off, v) => { out[off] = v[0]; out[off + 1] = v[1]; out[off + 2] = v[2]; };
+
+        for (const [side, shoulder, elbow, wrist, pinky, index, offU, offF, offP, offH] of [
+          ['L', SS.L_SHOULDER, SS.L_ELBOW, SS.L_WRIST, SS.L_PINKY, SS.L_INDEX,
+            SS.OFF_UPPER_L, SS.OFF_FORE_L, SS.OFF_PALM_L, SS.OFF_HANDDIR_L],
+          ['R', SS.R_SHOULDER, SS.R_ELBOW, SS.R_WRIST, SS.R_PINKY, SS.R_INDEX,
+            SS.OFF_UPPER_R, SS.OFF_FORE_R, SS.OFF_PALM_R, SS.OFF_HANDDIR_R],
+        ]) {
+          if (visible(pose, elbow, minVisibility) && visible(pose, wrist, minVisibility)) {
+            const du = dirIn(base, w[shoulder], w[elbow]);
+            const df = dirIn(base, w[elbow], w[wrist]);
+            if (du && df) {
+              put(offU, du);
+              put(offF, df);
+              mask[`arm${side}`] = true;
+            }
+          }
+          if (visible(pose, wrist, minVisibility)) {
+            const dh = dirIn(base, w[wrist], mid(w[pinky], w[index]));
+            if (dh) {
+              const palm = posIn(base, mid(w[wrist], w[pinky], w[index]));
+              put(offP, palm);
+              put(offH, dh);
+              mask[`hand${side}`] = true;
+              palms[side] = palm;
+            }
+          }
+        }
+
+        if (visible(pose, SS.NOSE, minVisibility)) {
+          put(SS.OFF_NOSE, posIn(base, w[SS.NOSE]));
+          put(SS.OFF_MOUTH, posIn(base, mid(w[SS.MOUTH_L], w[SS.MOUTH_R])));
+          mask.face = true;
+        }
+
+        const nose = out.slice(SS.OFF_NOSE, SS.OFF_NOSE + 3);
+        const mouth = out.slice(SS.OFF_MOUTH, SS.OFF_MOUTH + 3);
+        for (const [side, cFace, cChest] of [['L', SS.C_FACE_L, SS.C_CHEST_L],
+          ['R', SS.C_FACE_R, SS.C_CHEST_R]]) {
+          const palm = palms[side];
+          if (!palm) continue;
+          if (mask.face && Math.min(len(sub(palm, nose)), len(sub(palm, mouth))) <
+              CONTACT_FACE) out[SS.OFF_CONTACT + cFace] = 1;
+          if (len(sub(palm, SS_CHEST)) < CONTACT_CHEST) out[SS.OFF_CONTACT + cChest] = 1;
+        }
+        if (palms.L && palms.R && len(sub(palms.L, palms.R)) < CONTACT_HANDS) {
+          out[SS.OFF_CONTACT + SS.C_HANDS] = 1;
+        }
+
+        return {version: SIGN_SPACE_VERSION, mode: base.mode, scale: base.scale,
+          values: out, mask};
+      }
+      return {SIGN_SPACE_VERSION, SIGN_SPACE_DIM, SS, SS_CHEST, signSpaceFrame};
+    })();
+    // ---- fin rig_sign_space.mjs ----
+
+    // ---- inicio rig_body_profile.mjs (antes importado por separado) ----
+    const {BODY_PROFILE_VERSION, BODY_PROFILE_LIMBS, BODY_PROFILE_STATUSES, BODY_PROFILE_STORAGE_KEY, estimateBodyProfile, parseBodyProfile} = (() => {
+      // BodyProfileV1: medidas del cuerpo + modelo de capacidad (CapabilityMask
+      // externo). Espejo exacto de tools/body_profile.py y lib/body_profile.dart.
+      // Local, versionado y borrable: solo medianas, nunca video ni landmarks.
+
+      const BODY_PROFILE_VERSION = '1.0.0';
+      const BODY_PROFILE_LIMBS = Object.freeze(['armL', 'armR', 'handL', 'handR']);
+      const BODY_PROFILE_STATUSES = Object.freeze(
+        ['ok', 'partial', 'not_observed', 'absent']);
+      const BODY_PROFILE_STORAGE_KEY = 'univoz.bodyProfile.v1';
+
+      const MIN_SAMPLES = 20;
+      const OK_RATIO = 0.6;
+      const SEEN_RATIO = 0.1;
+      const MIN_VISIBILITY = 0.5;
+      const I = {NOSE: 0, MOUTH_L: 9, MOUTH_R: 10, L_SHOULDER: 11, R_SHOULDER: 12,
+        L_ELBOW: 13, R_ELBOW: 14, L_WRIST: 15, R_WRIST: 16, L_PINKY: 17,
+        R_PINKY: 18, L_INDEX: 19, R_INDEX: 20};
+
+      const pt = (p) => Array.isArray(p) ? [+p[0], +p[1], +p[2]] :
+        [+p?.x, +p?.y, +p?.z];
+      const visibility = (p) => Array.isArray(p) ? (p.length >= 4 ? +p[3] : NaN) :
+        +(p?.visibility ?? NaN);
+      const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+      const mid = (a, b) => [0, 1, 2].map((i) => (a[i] + b[i]) * 0.5);
+
+      function median(xs) {
+        if (!xs.length) return null;
+        const s = [...xs].sort((a, b) => a - b);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) * 0.5;
+      }
+
+      /**
+       * @param {Array<[pose, poseWorld]>} frames
+       * @param {{declared?: object, minSamples?: number, minVisibility?: number}} options
+       */
+      function estimateBodyProfile(frames, {
+        declared = {},
+        minSamples = MIN_SAMPLES,
+        minVisibility = MIN_VISIBILITY,
+      } = {}) {
+        for (const [k, v] of Object.entries(declared)) {
+          if (!BODY_PROFILE_LIMBS.includes(k) || !BODY_PROFILE_STATUSES.includes(v)) {
+            throw new RangeError(`declaracion invalida: ${k}=${v}`);
+          }
+        }
+        const samples = {shoulderWidth: [], upperL: [], upperR: [], foreL: [],
+          foreR: [], handL: [], handR: [], neck: []};
+        const reach = {armL: [], armR: []};
+        const seen = {armL: 0, armR: 0, handL: 0, handR: 0};
+        let n = 0;
+
+        for (const [pose, world] of frames) {
+          if (!Array.isArray(pose) || !Array.isArray(world) || pose.length < 33 ||
+              world.length < 33) continue;
+          const vis = (i) => visibility(pose[i]) >= minVisibility;
+          if (!vis(I.L_SHOULDER) || !vis(I.R_SHOULDER)) continue;
+          const w = world.map(pt);
+          n += 1;
+          samples.shoulderWidth.push(dist(w[I.L_SHOULDER], w[I.R_SHOULDER]));
+          for (const [side, shoulder, elbow, wrist, pinky, index] of [
+            ['L', I.L_SHOULDER, I.L_ELBOW, I.L_WRIST, I.L_PINKY, I.L_INDEX],
+            ['R', I.R_SHOULDER, I.R_ELBOW, I.R_WRIST, I.R_PINKY, I.R_INDEX],
+          ]) {
+            if (vis(elbow) && vis(wrist)) {
+              const upper = dist(w[shoulder], w[elbow]);
+              const fore = dist(w[elbow], w[wrist]);
+              samples[`upper${side}`].push(upper);
+              samples[`fore${side}`].push(fore);
+              seen[`arm${side}`] += 1;
+              if (upper + fore > 1e-6) {
+                reach[`arm${side}`].push(dist(w[shoulder], w[wrist]) / (upper + fore));
+              }
+            }
+            if (vis(wrist)) {
+              samples[`hand${side}`].push(dist(w[wrist], mid(w[pinky], w[index])));
+              seen[`hand${side}`] += 1;
+            }
+          }
+          if (vis(I.NOSE)) {
+            samples.neck.push(dist(mid(w[I.L_SHOULDER], w[I.R_SHOULDER]),
+              mid(w[I.MOUTH_L], w[I.MOUTH_R])));
+          }
+        }
+
+        const measures = Object.fromEntries(Object.entries(samples).map(([k, v]) =>
+          [k, v.length >= minSamples ? median(v) : null]));
+        const capability = {};
+        for (const limb of BODY_PROFILE_LIMBS) {
+          if (declared[limb]) {
+            capability[limb] = declared[limb];
+            continue;
+          }
+          const ratio = n ? seen[limb] / n : 0;
+          if (n >= minSamples && ratio >= OK_RATIO) capability[limb] = 'ok';
+          else if (n >= minSamples && ratio < SEEN_RATIO) capability[limb] = 'not_observed';
+          else capability[limb] = 'partial';
+        }
+        const rom = Object.fromEntries(Object.entries(reach).map(([k, v]) =>
+          [k, v.length >= minSamples ? Math.max(...v) : null]));
+
+        return {version: BODY_PROFILE_VERSION, samples: n, measures, rom, capability,
+          declared: {...declared}};
+      }
+
+      /** Valida un perfil cargado de almacenamiento; null si no sirve. */
+      function parseBodyProfile(raw) {
+        try {
+          const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (!value || value.version !== BODY_PROFILE_VERSION) return null;
+          if (!value.measures || !value.capability) return null;
+          return value;
+        } catch (_) {
+          return null;
+        }
+      }
+      return {BODY_PROFILE_VERSION, BODY_PROFILE_LIMBS, BODY_PROFILE_STATUSES, BODY_PROFILE_STORAGE_KEY, estimateBodyProfile, parseBodyProfile};
+    })();
+    // ---- fin rig_body_profile.mjs ----
+
+    // ---- inicio rig_retarget.mjs (antes importado por separado) ----
+    const {RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, createAvatarRigProfile, retargetArm} = (() => {
+      // Retargeter SignSpaceFrame -> avatar con proporciones propias.
+      //
+      // Lejos del cuerpo manda la DIRECCION de cada segmento del usuario aplicada
+      // a los huesos del avatar (cinematica directa): un brazo largo o corto no
+      // deforma la pose. Cerca de un ancla (nariz, boca, pecho) manda el LUGAR: la
+      // palma se resuelve contra el ancla equivalente del avatar con el mismo
+      // desplazamiento en anchos de hombro, para que tocar el menton siga siendo
+      // tocar el menton. Entre ambos extremos se mezcla con smoothstep.
+      //
+      // Marco del cuerpo del avatar: origen en el centro de hombros, +x derecha
+      // del personaje, +y arriba, +z al frente, en metros del avatar.
+
+      // import {SS, SS_CHEST} from './rig_sign_space.mjs'; (nombres ya en ambito)
+
+      const RETARGET_ANCHOR_NEAR = 0.25;
+      const RETARGET_ANCHOR_FAR = 0.60;
+
+      const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+      const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+      const len = (a) => Math.hypot(a[0], a[1], a[2]);
+      const lerp = (a, b, t) => add(a, mul(sub(b, a), t));
+      const slice3 = (v, off) => [v[off], v[off + 1], v[off + 2]];
+      const smoothstep = (e0, e1, x) => {
+        const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+        return t * t * (3 - 2 * t);
+      };
+
+      /**
+       * Perfil del avatar en su marco del cuerpo. `shoulderL`/`shoulderR` y las
+       * anclas en metros; si faltan anclas se usan proporciones humanas tipicas.
+       */
+      function createAvatarRigProfile({
+        shoulderL, shoulderR, upperL, upperR, foreL, foreR,
+        palmOffset = null, nose = null, mouth = null, chest = null,
+      }) {
+        const shoulderWidth = len(sub(shoulderR, shoulderL));
+        if (!(shoulderWidth > 0)) throw new RangeError('avatar sin ancho de hombros');
+        for (const [k, v] of Object.entries({upperL, upperR, foreL, foreR})) {
+          if (!(v > 0)) throw new RangeError(`avatar sin largo ${k}`);
+        }
+        const sw = shoulderWidth;
+        return {
+          shoulderWidth: sw,
+          shoulders: {L: shoulderL, R: shoulderR},
+          upper: {L: upperL, R: upperR},
+          fore: {L: foreL, R: foreR},
+          palmOffset: palmOffset ?? 0.25 * sw,
+          anchors: {
+            nose: nose ?? [0, 0.62 * sw, 0.22 * sw],
+            mouth: mouth ?? [0, 0.48 * sw, 0.20 * sw],
+            chest: chest ?? mul(SS_CHEST, sw),
+          },
+        };
+      }
+
+      /**
+       * @param frame SignSpaceFrame (de signSpaceFrame o de la biblioteca)
+       * @param avatar perfil de createAvatarRigProfile
+       * @param side 'L' | 'R'
+       * @returns {{palm, wrist, elbow, anchor, anchorWeight}|null} null si el
+       *   brazo no existe en el frame (mascara): el visor conserva su estado.
+       */
+      function retargetArm(frame, avatar, side) {
+        if (!frame?.mask?.[`arm${side}`]) return null;
+        const v = frame.values;
+        const L = side === 'L';
+        const upperDir = slice3(v, L ? SS.OFF_UPPER_L : SS.OFF_UPPER_R);
+        const foreDir = slice3(v, L ? SS.OFF_FORE_L : SS.OFF_FORE_R);
+        const hasHand = !!frame.mask[`hand${side}`];
+        const handDir = hasHand ? slice3(v, L ? SS.OFF_HANDDIR_L : SS.OFF_HANDDIR_R)
+          : foreDir;
+
+        const shoulder = avatar.shoulders[side];
+        const upper = avatar.upper[side];
+        const fore = avatar.fore[side];
+        const elbow = add(shoulder, mul(upperDir, upper));
+        const wristFk = add(elbow, mul(foreDir, fore));
+        const palmFk = add(wristFk, mul(handDir, avatar.palmOffset));
+
+        let palm = palmFk;
+        let anchor = null;
+        let anchorWeight = 0;
+        if (hasHand) {
+          const palmUser = slice3(v, L ? SS.OFF_PALM_L : SS.OFF_PALM_R);
+          const candidates = [['chest', SS_CHEST]];
+          if (frame.mask.face) {
+            candidates.push(['nose', slice3(v, SS.OFF_NOSE)],
+              ['mouth', slice3(v, SS.OFF_MOUTH)]);
+          }
+          let best = null;
+          for (const [name, userAnchor] of candidates) {
+            const offset = sub(palmUser, userAnchor);
+            const d = len(offset);
+            if (!best || d < best.d) best = {name, offset, d};
+          }
+          anchorWeight = 1 - smoothstep(RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, best.d);
+          if (anchorWeight > 0) {
+            anchor = best.name;
+            const palmAnchor = add(avatar.anchors[best.name],
+              mul(best.offset, avatar.shoulderWidth));
+            palm = lerp(palmFk, palmAnchor, anchorWeight);
+          }
+        }
+
+        let wrist = sub(palm, mul(handDir, avatar.palmOffset));
+        const reach = sub(wrist, shoulder);
+        const maxReach = (upper + fore) * 0.999;
+        if (len(reach) > maxReach) {
+          wrist = add(shoulder, mul(reach, maxReach / len(reach)));
+          palm = add(wrist, mul(handDir, avatar.palmOffset));
+        }
+        return {palm, wrist, elbow, anchor, anchorWeight};
+      }
+      return {RETARGET_ANCHOR_NEAR, RETARGET_ANCHOR_FAR, createAvatarRigProfile, retargetArm};
+    })();
+    // ---- fin rig_retarget.mjs ----
+
+    // ---- fin modulos inline ----
+
 
     const standaloneWeb =
       new URLSearchParams(window.location.search).get('standalone') === '1' ||

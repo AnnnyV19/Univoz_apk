@@ -388,6 +388,8 @@ run_tests() {
     PYTHONPATH="$AI_DIR" "$PYTHON_BIN" -m pytest -q "$AI_DIR/tests"
     PYTHONPATH="$AI_DIR" "$PYTHON_BIN" -m compileall -q "$AI_DIR/ai_engine"
     log_info 'Sintaxis JavaScript y diff...'
+    "$PYTHON_BIN" "$SENAS_DIR/tools/inline_viewer_modules.py" --check ||
+        die "Visor desincronizado: corre '$PYTHON_BIN senas_core/tools/inline_viewer_modules.py'."
     awk '
         /<script[^>]*type="module"/ {inside=1; next}
         inside && /<\/script>/ {exit}

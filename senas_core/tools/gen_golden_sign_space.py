@@ -89,7 +89,22 @@ def build():
                                       "rom": got["rom"],
                                       "samples": got["samples"]}})
 
+    # Mismo gesto (palma en la boca) con cuerpos de proporciones distintas:
+    # el retargeter debe llevar la palma del avatar al mismo lugar de SU
+    # cara en todos (rig-tests/rig_retarget.test.mjs).
+    contact_cases = []
+    for name, kw in (("adulto", {}),
+                     ("brazos_cortos", {"brazo": 0.20, "antebrazo": 0.17}),
+                     ("brazos_largos", {"brazo": 0.40, "antebrazo": 0.35}),
+                     ("nino", {"ancho": 0.26, "brazo": 0.19, "antebrazo": 0.16,
+                               "cuello": 0.15}),
+                     ("sentado", {"caderas": False})):
+        cuello = kw.get("cuello", 0.22)
+        pose, mundo = esqueleto(palma=(0.0, cuello - 0.05, 0.10), **kw)
+        contact_cases.append({"name": name, "pose": pose, "pose_mundo": mundo})
+
     return {
+        "contact_cases": contact_cases,
         "version": ss.SIGN_SPACE_VERSION,
         "profile_version": bp.BODY_PROFILE_VERSION,
         "dim": ss.SIGN_SPACE_DIM,
