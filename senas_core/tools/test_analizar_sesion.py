@@ -111,3 +111,15 @@ def test_frames_agrupados_por_marca_de_protocolo():
     assert r["by_step"]["2"]["frames"] == 1
     assert r["by_step"]["2"]["top_errors"] == [["x", 1]] or \
         r["by_step"]["2"]["top_errors"] == [("x", 1)]
+
+
+def test_metricas_por_modo_de_retarget():
+    regs = [{"kind": "session_start", "session_id": "r"}]
+    regs += [dict(_frame(i * 33), retarget="legacy") for i in range(3)]
+    regs += [dict(_frame(100 + i * 33, rejected=("hand_duplicate",)),
+                  retarget="anchors") for i in range(2)]
+    r = an.resumir(regs)
+    assert r["by_retarget"]["legacy"]["frames"] == 3
+    assert r["by_retarget"]["anchors"]["hand_rejects"] == {"hand_duplicate": 2}
+    solo = an.resumir(regs[:4])
+    assert solo["by_retarget"] == {}

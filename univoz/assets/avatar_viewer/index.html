@@ -6790,6 +6790,7 @@
             const caraCabeza = caraVivo ? headRotationFromFace(caraVivo.landmarks) : null;
             sesionActual.frame({
               t: timestampMs, id: sourceFrameId, mode: capturaModo,
+              retarget: retargetMode, view: vistaAvatar,
               ms: {pose: webCameraState.poseMs, hand: webCameraState.handMs,
                 proc: performance.now() - processStartedAt},
               pose_ran: !!ejecutarPose,
@@ -7060,6 +7061,12 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
+    const anchoCamaraWeb = (() => {
+      try {
+        const pedido = Number(new URLSearchParams(location.search).get('res'));
+        return [360, 480, 640, 960].includes(pedido) ? pedido : 360;
+      } catch (_) { return 360; }
+    })();
     async function solicitarStreamWeb() {
       const solicitud = navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -7068,9 +7075,10 @@
           frameRate: { ideal: 30, max: 60 },
           // 360x270 keeps all 21 points usable; controlled A/B at 320x240
           // increased detector p95 on this host. Real device must still
-          // validate 30 FPS target.
-          width: { ideal: 360, max: 360 },
-          height: { ideal: 270, max: 270 },
+          // validate 30 FPS target. ?res=480|640|960 para medir si Holistic
+          // mejora las manos con mas resolucion (se registra en la sesion).
+          width: { ideal: anchoCamaraWeb, max: anchoCamaraWeb },
+          height: { ideal: anchoCamaraWeb * 3 / 4, max: anchoCamaraWeb * 3 / 4 },
         },
       });
       let cancelado = false;

@@ -50,6 +50,24 @@ def leer(ruta):
     return out
 
 
+def por_modo(frames, campo):
+    """Metricas por valor de un campo del frame (p. ej. retarget legacy vs
+    anchors activados a mitad de sesion)."""
+    grupos = collections.defaultdict(list)
+    for f in frames:
+        if f.get(campo) is not None:
+            grupos[f[campo]].append(f)
+    if len(grupos) < 2:
+        return {}
+    out = {}
+    for valor, fs in sorted(grupos.items()):
+        out[valor] = resumir([{"kind": "session_start"}] + fs)
+        out[valor].pop("by_step", None)
+        out[valor].pop("by_retarget", None)
+        out[valor].pop("meta", None)
+    return out
+
+
 def por_paso(frames, eventos):
     """Agrupa frames por la ultima marca de protocolo (teclas 1-9) vista
     antes de cada frame, usando el orden de `seq`. Resume cobertura y
@@ -161,6 +179,7 @@ def resumir(registros):
                                      for k in ("yaw", "pitch", "roll")}
     out["events"] = dict(collections.Counter(e.get("type") for e in eventos))
     out["by_step"] = por_paso(frames, eventos)
+    out["by_retarget"] = por_modo(frames, "retarget")
     perfil = next((e.get("profile") for e in eventos
                    if e.get("type") == "body_profile"), None)
     if perfil:
