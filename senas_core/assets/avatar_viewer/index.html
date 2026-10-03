@@ -2395,8 +2395,10 @@
       kMediaPipeVersion + '/wasm';
     // Reutiliza los mismos .task que Android. El servidor web sirve senas_core
     // como raiz, por eso esta ruta funciona en scripts/univoz.sh web.
-    const kPoseModelWeb = '../../android/app/src/main/assets/pose_landmarker_lite.task';
-    const kHandModelWeb = '../../android/app/src/main/assets/hand_landmarker.task';
+    // Flutter Web empaqueta estos modelos junto al visor; Android conserva
+    // sus modelos nativos en android/app/src/main/assets.
+    const kPoseModelWeb = 'pose_landmarker_lite.task';
+    const kHandModelWeb = 'hand_landmarker.task';
     const $estado = document.getElementById('estado');
     const $estadoTexto = document.getElementById('estadoTexto');
     function avisar(msg) {
