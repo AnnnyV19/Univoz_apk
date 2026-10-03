@@ -102,6 +102,17 @@ mentón, pecho, caderas) y longitudes de dedos.
 | Zurdo | Mano dominante en vivo, espejo en reconocimiento y avatar |
 | Rasgos no manuales | `FaceFrameV1`: giro de cabeza, cejas, boca, mirada |
 
+## Cómo probarlo
+
+```bash
+./scripts/univoz.sh web
+# abrir http://127.0.0.1:8080/assets/avatar_viewer/index.html?standalone=1&retarget=anchors
+```
+
+En el panel: `Iniciar cámara`, marcar *Adaptar a mi cuerpo (anclas)* y,
+opcional, `Medir mi cuerpo`. Comparar con la casilla desmarcada (`legacy`)
+tocándose mentón, nariz y pecho.
+
 ## Verificación
 
 - Golden Dart == Python para `SignSpaceFrame`.

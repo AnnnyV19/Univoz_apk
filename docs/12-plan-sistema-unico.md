@@ -40,6 +40,32 @@ Pendiente estructural: `univoz/` podría consumir el visor del paquete
 `senas_core` en vez de una copia; hasta entonces, todo cambio del visor se
 aplica en ambas copias y se verifica con `diff -r`.
 
+### Avance en código (rama `fase-1-mediapipe`)
+
+Hecho con tests automáticos; **sin validar aún en cámara física** (gate de
+Fase 0 pendiente):
+
+- [x] `SignSpaceFrame` v1 en Python/Dart/JS con golden compartido, incluido
+  modo tren superior (Fase 1 + Fase 3).
+- [x] `BodyProfileV1` + capacidad con declaración del usuario (Fase 2).
+- [x] Fast User Capture con consentimiento en visor web y clase Dart (Fase 2).
+- [x] Retargeter por anclas: contacto mano–boca conservado con brazos cortos,
+  largos, niño y sentado (< 5 % del ancho de hombros) (Fase 3).
+- [x] Cableado en `resolverBrazo` tras flag (`?retarget=anchors`,
+  `window.configurarRetarget`, casilla del panel). Por defecto `legacy`.
+- [x] Biblioteca: pista `sign_space` pareada al grabar, reproducir y en
+  `AvatarBridge.reproducir` (Fase 4).
+- [x] `tools/inline_viewer_modules.py`: los bloques inline del visor se
+  generan desde los `.mjs`; `univoz.sh test` falla si derivan.
+- [ ] Hand world landmarks en Kotlin/web (Fase 1).
+- [ ] Flag `pose_landmarker_full` (Fase 1; requiere descargar el modelo).
+- [ ] Reconstrucción por perfil cuando falta hombro o codo (Fase 1).
+- [ ] Mano dominante en vivo (Fase 1).
+- [ ] UI de captura de perfil en la app Android (Fase 2).
+- [ ] Un solo `palmFrameV2` y `jointLimits` anatómicos (Fase 3; requieren
+  validación visual).
+- [ ] Filtro One Euro sobre `SignSpaceFrame` (hoy llega crudo al retarget).
+
 ### Fase 0 — Baseline físico
 
 Protocolo [09-pruebas-camara.md](09-pruebas-camara.md) en web y Android, 300

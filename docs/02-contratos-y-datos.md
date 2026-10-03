@@ -74,6 +74,46 @@ Pueden viajar aparte:
 El bloque `meta` no cambia `frame_dim`. Rostro y profundidad futura deben tener
 contratos propios y versión explícita.
 
+## `SignSpaceFrame` v1 (avatar y biblioteca)
+
+Contrato aparte de `MotionFrameV2`: no lo reemplaza ni cambia sus 152
+valores. Separa la seña del cuerpo de quien la hace para que el avatar la
+copie o reproduzca con sus propias proporciones. Implementación canónica
+`senas_core/tools/sign_space.py`; espejos `lib/sign_space.dart` y
+`assets/avatar_viewer/rig_sign_space.mjs`; golden
+`test/golden/sign_space_cases.json` (tolerancia `1e-5`).
+
+| Offset | Tam. | Contenido |
+|---|---|---|
+| 0 / 6 | 3 | Dirección unitaria hombro→codo izquierdo / derecho |
+| 3 / 9 | 3 | Dirección unitaria codo→muñeca izquierda / derecha |
+| 12 / 15 | 3 | Centro de palma izq. / der. (anchos de hombro) |
+| 18 | 3 | Ancla nariz |
+| 21 | 3 | Ancla boca |
+| 24 / 27 | 3 | Dirección muñeca→nudillos izq. / der. |
+| 30 | 5 | Contactos 0/1: cara izq., cara der., pecho izq., pecho der., manos |
+
+- Marco del cuerpo igual que 152D: `+x` derecha de la persona, `+y` arriba,
+  `+z` al frente, origen en el centro de hombros.
+- `mode`: `full` (vertical desde caderas) o `upper` (caderas no visibles:
+  vertical de la cámara; sentado, silla de ruedas, medio cuerpo).
+- `mask`: `armL`, `armR`, `handL`, `handR`, `face`. Un bloque enmascarado
+  vale `0.0` y la máscara, no el valor, dice que no existe.
+- Viaja en `sourceMeta.sign_space` (Android → visor) y, en biblioteca, como
+  campo opcional `sign_space` (+ `sign_space_version`) de `MotionSequenceV2`,
+  un frame o `null` por cada frame 152D. Lectores viejos lo ignoran.
+
+## `BodyProfileV1` y `CapabilityMask`
+
+Medianas de ancho de hombros, brazo, antebrazo, mano y cuello por lado
+(metros), alcance máximo observado (`rom`) y capacidad por miembro
+(`ok`, `partial`, `not_observed`, `absent`). `absent` solo puede venir
+declarado por el usuario: la cámara no distingue ausente de fuera de cuadro.
+Se estima con Fast User Capture (3 poses guiadas) tras consentimiento
+explícito; se guarda local (`univoz.bodyProfile.v1` en web), versionado y
+borrable. Nunca guarda video ni landmarks: los frames se descartan al
+terminar la estimación.
+
 ## Backend y almacenamiento
 
 - Flutter reconoce offline con DTW.
