@@ -12,6 +12,7 @@ import 'camera_bridge.dart';
 import 'controlador_captura.dart';
 import 'muestras_locales.dart';
 import 'skeleton_painter.dart' show SkeletonPainter;
+import 'sesion_automatica.dart';
 
 /// Debajo de esto la grabacion casi seguro salio mal (mano fuera de cuadro,
 /// boton apretado dos veces sin querer).
@@ -95,6 +96,9 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
       frontal: _almacen.ajustes.camaraFrontal,
       cruzarManos: _almacen.ajustes.cruzarManos,
     );
+    if (!mounted || !_ctrl.lista) return;
+    await activarSesionConConsentimiento(context, _ctrl, _almacen,
+        pantalla: 'captura');
   }
 
   /// Cambia entre camara frontal y trasera sin salir de la pantalla, y deja
@@ -175,6 +179,10 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
             _signerCtrl.text.trim().isEmpty ? null : _signerCtrl.text.trim(),
         captura: captura,
       );
+      _ctrl.sesion?.evento('sample_saved', {
+        'gloss': _glosa,
+        'frames': captura.framesCrudos.length,
+      });
       if (!mounted) return;
       setState(() => _guardadasEstaSesion++);
       _mostrar(

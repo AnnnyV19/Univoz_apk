@@ -27,7 +27,7 @@ import 'camera_bridge.dart';
 import 'controlador_captura.dart';
 import 'motion_contract.dart';
 import 'muestras_locales.dart';
-import 'sesion_captura.dart' show sumideroArchivo;
+import 'sesion_automatica.dart';
 import 'skeleton_painter.dart' show SkeletonPainter;
 
 /// Cada cuanto se le manda un frame al WebView. La camara entrega a ~30 fps,
@@ -112,55 +112,6 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
     if (mounted) setState(() {});
   }
 
-  /// Consentimiento una vez; despues, en cada encendido de camara se mide el
-  /// cuerpo y se registra la sesion en <documentos>/sesiones (sin video).
-  Future<void> _activarSesionAutomatica() async {
-    var ajustes = _almacen.ajustes;
-    if (!ajustes.consentimientoSesion) {
-      if (!mounted) return;
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Medir y registrar la sesión'),
-          content: const Text(
-            'Para adaptar el avatar a tu cuerpo y mejorar la detección, cada '
-            'vez que enciendas la cámara se medirán tus proporciones y se '
-            'registrará la sesión (puntos del cuerpo, manos y cara; nunca '
-            'video ni imágenes). Se guarda solo en este teléfono.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('No'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Acepto'),
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return;
-      ajustes = ajustes.copiar()..consentimientoSesion = true;
-      await _almacen.guardarAjustes(ajustes);
-    }
-    final docs = await getApplicationDocumentsDirectory();
-    _ctrl.onPerfilCorporal = (perfil) {
-      final nuevos = _almacen.ajustes.copiar()..perfilCorporal = perfil;
-      unawaited(_almacen.guardarAjustes(nuevos));
-    };
-    _ctrl.activarSesionAutomatica(
-      sumidero: sumideroArchivo(Directory('${docs.path}/sesiones')),
-      meta: {
-        'platform': 'android',
-        'screen': 'espejo',
-        'camera_front': ajustes.camaraFrontal,
-        'calibration': ajustes.rigCalibration.toJson(),
-        'body_profile': ajustes.perfilCorporal?.toJson(),
-      },
-    );
-  }
-
   Future<void> _arrancar() async {
     if (!_bridge.disponible) {
       if (mounted) {
@@ -180,7 +131,9 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
       }
       await _ctrl.iniciar(frontal: _almacen.ajustes.camaraFrontal);
       if (!_ctrl.lista) return;
-      await _activarSesionAutomatica();
+      if (!mounted) return;
+      await activarSesionConConsentimiento(context, _ctrl, _almacen,
+          pantalla: 'espejo');
       await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
       // Esta pantalla es para verte a ti mismo: el avatar actua como reflejo.
       // Las pantallas de traduccion dejan la vista de interlocutor.

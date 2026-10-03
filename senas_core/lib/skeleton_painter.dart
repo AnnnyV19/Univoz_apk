@@ -14,6 +14,7 @@ import 'dtw.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
 import 'voz.dart';
+import 'sesion_automatica.dart';
 
 class SkeletonPainter extends CustomPainter {
   final LandmarkFrame? frame;
@@ -310,6 +311,11 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       cruzarManos: _almacen.ajustes.cruzarManos,
     );
     if (!mounted) return;
+    if (_ctrl.lista) {
+      await activarSesionConConsentimiento(context, _ctrl, _almacen,
+          pantalla: 'traduccion');
+      if (!mounted) return;
+    }
     // Si ya estábamos en modo auto antes de que la cámara terminara de iniciar,
     // arrancamos el detector ahora que el stream está disponible.
     if (_modoAuto) _detector.iniciar(_ctrl.camara.framesPreview);
