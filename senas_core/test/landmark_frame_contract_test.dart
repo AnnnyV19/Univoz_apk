@@ -117,4 +117,26 @@ void main() {
     });
     expect(frame.signSpace(), isNull);
   });
+
+  test('LandmarkFrame lee cara y manos metricas de la captura Holistic', () {
+    final frame = LandmarkFrame.fromMap({
+      't': 10,
+      'pose': _validPose(),
+      'poseMundo': _validWorldPose(),
+      'left': List<double>.filled(21 * 3, 0.2),
+      'right': null,
+      'leftWorld': List<double>.filled(21 * 3, 0.01),
+      'face': List<double>.filled(kFaceKeypoints.length * 3, 0.5),
+      'capture_mode': 'holistic',
+      'pose_t': 10,
+      'hands_t': 10,
+    });
+    expect(frame.captureMode, 'holistic');
+    expect(frame.face, hasLength(kFaceKeypoints.length));
+    expect(frame.leftWorld, hasLength(21));
+    expect(frame.rightWorld, isNull);
+    final json = frame.toJson();
+    expect(json['capture_mode'], 'holistic');
+    expect(json['face'], hasLength(17));
+  });
 }

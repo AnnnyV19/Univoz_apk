@@ -8,6 +8,28 @@
 // izquierda (la nariz va a la derecha de la imagen); pitch > 0 = mira arriba;
 // roll > 0 = inclina hacia su hombro derecho (lado izquierdo de la imagen).
 
+// Puntos clave que viajan desde Android (FACE_KEYPOINTS en Kotlin,
+// kFaceKeypoints en Dart). Cubren todo lo que usan las funciones de abajo.
+export const FACE_KEYPOINTS = Object.freeze([1, 10, 152, 33, 133, 159, 145,
+  263, 362, 386, 374, 13, 14, 61, 291, 105, 334]);
+
+/**
+ * Reconstruye una malla dispersa (478 posiciones, solo las clave llenas)
+ * desde los puntos clave [[x, y, z], ...] en el orden de FACE_KEYPOINTS.
+ */
+export function faceFromKeypoints(points) {
+  if (!Array.isArray(points) || points.length !== FACE_KEYPOINTS.length) return null;
+  const out = new Array(478).fill(null);
+  for (let k = 0; k < FACE_KEYPOINTS.length; k++) {
+    const p = points[k];
+    if (!Array.isArray(p) || p.length < 3 || !p.every((v) => Number.isFinite(Number(v)))) {
+      return null;
+    }
+    out[FACE_KEYPOINTS[k]] = {x: Number(p[0]), y: Number(p[1]), z: Number(p[2])};
+  }
+  return out;
+}
+
 export const FACE_IDX = Object.freeze({
   NOSE_TIP: 1, FOREHEAD: 10, CHIN: 152,
   RIGHT_EYE_OUTER: 33, LEFT_EYE_OUTER: 263,

@@ -99,6 +99,15 @@ class LandmarkFrame {
   final Map<String, dynamic> association;
   final List<Map<String, dynamic>> errors;
 
+  /// Solo captura Holistic: 17 puntos clave de cara (x, y, z en imagen) en
+  /// el orden de [kFaceKeypoints], y manos en metros.
+  final List<List<double>>? face;
+  final List<List<double>>? leftWorld;
+  final List<List<double>>? rightWorld;
+
+  /// `holistic` o `separado` (respaldo).
+  final String captureMode;
+
   const LandmarkFrame({
     required this.timestampMs,
     this.pose,
@@ -112,6 +121,10 @@ class LandmarkFrame {
     this.sourceSkewMs,
     this.association = const {},
     this.errors = const [],
+    this.face,
+    this.leftWorld,
+    this.rightWorld,
+    this.captureMode = 'separado',
   });
 
   /// Decodifica desde el mapa que llega por el canal del lado nativo.
@@ -124,10 +137,15 @@ class LandmarkFrame {
     var der = _desempacar(map['right'], 3);
     var renderIzq = _desempacar(map['renderLeft'] ?? map['render_left'], 3);
     var renderDer = _desempacar(map['renderRight'] ?? map['render_right'], 3);
+    var mundoIzq = _desempacar(map['leftWorld'], 3);
+    var mundoDer = _desempacar(map['rightWorld'], 3);
     if (swapHands) {
       final tmp = izq;
       izq = der;
       der = tmp;
+      final tmpMundo = mundoIzq;
+      mundoIzq = mundoDer;
+      mundoDer = tmpMundo;
       final tmpRender = renderIzq;
       renderIzq = renderDer;
       renderDer = tmpRender;
@@ -160,6 +178,10 @@ class LandmarkFrame {
           (poseT != null && handsT != null ? (poseT - handsT).abs() : null),
       association: association,
       errors: errors,
+      face: _desempacar(map['face'], 3),
+      leftWorld: mundoIzq,
+      rightWorld: mundoDer,
+      captureMode: map['capture_mode'] as String? ?? 'separado',
     );
   }
 
@@ -249,11 +271,37 @@ class LandmarkFrame {
         if (association.isNotEmpty) 'association': association,
         if (errors.isNotEmpty) 'errors': errors,
         if (visibilidadMin != null) 'visibilidad_min': visibilidadMin,
+        'capture_mode': captureMode,
+        if (face != null) 'face': face,
+        if (leftWorld != null) 'leftWorld': leftWorld,
+        if (rightWorld != null) 'rightWorld': rightWorld,
         'valido': esValido,
       };
 
   bool get esValido => normalize() != null;
 }
+
+/// Indices de la malla facial que manda la captura Holistic, en el orden de
+/// [LandmarkFrame.face]. Mismos que FACE_KEYPOINTS (Kotlin) y rig_face.mjs.
+const List<int> kFaceKeypoints = [
+  1,
+  10,
+  152,
+  33,
+  133,
+  159,
+  145,
+  263,
+  362,
+  386,
+  374,
+  13,
+  14,
+  61,
+  291,
+  105,
+  334,
+];
 
 /// Alias público del contrato de captura versionado.
 typedef LandmarkFrameV1 = LandmarkFrame;

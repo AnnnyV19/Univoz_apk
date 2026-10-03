@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   FACE_IDX,
+  FACE_KEYPOINTS,
+  faceFromKeypoints,
   blendshapesToVrmExpressions,
   expressionsFromFaceLandmarks,
   headRotationFromFace,
@@ -128,4 +130,17 @@ test('geometric expressions detect blink, open jaw, smile and raised brows', () 
 test('geometric expressions reject incomplete faces', () => {
   assert.deepEqual(expressionsFromFaceLandmarks(null), {});
   assert.deepEqual(expressionsFromFaceLandmarks(faceWith().slice(0, 200)), {});
+});
+
+test('keypoints from Android rebuild a mesh good enough for head and expressions', () => {
+  const full = face({yaw: 0.3, pitch: -0.1});
+  const pts = FACE_KEYPOINTS.map((i) => [full[i].x, full[i].y, full[i].z]);
+  const sparse = faceFromKeypoints(pts);
+  const a = headRotationFromFace(full), b = headRotationFromFace(sparse);
+  close(a.yaw, b.yaw); close(a.pitch, b.pitch); close(a.roll, b.roll);
+  const open = faceWith({mouthOpen: 0.04});
+  const e = expressionsFromFaceLandmarks(
+    faceFromKeypoints(FACE_KEYPOINTS.map((i) => [open[i].x, open[i].y, open[i].z])));
+  assert.ok(e.aa > 0.9);
+  assert.equal(faceFromKeypoints([[1, 2, 3]]), null);
 });

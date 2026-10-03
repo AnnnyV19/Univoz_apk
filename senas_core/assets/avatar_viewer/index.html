@@ -3130,7 +3130,7 @@
     // ---- fin rig_holistic.mjs ----
 
     // ---- inicio rig_face.mjs (antes importado por separado) ----
-    const {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals, expressionsFromFaceLandmarks} = (() => {
+    const {FACE_KEYPOINTS, faceFromKeypoints, FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals, expressionsFromFaceLandmarks} = (() => {
       // Cara del usuario -> avatar (FaceFrameV1, canal aparte de 152D).
       //
       // Los rasgos no manuales (cejas, boca, mirada, giro de cabeza) son parte de
@@ -3140,6 +3140,28 @@
       // Convencion de la cabeza (vista de interlocutor): yaw > 0 = gira hacia SU
       // izquierda (la nariz va a la derecha de la imagen); pitch > 0 = mira arriba;
       // roll > 0 = inclina hacia su hombro derecho (lado izquierdo de la imagen).
+
+      // Puntos clave que viajan desde Android (FACE_KEYPOINTS en Kotlin,
+      // kFaceKeypoints en Dart). Cubren todo lo que usan las funciones de abajo.
+      const FACE_KEYPOINTS = Object.freeze([1, 10, 152, 33, 133, 159, 145,
+        263, 362, 386, 374, 13, 14, 61, 291, 105, 334]);
+
+      /**
+       * Reconstruye una malla dispersa (478 posiciones, solo las clave llenas)
+       * desde los puntos clave [[x, y, z], ...] en el orden de FACE_KEYPOINTS.
+       */
+      function faceFromKeypoints(points) {
+        if (!Array.isArray(points) || points.length !== FACE_KEYPOINTS.length) return null;
+        const out = new Array(478).fill(null);
+        for (let k = 0; k < FACE_KEYPOINTS.length; k++) {
+          const p = points[k];
+          if (!Array.isArray(p) || p.length < 3 || !p.every((v) => Number.isFinite(Number(v)))) {
+            return null;
+          }
+          out[FACE_KEYPOINTS[k]] = {x: Number(p[0]), y: Number(p[1]), z: Number(p[2])};
+        }
+        return out;
+      }
 
       const FACE_IDX = Object.freeze({
         NOSE_TIP: 1, FOREHEAD: 10, CHIN: 152,
@@ -3250,7 +3272,7 @@
           surprised: lin(ceja, BROW_NEUTRAL, BROW_FULL),
         };
       }
-      return {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals, expressionsFromFaceLandmarks};
+      return {FACE_KEYPOINTS, faceFromKeypoints, FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals, expressionsFromFaceLandmarks};
     })();
     // ---- fin rig_face.mjs ----
 
@@ -5526,8 +5548,7 @@
     let servidorSesionesOk = null;
     let sesionFlushTimer = null;
     // Puntos de cara que se guardan (la malla completa son 478).
-    const kCaraClave = [1, 10, 152, 33, 133, 159, 145, 263, 362, 386, 374,
-      13, 14, 61, 291, 105, 334];
+    const kCaraClave = FACE_KEYPOINTS;
     function consentimientoSesion() {
       try { return localStorage.getItem(kConsentimientoKey) === 'si'; }
       catch (_) { return false; }
@@ -7409,6 +7430,9 @@
       frameVivoSourceSkewMs = Number(sourceMeta?.source_skew_ms ?? 0);
       signSpaceVivo = filtrarSignSpace(
         parseSignSpaceFrame(sourceMeta?.sign_space), frameVivoTimestampMs);
+      // Android (Holistic nativo) manda 17 puntos clave de cara.
+      const caraPuntos = faceFromKeypoints(sourceMeta?.face_pts);
+      caraVivo = caraPuntos ? {landmarks: caraPuntos, blendshapes: {}} : null;
       frameVivoQuality = Number(quality) || 0;
       frameVivoRecibidoAt = performance.now();
       frameVivoExterno = !standaloneWeb;
