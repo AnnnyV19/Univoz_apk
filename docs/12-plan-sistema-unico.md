@@ -64,7 +64,7 @@ Fase 0 pendiente):
 - [ ] UI de captura de perfil en la app Android (Fase 2).
 - [ ] Un solo `palmFrameV2` y `jointLimits` anatómicos (Fase 3; requieren
   validación visual).
-- [ ] Filtro One Euro sobre `SignSpaceFrame` (hoy llega crudo al retarget).
+- [x] Filtro One Euro sobre `SignSpaceFrame` (respeta "Suavizar movimiento").
 
 ### Fase 0 — Baseline físico
 
