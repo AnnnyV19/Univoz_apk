@@ -14,7 +14,9 @@ import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 
 import 'camera_bridge.dart';
+import 'body_profile.dart';
 import 'motion_contract.dart';
+import 'sesion_captura.dart';
 import 'sign_norm.dart' show fillGaps, kTFrames, resample;
 
 /// Observable camera lifecycle. [lista] alone cannot distinguish a native
@@ -85,6 +87,56 @@ class ControladorCaptura extends ChangeNotifier {
 
   /// Cuantos frames utilizables lleva la grabacion en curso.
   int get framesGrabados => _buffer.length;
+
+  // ---- Sesion automatica (docs/13) ----------------------------------------
+  SesionCaptura? _sesion;
+  BodyProfileCapture? _capturaPerfil;
+  Timer? _flushSesion;
+  int _frameSesion = 0;
+
+  /// Se llama cuando la medicion automatica del cuerpo termina.
+  void Function(BodyProfile perfil)? onPerfilCorporal;
+  SesionCaptura? get sesion => _sesion;
+
+  /// Con consentimiento ya dado: registra cada frame de esta sesion de camara
+  /// en [sumidero] y mide el cuerpo en segundo plano.
+  void activarSesionAutomatica({
+    required SumideroSesion sumidero,
+    Map<String, dynamic> meta = const {},
+  }) {
+    unawaited(_cerrarSesion('restart'));
+    _sesion = SesionCaptura(sumidero: sumidero, meta: meta);
+    _capturaPerfil = BodyProfileCapture()..start(consent: true);
+    _frameSesion = 0;
+    _flushSesion?.cancel();
+    _flushSesion = Timer.periodic(
+        const Duration(seconds: 1), (_) => unawaited(_sesion?.flush()));
+    _sesion!.evento('session_auto_start');
+  }
+
+  void _registrarSesion(LandmarkFrame f) {
+    final sesion = _sesion;
+    if (sesion == null) return;
+    sesion.frame(frameDeSesion(f, id: ++_frameSesion));
+    final captura = _capturaPerfil;
+    if (captura != null && captura.state == BodyCaptureState.capturing) {
+      captura.push(f.pose, f.poseMundo);
+      if (captura.state == BodyCaptureState.done && captura.profile != null) {
+        sesion.evento('body_profile', {'profile': captura.profile!.toJson()});
+        onPerfilCorporal?.call(captura.profile!);
+        _capturaPerfil = null;
+      }
+    }
+  }
+
+  Future<void> _cerrarSesion(String razon) async {
+    _flushSesion?.cancel();
+    _flushSesion = null;
+    final sesion = _sesion;
+    _sesion = null;
+    _capturaPerfil = null;
+    await sesion?.cerrar(razon: razon);
+  }
   int get framesRecibidos => _framesCrudos.length;
   int get framesInvalidos => _framesInvalidos;
   bool get lista => iniciada != null;
@@ -113,6 +165,7 @@ class ControladorCaptura extends ChangeNotifier {
       (f) {
         if (_apagado || inicio != _inicioActual) return;
         frame.value = f;
+        _registrarSesion(f);
         if (!_primerFrameRecibido) {
           _primerFrameRecibido = true;
           _watchdogPreview?.cancel();
@@ -153,6 +206,7 @@ class ControladorCaptura extends ChangeNotifier {
   }
 
   void _marcarError(Object e) {
+    _sesion?.evento('camera_error', {'error': e.toString()});
     error = mensajeErrorCamara(e);
     estado = EstadoCamara.error;
     iniciada = null;
@@ -260,6 +314,7 @@ class ControladorCaptura extends ChangeNotifier {
   }
 
   Future<void> apagar() async {
+    await _cerrarSesion('camera_stop');
     _apagado = true;
     _inicioActual++;
     _watchdogPreview?.cancel();

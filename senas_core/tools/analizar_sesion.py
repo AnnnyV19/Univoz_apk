@@ -78,9 +78,18 @@ def resumir(registros):
                 dup_frames += 1
             if h.get("assignment"):
                 asign[h["assignment"].get("mode")] += 1
+            elif (h.get("association") or {}).get("hand_assignment_mode"):
+                # sesiones Android: el modo viene del motor Kotlin
+                asign[h["association"]["hand_assignment_mode"]] += 1
         out["hand_rejects"] = dict(rech)
         out["assignment_modes"] = dict(asign)
         errs = collections.Counter(c for f in frames for c in f.get("errors", []))
+        # En Android los rechazos de la compuerta llegan como errores.
+        for codigo in ("hand_duplicate", "hand_far_from_arm",
+                       "hand_scale_implausible", "hand_landmarks_invalid"):
+            if errs.get(codigo) and codigo not in rech:
+                rech[codigo] = errs[codigo]
+        out["hand_rejects"] = dict(rech)
         out["top_errors"] = errs.most_common(10)
         ms = [f.get("ms", {}) for f in frames]
         out["timing_ms"] = {k: {"p50": round(pct([m.get(k) for m in ms], .5), 1),

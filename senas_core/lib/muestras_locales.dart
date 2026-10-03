@@ -15,6 +15,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'body_profile.dart' show BodyProfile;
 import 'camera_bridge.dart';
 import 'controlador_captura.dart' show CapturaMovimiento;
 import 'motion_contract.dart';
@@ -56,6 +57,13 @@ class Ajustes {
   RigCalibration rigCalibration;
   bool rigDiagnosticMode;
 
+  /// Consentimiento para medir el cuerpo y registrar cada sesion de camara
+  /// (puntos, nunca video). Se pide una vez; se revoca en ajustes.
+  bool consentimientoSesion;
+
+  /// Ultimo perfil corporal medido (local, borrable).
+  BodyProfile? perfilCorporal;
+
   Ajustes({
     this.maxDistance = 0.55,
     this.minMargin = 0.12,
@@ -65,6 +73,8 @@ class Ajustes {
     this.hablarResultado = true,
     this.rigCalibration = const RigCalibration(),
     this.rigDiagnosticMode = false,
+    this.consentimientoSesion = false,
+    this.perfilCorporal,
   });
 
   Ajustes copiar() => Ajustes(
@@ -76,6 +86,8 @@ class Ajustes {
         hablarResultado: hablarResultado,
         rigCalibration: rigCalibration,
         rigDiagnosticMode: rigDiagnosticMode,
+        consentimientoSesion: consentimientoSesion,
+        perfilCorporal: perfilCorporal,
       );
 
   Map<String, dynamic> toJson() => {
@@ -87,6 +99,8 @@ class Ajustes {
         'hablar_resultado': hablarResultado,
         'rig_calibration': rigCalibration.toJson(),
         'rig_diagnostic_mode': rigDiagnosticMode,
+        'consentimiento_sesion': consentimientoSesion,
+        if (perfilCorporal != null) 'body_profile': perfilCorporal!.toJson(),
       };
 
   factory Ajustes.fromJson(Map<String, dynamic> j) => Ajustes(
@@ -100,7 +114,18 @@ class Ajustes {
             (j['rig_calibration'] as Map?)?.cast<String, dynamic>() ??
                 const {}),
         rigDiagnosticMode: j['rig_diagnostic_mode'] as bool? ?? false,
+        consentimientoSesion: j['consentimiento_sesion'] as bool? ?? false,
+        perfilCorporal: _perfilDe(j['body_profile']),
       );
+
+  static BodyProfile? _perfilDe(Object? raw) {
+    if (raw is! Map) return null;
+    try {
+      return BodyProfile.fromJson(raw.cast<String, dynamic>());
+    } catch (_) {
+      return null; // version vieja o dañada: se vuelve a medir
+    }
+  }
 }
 
 class MuestraLocal {

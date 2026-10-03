@@ -56,3 +56,13 @@ def test_leer_quita_duplicados_por_seq(tmp_path):
     regs = an.leer(str(ruta))
     assert [r["seq"] for r in regs] == [0, 1, 2, 3]
     assert an.resumir(regs)["frames"] == 2
+
+
+def test_sesion_android_lee_asignacion_y_rechazos():
+    f = {"kind": "frame", "t": 1, "pose": [[0, 0, 0, 1]],
+         "hands": {"association": {"hand_assignment_mode": "pose_arm_chain"}},
+         "tracked": {"left": True, "right": True},
+         "errors": ["hand_duplicate"], "ms": {}}
+    r = an.resumir([{"kind": "session_start", "session_id": "a"}, f, dict(f, t=2)])
+    assert r["assignment_modes"] == {"pose_arm_chain": 2}
+    assert r["hand_rejects"] == {"hand_duplicate": 2}

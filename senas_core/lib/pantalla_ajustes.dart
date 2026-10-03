@@ -6,7 +6,11 @@
 /// hacerlo probando, que es la unica forma honesta de calibrarlos.
 library pantalla_ajustes;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'motion_contract.dart';
 import 'muestras_locales.dart';
@@ -48,6 +52,40 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
           content: Text(
               'Ajustes guardados. Volvé a entrar a Reconocer para aplicarlos.')),
     );
+  }
+
+  Future<Directory> _dirSesiones() async =>
+      Directory('${(await getApplicationDocumentsDirectory()).path}/sesiones');
+
+  Future<void> _compartirUltimaSesion() async {
+    final dir = await _dirSesiones();
+    final archivos = await dir.exists()
+        ? (await dir.list().where((e) => e.path.endsWith('.jsonl')).toList())
+        : <FileSystemEntity>[];
+    if (archivos.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Todavía no hay sesiones.')));
+      return;
+    }
+    archivos.sort((a, b) => a.path.compareTo(b.path)); // id ordenable
+    await Share.shareXFiles(
+      [XFile(archivos.last.path, mimeType: 'application/x-ndjson')],
+      text: 'Sesión Univoz (solo puntos, sin video)',
+    );
+  }
+
+  Future<void> _borrarMisDatos() async {
+    final dir = await _dirSesiones();
+    if (await dir.exists()) await dir.delete(recursive: true);
+    _a = _almacen.ajustes.copiar()
+      ..consentimientoSesion = false
+      ..perfilCorporal = null;
+    await _almacen.guardarAjustes(_a);
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Datos de sesiones y perfil borrados.')));
   }
 
   Future<void> _calibrarPulgares() async {
@@ -270,6 +308,25 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
                 'Desactivalo solo si alguna seña usa izquierda/derecha como parte del significado.'),
             value: _a.espejoAutomatico,
             onChanged: (v) => setState(() => _a.espejoAutomatico = v),
+          ),
+          const Divider(height: 32),
+          _titulo('Sesiones y perfil corporal'),
+          _explicacion(_a.consentimientoSesion
+              ? 'Cada sesión de cámara se mide y se registra en este teléfono '
+                  '(puntos, nunca video).'
+              : 'Sin consentimiento: no se registra ni se mide nada.'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.ios_share),
+            title: const Text('Compartir última sesión'),
+            onTap: _compartirUltimaSesion,
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('Borrar mis datos'),
+            subtitle: const Text('Consentimiento, perfil y sesiones guardadas'),
+            onTap: _borrarMisDatos,
           ),
           const SizedBox(height: 24),
           FilledButton(
