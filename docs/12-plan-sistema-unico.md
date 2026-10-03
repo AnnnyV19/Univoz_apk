@@ -33,8 +33,8 @@ Cada fase: rama propia + PR. No avanzar si los gates de la fase anterior fallan.
 - [x] Visor único: los dos `index.html` idénticos, modelos junto al visor (H13).
 - [x] `univoz.sh test` también corre los tests de `univoz/`.
 - [x] `_staging_kotlin/` auditado: obsoleto, ganan copias vivas.
-- [ ] Borrar `_staging_kotlin/` (requiere confirmación del usuario).
-- [ ] Nota de 1 línea en el README del repo histórico (opcional, con confirmación).
+- [x] `_staging_kotlin/` borrado (recuperable desde `863af3b`).
+- [x] Nota en el README del repo histórico apuntando al canónico.
 
 Pendiente estructural: `univoz/` podría consumir el visor del paquete
 `senas_core` en vez de una copia; hasta entonces, todo cambio del visor se

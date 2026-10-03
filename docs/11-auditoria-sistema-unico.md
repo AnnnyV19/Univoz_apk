@@ -59,7 +59,7 @@ Fecha: 2026-10-02. Referencias `archivo:línea` verificadas en este repo
   `LandmarkEngine.kt` = vivos; `LandmarkPlugin.kt` = versión exacta previa al
   commit ECC (`e9604a2`); `MainActivity_univoz.kt` = versión sin plugin;
   `MainActivity_senas.kt` = vivo. Ganan las copias vivas. Se conserva hasta que
-  el usuario confirme borrarlo.
+  el usuario confirme borrarlo. Borrado en Fase U con confirmación.
 - **Datos:** `plantillas.json` del checkout es 138D obsoleto; 5
   `sample_embeddings` HNSW en el schema sin usar.
 
