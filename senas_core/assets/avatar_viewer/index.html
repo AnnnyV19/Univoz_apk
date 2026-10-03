@@ -121,6 +121,7 @@
     </div>
     <label><input id="camaraRetarget" type="checkbox"> Adaptar a mi cuerpo (anclas)</label>
     <label><input id="avatarVistaEspejo" type="checkbox"> Vista espejo (para mí)</label>
+    <label><input id="camaraHolistic" type="checkbox"> Captura unificada: cuerpo + manos + cara (recarga)</label>
     <label><input id="camaraSuavizar" type="checkbox" checked> Suavizar movimiento</label>
     <label><input id="camaraReposoMano" type="checkbox" checked> Volver mano a reposo si se pierde</label>
     <label><input id="camaraDiagnostico" type="checkbox"> Modo diagnóstico</label>
@@ -3067,6 +3068,142 @@
     })();
     // ---- fin rig_mirror.mjs ----
 
+    // ---- inicio rig_holistic.mjs (antes importado por separado) ----
+    const {HOLISTIC_MODEL_URL, holisticToTaskResults} = (() => {
+      // Captura unificada con MediaPipe HolisticLandmarker: un solo modelo para
+      // cuerpo, manos y cara (543 puntos), con manos ancladas a la pose y landmarks
+      // metricos tambien para las manos.
+      //
+      // holisticToTaskResults traduce su resultado al MISMO formato que hoy
+      // entregan PoseLandmarker + HandLandmarker por separado. Asi toda la cadena
+      // existente (asignacion por cadena de brazo, filtros, 152D, SignSpace) queda
+      // igual y solo cambia la fuente. Las etiquetas Left/Right de Holistic se
+      // pasan como pista; el lado fisico lo sigue decidiendo assignHandsByArmChain.
+
+      // Modelo oficial float16 (13.7 MB). Mientras se valida se carga de la red;
+      // para WebView Android offline habra que empaquetarlo junto al visor.
+      const HOLISTIC_MODEL_URL = 'https://storage.googleapis.com/' +
+        'mediapipe-models/holistic_landmarker/holistic_landmarker/float16/latest/' +
+        'holistic_landmarker.task';
+
+      const first = (list) => (Array.isArray(list) && list.length ? list[0] : null);
+
+      function holisticToTaskResults(result) {
+        const pose = first(result?.poseLandmarks);
+        const poseWorld = first(result?.poseWorldLandmarks);
+        const poseResult = pose ? {landmarks: [pose],
+          worldLandmarks: poseWorld ? [poseWorld] : []} : null;
+
+        const landmarks = [], worldLandmarks = [], handednesses = [];
+        for (const [label, image, world] of [
+          ['Left', result?.leftHandLandmarks, result?.leftHandWorldLandmarks],
+          ['Right', result?.rightHandLandmarks, result?.rightHandWorldLandmarks],
+        ]) {
+          const hand = first(image);
+          if (!hand) continue;
+          landmarks.push(hand);
+          worldLandmarks.push(first(world));
+          handednesses.push([{categoryName: label, score: 1, index: label === 'Left' ? 0 : 1}]);
+        }
+
+        const faceLandmarks = first(result?.faceLandmarks);
+        const blend = first(result?.faceBlendshapes)?.categories ?? [];
+        const face = faceLandmarks ? {
+          landmarks: faceLandmarks,
+          blendshapes: Object.fromEntries(blend.map((c) =>
+            [c.categoryName, Number(c.score) || 0])),
+        } : null;
+
+        return {poseResult, handResult: {landmarks, worldLandmarks, handednesses}, face};
+      }
+      return {HOLISTIC_MODEL_URL, holisticToTaskResults};
+    })();
+    // ---- fin rig_holistic.mjs ----
+
+    // ---- inicio rig_face.mjs (antes importado por separado) ----
+    const {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals} = (() => {
+      // Cara del usuario -> avatar (FaceFrameV1, canal aparte de 152D).
+      //
+      // Los rasgos no manuales (cejas, boca, mirada, giro de cabeza) son parte de
+      // la lengua de senas. Holistic entrega 478 puntos de cara y blendshapes; aqui
+      // se traducen a expresiones VRM 1.0 y a un giro de cabeza.
+      //
+      // Convencion de la cabeza (vista de interlocutor): yaw > 0 = gira hacia SU
+      // izquierda (la nariz va a la derecha de la imagen); pitch > 0 = mira arriba;
+      // roll > 0 = inclina hacia su hombro derecho (lado izquierdo de la imagen).
+
+      const FACE_IDX = Object.freeze({
+        NOSE_TIP: 1, FOREHEAD: 10, CHIN: 152,
+        RIGHT_EYE_OUTER: 33, LEFT_EYE_OUTER: 263,
+      });
+
+      const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+      const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]];
+      const unit = (a) => {
+        const m = Math.hypot(a[0], a[1], a[2]);
+        return m > 1e-9 ? [a[0] / m, a[1] / m, a[2] / m] : null;
+      };
+
+      /**
+       * Giro de cabeza desde la malla facial en coordenadas de imagen.
+       * [aspect] = ancho / alto del video (x y z vienen normalizados por el ancho).
+       */
+      function headRotationFromFace(landmarks, {aspect = 1} = {}) {
+        if (!Array.isArray(landmarks) || landmarks.length < 264) return null;
+        // imagen (x der, y abajo, z se aleja) -> camara (x der, y arriba, z hacia
+        // la camara), x y z en las mismas unidades que y.
+        const p = (i) => {
+          const q = landmarks[i];
+          return [Number(q?.x) * aspect, -Number(q?.y), -Number(q?.z) * aspect];
+        };
+        const ejeX = unit(sub(p(FACE_IDX.LEFT_EYE_OUTER), p(FACE_IDX.RIGHT_EYE_OUTER)));
+        const arriba = sub(p(FACE_IDX.FOREHEAD), p(FACE_IDX.CHIN));
+        if (!ejeX || ![...ejeX, ...arriba].every(Number.isFinite)) return null;
+        const ejeY = unit(sub(arriba, ejeX.map((v) => v * dot(arriba, ejeX))));
+        if (!ejeY) return null;
+        const ejeZ = cross(ejeX, ejeY); // normal de la cara, hacia la camara
+        // R = Ry(yaw) Rx(pitch) Rz(roll); columnas = ejeX, ejeY, ejeZ.
+        const pitch = Math.asin(Math.max(-1, Math.min(1, ejeZ[1])));
+        const yaw = Math.atan2(ejeZ[0], ejeZ[2]);
+        const roll = Math.atan2(ejeX[1], ejeY[1]);
+        return {yaw, pitch, roll};
+      }
+
+      /** Blendshapes de MediaPipe (ARKit) -> expresiones VRM 1.0 en [0, 1]. */
+      function blendshapesToVrmExpressions(bs) {
+        if (!bs || typeof bs !== 'object') return {};
+        const g = (k) => clamp01(bs[k]);
+        return {
+          blinkLeft: g('eyeBlinkLeft'),
+          blinkRight: g('eyeBlinkRight'),
+          aa: g('jawOpen'),
+          ou: Math.max(g('mouthPucker'), g('mouthFunnel')),
+          ee: clamp01((g('mouthStretchLeft') + g('mouthStretchRight')) / 2),
+          happy: clamp01((g('mouthSmileLeft') + g('mouthSmileRight')) / 2),
+          angry: clamp01((g('browDownLeft') + g('browDownRight')) / 2),
+          surprised: clamp01((g('browInnerUp') +
+            (g('eyeWideLeft') + g('eyeWideRight')) / 2) / 2),
+        };
+      }
+
+      /** Vista espejo: ojos intercambiados, yaw y roll invertidos. */
+      function mirrorFaceSignals(expressions, head) {
+        const e = {...expressions};
+        if ('blinkLeft' in e || 'blinkRight' in e) {
+          [e.blinkLeft, e.blinkRight] = [expressions.blinkRight, expressions.blinkLeft];
+        }
+        return {
+          expressions: e,
+          head: head ? {yaw: -head.yaw, pitch: head.pitch, roll: -head.roll} : null,
+        };
+      }
+      return {FACE_IDX, headRotationFromFace, blendshapesToVrmExpressions, mirrorFaceSignals};
+    })();
+    // ---- fin rig_face.mjs ----
+
     // ---- fin modulos inline ----
 
 
@@ -3390,6 +3527,8 @@
         sign_space: signSpaceVivo ? {values: signSpaceVivo.values.slice(),
           mask: {...signSpaceVivo.mask}, mode: signSpaceVivo.mode} : null,
         retarget_mode: retargetMode,
+        capture_mode: capturaModo,
+        face_blendshapes: caraVivo?.blendshapes ?? null,
         render_frame: filtered?.slice() ?? null,
         filtered_frame: filtered?.slice() ?? null,
         point_issues: diagnosticPointIssues.slice(),
@@ -3853,7 +3992,7 @@
       avDerecha.subVectors(pR, pL).normalize();
 
       for (const clave of ['Hips', 'Spine', 'Chest', 'UpperChest',
-        'LeftShoulder', 'RightShoulder']) {
+        'LeftShoulder', 'RightShoulder', 'Neck', 'Head']) {
         const nombre = VRMHumanBoneName[clave];
         const h = nombre ? bone(nombre) : null;
         refTorso[clave] = h ? {
@@ -4645,11 +4784,67 @@
       mano.rotation.set(0, 0, 0);
     }
 
+    // Cara rastreada (captura Holistic). Mientras haya cara reciente, las
+    // expresiones y la cabeza vienen del usuario; si no, parpadeo generico.
+    let caraAplicadaAt = 0;
+    const caraSuave = {expressions: {}, head: null};
+    function aplicarCara(cara, espejo, meta = {}) {
+      if (!vrm || !cara) return false;
+      const video = document.getElementById('camaraVideo');
+      const aspect = video?.videoWidth > 0 && video?.videoHeight > 0
+        ? video.videoWidth / video.videoHeight : 4 / 3;
+      let expresiones = blendshapesToVrmExpressions(cara.blendshapes);
+      let cabeza = headRotationFromFace(cara.landmarks, {aspect});
+      if (espejo) {
+        ({expressions: expresiones, head: cabeza} =
+          mirrorFaceSignals(expresiones, cabeza));
+      }
+      // Suavizado exponencial ligero: la malla facial tiembla mas que el
+      // cuerpo y una ceja saltando cambia el significado.
+      const a = 0.5;
+      for (const [k, v] of Object.entries(expresiones)) {
+        const previo = caraSuave.expressions[k] ?? v;
+        caraSuave.expressions[k] = previo + a * (v - previo);
+      }
+      if (cabeza) {
+        const p = caraSuave.head ?? cabeza;
+        caraSuave.head = {yaw: p.yaw + a * (cabeza.yaw - p.yaw),
+          pitch: p.pitch + a * (cabeza.pitch - p.pitch),
+          roll: p.roll + a * (cabeza.roll - p.roll)};
+      }
+      const em = vrm.expressionManager;
+      if (em) {
+        for (const [k, v] of Object.entries(caraSuave.expressions)) {
+          try { em.setValue(k, v); } catch (_) { /* expresion ausente */ }
+        }
+      }
+      const h = caraSuave.head;
+      if (h) {
+        // Avatar mira a +Z (camara): yaw gira hacia +X (su izquierda),
+        // pitch positivo mira arriba, roll inclina hacia -X (su derecha).
+        const q = new THREE.Quaternion().setFromEuler(
+          new THREE.Euler(-h.pitch, h.yaw, h.roll, 'YXZ'));
+        for (const [clave, proporcion] of [['Neck', 0.4], ['Head', 1.0]]) {
+          const r = refTorso[clave];
+          if (!r) continue;
+          const parcial = new THREE.Quaternion().slerpQuaternions(
+            new THREE.Quaternion(), q, proporcion);
+          const mundo = parcial.multiply(r.world);
+          r.bone.parent.updateWorldMatrix(true, false);
+          const padre = r.bone.parent.getWorldQuaternion(new THREE.Quaternion());
+          aplicarQuaternionSegura(r.bone, `cabeza:${clave}`,
+            padre.invert().multiply(mundo), meta);
+        }
+      }
+      caraAplicadaAt = performance.now();
+      return true;
+    }
+
     function moverExpresionBasica(t) {
-      // No hay datos faciales grabados (el pipeline de captura solo mira
-      // pose + manos), asi que esto es generico: un parpadeo cada tanto
-      // para que no se sienta un maniqui. Nada de esto viene de la seña.
+      // Sin cara rastreada (captura separada pose + manos) esto es generico:
+      // un parpadeo cada tanto para que no se sienta un maniqui.
       if (!vrm || !vrm.expressionManager) return;
+      if (performance.now() - caraAplicadaAt < 500) return;
       const ciclo = (t % 3.6);
       const parpadeo = ciclo > 3.4 ? (1 - (ciclo - 3.4) / 0.2) : (ciclo > 3.3 ? (ciclo - 3.3) / 0.1 : 0);
       vrm.expressionManager.setValue('blink', Math.max(0, Math.min(1, parpadeo)));
@@ -4938,6 +5133,20 @@
     let camaraStream = null;
     let poseLandmarkerWeb = null;
     let handLandmarkerWeb = null;
+    // Captura unificada (docs/13): un solo HolisticLandmarker para cuerpo,
+    // manos y cara. 'separado' (defecto) usa Pose + Hand como siempre. Se
+    // elige al cargar la pagina porque los detectores se precargan.
+    const kCapturaModos = ['separado', 'holistic'];
+    const kCapturaStorageKey = 'univoz.capturaModo.v1';
+    let capturaModo = 'separado';
+    try {
+      const pedido = new URLSearchParams(location.search).get('captura') ??
+        localStorage.getItem(kCapturaStorageKey);
+      if (kCapturaModos.includes(pedido)) capturaModo = pedido;
+    } catch (_) { /* sin storage: separado */ }
+    let holisticLandmarkerWeb = null;
+    // Ultima cara detectada por Holistic: {landmarks, blendshapes} o null.
+    let caraVivo = null;
     let preloadedLandmarkersWeb = null;
     let detectorWarmupWeb = null;
     let camaraLoopId = 0;
@@ -5727,17 +5936,31 @@
           // Hands run every accepted frame; pose runs every second frame after
           // first lock. Fast finger response gets priority without losing
           // shoulder-chain identity.
-          const ejecutarPose = adaptivePoseScheduler.shouldRun(
-            webCaptureFrameIndex, !!webPoseCache);
-          const poseStartedAt = performance.now();
-          const poseResult = ejecutarPose
-            ? poseLandmarkerWeb.detectForVideo(video, timestampMs) : null;
-          if (ejecutarPose) {
-            registrarTiempoWeb('pose', performance.now() - poseStartedAt);
+          let ejecutarPose, poseResult, handResult;
+          if (holisticLandmarkerWeb) {
+            // Holistic: cuerpo, manos y cara en una pasada, pose cada frame.
+            const holisticStartedAt = performance.now();
+            const unificado = holisticToTaskResults(
+              holisticLandmarkerWeb.detectForVideo(video, timestampMs));
+            registrarTiempoWeb('pose', performance.now() - holisticStartedAt);
+            registrarTiempoWeb('hand', 0);
+            ejecutarPose = true;
+            poseResult = unificado.poseResult;
+            handResult = unificado.handResult;
+            caraVivo = unificado.face;
+          } else {
+            ejecutarPose = adaptivePoseScheduler.shouldRun(
+              webCaptureFrameIndex, !!webPoseCache);
+            const poseStartedAt = performance.now();
+            poseResult = ejecutarPose
+              ? poseLandmarkerWeb.detectForVideo(video, timestampMs) : null;
+            if (ejecutarPose) {
+              registrarTiempoWeb('pose', performance.now() - poseStartedAt);
+            }
+            const handStartedAt = performance.now();
+            handResult = handLandmarkerWeb.detectForVideo(video, timestampMs);
+            registrarTiempoWeb('hand', performance.now() - handStartedAt);
           }
-          const handStartedAt = performance.now();
-          const handResult = handLandmarkerWeb.detectForVideo(video, timestampMs);
-          registrarTiempoWeb('hand', performance.now() - handStartedAt);
           if (poseResult) {
             webPoseCache = {
               pose: poseResult?.landmarks?.[0] ?? null,
@@ -5892,6 +6115,11 @@
         handLandmarkerWeb.close();
         handLandmarkerWeb = null;
       }
+      if (holisticLandmarkerWeb) {
+        holisticLandmarkerWeb.close();
+        holisticLandmarkerWeb = null;
+      }
+      caraVivo = null;
       webPoseCache = null;
       webCaptureFrameIndex = 0;
       frameVivo = null;
@@ -5919,6 +6147,25 @@
         modelAssetPath: model,
         ...(gpu ? { delegate: 'GPU' } : {}),
       });
+      if (capturaModo === 'holistic') {
+        const opciones = (gpu) => ({
+          baseOptions: base(HOLISTIC_MODEL_URL, gpu),
+          runningMode: 'VIDEO',
+          minPoseDetectionConfidence: 0.4,
+          minPosePresenceConfidence: 0.4,
+          minHandLandmarksConfidence: 0.4,
+          minFaceDetectionConfidence: 0.4,
+          minFacePresenceConfidence: 0.4,
+          outputFaceBlendshapes: true,
+        });
+        try {
+          return {holistic: await vision.HolisticLandmarker.createFromOptions(
+            fileset, opciones(true))};
+        } catch (_) {
+          return {holistic: await vision.HolisticLandmarker.createFromOptions(
+            fileset, opciones(false))};
+        }
+      }
       let pose = null;
       let hand = null;
       try {
@@ -6098,8 +6345,9 @@
 
         const tasks = preloadedLandmarkersWeb ?? await precargarDetectoresWeb();
         preloadedLandmarkersWeb = null;
-        poseLandmarkerWeb = tasks.pose;
-        handLandmarkerWeb = tasks.hand;
+        poseLandmarkerWeb = tasks.pose ?? null;
+        handLandmarkerWeb = tasks.hand ?? null;
+        holisticLandmarkerWeb = tasks.holistic ?? null;
         webCameraState.detectorsReady = true;
         camaraUltimoVideoTime = -1;
         camaraUltimoTimestampMs = 0;
@@ -6256,6 +6504,15 @@
       });
       document.getElementById('bBorrarPerfil').addEventListener('click',
         () => { window.borrarPerfilCorporal(); });
+      const controlHolistic = document.getElementById('camaraHolistic');
+      controlHolistic.checked = capturaModo === 'holistic';
+      controlHolistic.addEventListener('change', () => {
+        const modo = controlHolistic.checked ? 'holistic' : 'separado';
+        try { localStorage.setItem(kCapturaStorageKey, modo); } catch (_) {}
+        const url = new URL(location.href);
+        url.searchParams.set('captura', modo);
+        location.href = url.toString();
+      });
       const controlEspejo = document.getElementById('avatarVistaEspejo');
       controlEspejo.checked = vistaAvatar === 'espejo';
       controlEspejo.addEventListener('change', () => {
@@ -6644,6 +6901,8 @@
               signSpace: espejo ? mirrorSignSpaceFrame(signSpaceVivo)
                 : signSpaceVivo,
             });
+          aplicarCara(caraVivo, espejo, {frameId: frameVivoFrameId,
+            timestampMs: frameVivoTimestampMs});
           if (standaloneWeb && frameVivoSourceFrameId > 0 &&
               frameVivoSourceFrameId !== ultimoSourceFrameRenderizado) {
             webPerformanceMetrics.recordFrame({

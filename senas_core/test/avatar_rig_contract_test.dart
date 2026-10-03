@@ -75,4 +75,16 @@ void main() {
     // la reproduccion de biblioteca no se espeja
     expect(html, contains('RigBodyEngine.aplicarFrame(colaFrames[frameActual], {'));
   });
+
+  test('captura unificada Holistic y cara al avatar tras flag', () {
+    final html = File('assets/avatar_viewer/index.html').readAsStringSync();
+    expect(html, contains("let capturaModo = 'separado';"));
+    expect(html, contains('vision.HolisticLandmarker.createFromOptions'));
+    expect(html, contains('holisticToTaskResults('));
+    expect(html, contains('outputFaceBlendshapes: true'));
+    expect(html, contains('aplicarCara(caraVivo, espejo'));
+    expect(html, contains("'Neck', 'Head']"));
+    // el parpadeo generico cede ante la cara real
+    expect(html, contains('performance.now() - caraAplicadaAt < 500'));
+  });
 }
