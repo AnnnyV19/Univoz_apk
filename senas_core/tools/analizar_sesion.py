@@ -5,6 +5,8 @@ Uso:  python3 tools/analizar_sesion.py [sesiones/<id>.jsonl ...]
       python3 tools/analizar_sesion.py --baseline [sesion.jsonl]
       (guarda docs/evidence/baseline/<id>-<plataforma>.json, Fase 0)
       python3 tools/analizar_sesion.py --comparar A B
+      python3 tools/analizar_sesion.py --gates [sesion.jsonl]
+      (veredicto por fase contra docs/10; guarda docs/evidence/gates/)
 
 Reporta cobertura (pose, manos, cara), rechazos de la compuerta de manos,
 modos de asignacion de lado, errores mas frecuentes, tiempos, eventos,
@@ -35,17 +37,18 @@ def pct(xs, p):
 def leer(ruta):
     """Lee el JSONL y quita duplicados por `seq` (al cerrar la pagina un
     bloque puede llegar dos veces)."""
-    vistos, out = set(), []
     with open(ruta, encoding="utf-8") as fh:
-        for l in fh:
-            if not l.strip():
+        return leer_registros(json.loads(l) for l in fh if l.strip())
+
+
+def leer_registros(registros):
+    vistos, out = set(), []
+    for r in registros:
+        if "seq" in r:
+            if r["seq"] in vistos:
                 continue
-            r = json.loads(l)
-            if "seq" in r:
-                if r["seq"] in vistos:
-                    continue
-                vistos.add(r["seq"])
-            out.append(r)
+            vistos.add(r["seq"])
+        out.append(r)
     out.sort(key=lambda r: r.get("seq", 0))
     return out
 
@@ -202,6 +205,211 @@ def resumir(registros):
     return out
 
 
+# ---- Gates por fase (docs/10-metricas-y-criterios.md) -------------------
+# Umbrales copiados de docs/10; si cambian alla, cambian aqui.
+GATES = {
+    "frames_min": 300,
+    "tracking_fps_min": 30,
+    "render_fps_min": 60,
+    "latency_p95_ms": 50,             # objetivo final
+    "latency_p95_provisional_ms": 120,  # solo diagnostico en Fase 0
+    "inversion_pct_max": 1.0,
+    "jitter_deg_max": 2.0,
+}
+# Paso (tecla) de cada maniobra segun el protocolo de la marca.
+PASOS = {
+    "manos": {"estatica": 1, "pulgar": 2, "giro": 3, "puno": 4,
+              "pronacion": 5, "cruce": 6, "tapar_200": 7, "tapar_500": 8,
+              "salir": 9},
+    # "quieto" (brazos abajo) sirve para jitter, no para orientacion de mano.
+    "cuerpo": {"quieto": 1, "cruce": 4, "salir": 9},
+}
+# Pasos donde la palma no deberia cambiar de cara: un cambio es inversion.
+SIN_GIRO = ("estatica", "pulgar", "puno")
+IDENTIDAD = ("cruce", "tapar_200", "tapar_500", "salir")
+CAUSAS_PERDIDA = {
+    "hand_occluded": "oclusion", "wrist_out_of_frame": "fuera_de_cuadro",
+    "hand_duplicate": "compuerta", "hand_far_from_arm": "compuerta",
+    "hand_scale_implausible": "compuerta", "hand_landmarks_invalid": "compuerta",
+}
+
+
+def _maniobras(registros):
+    """{nombre_maniobra: [registros]} asignando cada frame/perf a la ultima
+    marca previa (por seq). Marcas viejas sin protocolo = 'cuerpo'."""
+    cab = next((r for r in registros if r.get("kind") == "session_start"), {})
+    por_defecto = (cab.get("meta") or {}).get("protocol") or "cuerpo"
+    actual, out = None, collections.defaultdict(list)
+    for r in registros:
+        if r.get("kind") == "event" and r.get("type") == "marker":
+            prot = r.get("protocol") or por_defecto
+            nombres = {v: k for k, v in PASOS.get(prot, {}).items()}
+            actual = nombres.get(r.get("step"))
+            continue
+        if actual and (r.get("kind") == "frame" or r.get("type") == "perf"):
+            out[actual].append(r)
+    return out
+
+
+def _deltas(perfs, clave):
+    """Suma de incrementos de un contador acumulado (se reinicia al
+    reencender la camara: un descenso cuenta como nuevo origen)."""
+    total, prev = 0, None
+    for p in perfs:
+        v = (p.get("counters") or {}).get(clave)
+        if not isinstance(v, (int, float)):
+            continue
+        if prev is not None and v >= prev:
+            total += v - prev
+        prev = v
+    return total
+
+
+def _inversiones(frames):
+    """Cambios palma<->dorso entre frames consecutivos con cara conocida."""
+    cambios = conocidos = 0
+    for lado in ("left_surface", "right_surface"):
+        prev = None
+        for f in frames:
+            sup = (f.get("tracked") or {}).get(lado)
+            if sup not in ("palm", "dorsum"):
+                continue
+            conocidos += 1
+            if prev is not None and sup != prev:
+                cambios += 1
+            prev = sup
+    return cambios, conocidos
+
+
+def _jitter_deg(frames, codo, muneca, ventana=15):
+    """RMS (grados) de la direccion del antebrazo menos su media movil
+    centrada (~0.5 s a 30 FPS). Solo para pasos estaticos."""
+    dirs = []
+    for f in frames:
+        v = f.get("vec")
+        if not v:
+            continue
+        d = [v[muneca * 3 + k] - v[codo * 3 + k] for k in range(3)]
+        n = math.sqrt(sum(x * x for x in d))
+        if n > 1e-6:
+            dirs.append([x / n for x in d])
+    if len(dirs) < ventana:
+        return None
+    errs, h = [], ventana // 2
+    for i in range(h, len(dirs) - h):
+        m = [sum(d[k] for d in dirs[i - h:i + h + 1]) for k in range(3)]
+        nm = math.sqrt(sum(x * x for x in m)) or 1
+        cos = sum(dirs[i][k] * m[k] / nm for k in range(3))
+        errs.append(math.degrees(math.acos(max(-1.0, min(1.0, cos)))))
+    return round(math.sqrt(sum(e * e for e in errs) / len(errs)), 3)
+
+
+def _perdida(frames):
+    n = len(frames)
+    sin_mano = [f for f in frames if not any(
+        (f.get("tracked") or {}).get(k) for k in ("left", "right"))]
+    causas = collections.Counter()
+    for f in sin_mano:
+        cs = {CAUSAS_PERDIDA[c] for c in f.get("errors", []) if c in CAUSAS_PERDIDA}
+        causas.update(cs or {"modelo"})
+    return {"loss_pct": round(100.0 * len(sin_mano) / n, 1) if n else None,
+            "causas": dict(causas)}
+
+
+def gates(registros):
+    """Veredicto PASS / PROVISIONAL / FAIL / SIN_DATOS por fase (docs/10)."""
+    cab = next((r for r in registros if r.get("kind") == "session_start"), {})
+    meta = cab.get("meta") or {}
+    frames = [r for r in registros if r.get("kind") == "frame"]
+    perfs = [r for r in registros if r.get("type") == "perf"]
+    mans = _maniobras(registros)
+    solo = lambda nombre, tipo="frame": [r for r in mans.get(nombre, [])
+                                         if (r.get("kind") == "frame") == (tipo == "frame")]
+    out = {"schema": "GatesV1", "session_id": cab.get("session_id"),
+           "umbrales": GATES,
+           "contexto": {"platform": meta.get("platform"),
+                        "device": meta.get("user_agent") or meta.get("device"),
+                        "video": meta.get("video"),
+                        "holistic_worker": meta.get("holistic_worker"),
+                        "capture_mode": meta.get("capture_mode"),
+                        "protocol": meta.get("protocol") or "cuerpo",
+                        "frames": len(frames),
+                        "maniobras": {k: len(solo(k)) for k in sorted(mans)}}}
+
+    vec_ok = all(len(f["vec"]) == 152 for f in frames if f.get("vec"))
+    out["fase_0_baseline"] = {
+        "frames": len(frames), "vector_152": vec_ok,
+        "veredicto": "PASS" if vec_ok and len(frames) >= GATES["frames_min"] else "FAIL"}
+
+    lat = [x for p in perfs for x in p.get("latency_ms") or []]
+    fps = lambda k: pct([(p.get("fps") or {}).get(k) for p in perfs], .5)
+    f1 = {"perf_events": len(perfs)}
+    if not perfs or not lat:
+        f1["veredicto"] = "SIN_DATOS"
+    else:
+        f1.update({"latency_ms": {"n": len(lat), "p50": pct(lat, .5),
+                                  "p95": pct(lat, .95), "p99": pct(lat, .99)},
+                   "tracking_fps_p50": fps("tracking"), "pose_fps_p50": fps("pose"),
+                   "render_fps_p50": fps("render"), "inference_fps_p50": fps("inference")})
+        p95 = f1["latency_ms"]["p95"]
+        if (f1["tracking_fps_p50"] < GATES["tracking_fps_min"] or
+                f1["render_fps_p50"] < GATES["render_fps_min"] or
+                p95 > GATES["latency_p95_provisional_ms"]):
+            f1["veredicto"] = "FAIL"
+        elif p95 >= GATES["latency_p95_ms"]:
+            f1["veredicto"] = "PROVISIONAL"
+        else:
+            f1["veredicto"] = "PASS"
+    out["fase_1_rendimiento"] = f1
+
+    f2 = {"pasos": [k for k in SIN_GIRO if solo(k)]}
+    cambios = conocidos = 0
+    for k in SIN_GIRO:
+        c, n = _inversiones(solo(k))
+        cambios, conocidos = cambios + c, conocidos + n
+    giro = _inversiones(solo("giro") + solo("pronacion"))
+    f2["cambios_en_giro"] = giro[0]
+    if not conocidos:
+        f2["veredicto"] = "SIN_DATOS"
+    else:
+        f2["inversion_pct"] = round(100.0 * cambios / conocidos, 2)
+        f2["veredicto"] = ("PASS" if f2["inversion_pct"] < GATES["inversion_pct_max"]
+                           else "FAIL")
+    out["fase_2_orientacion"] = f2
+
+    f3 = {"invalid_transforms": _deltas(perfs, "invalid_transforms"),
+          "teleports": _deltas(perfs, "teleports")}
+    estatica = solo("estatica") or solo("quieto")
+    f3["jitter_deg"] = {"left": _jitter_deg(estatica, 2, 4),
+                        "right": _jitter_deg(estatica, 3, 5)} if estatica else None
+    jit = [v for v in (f3["jitter_deg"] or {}).values() if v is not None]
+    if not perfs:
+        f3["veredicto"] = "SIN_DATOS"
+    elif (f3["invalid_transforms"] or f3["teleports"] or
+          any(j > GATES["jitter_deg_max"] for j in jit)):
+        f3["veredicto"] = "FAIL"
+    else:
+        f3["veredicto"] = "PASS"
+    out["fase_3_rig"] = f3
+
+    ident = {k: solo(k) for k in IDENTIDAD if solo(k)}
+    codigos = collections.Counter(c for fs in ident.values() for f in fs
+                                  for c in f.get("errors", []))
+    f4 = {"pasos": sorted(ident), "swaps": codigos.get("hand_identity_swap", 0),
+          "saltos": codigos.get("hand_position_jump", 0),
+          "recuperaciones": codigos.get("hand_recovered", 0),
+          "perdida": {k: _perdida(fs) for k, fs in ident.items()}}
+    if not ident:
+        f4["veredicto"] = "SIN_DATOS"
+    else:
+        f4["veredicto"] = "FAIL" if f4["swaps"] or f4["saltos"] else "PASS"
+    out["fase_4_identidad"] = f4
+    return out
+
+
+GATES_DIR = os.path.join(HERE, "..", "..", "docs", "evidence", "gates")
+
+
 def imprimir(res):
     print(json.dumps(res, indent=1, ensure_ascii=False))
 
@@ -276,6 +484,19 @@ if __name__ == "__main__":
             print("uso: --comparar A B (jsonl o baseline .json)")
             sys.exit(1)
         imprimir(comparar(_cargar(args[1]), _cargar(args[2])))
+        sys.exit(0)
+    if args[:1] == ["--gates"]:
+        ruta = args[1] if len(args) > 1 else _ultima()
+        g = gates(leer(ruta))
+        os.makedirs(GATES_DIR, exist_ok=True)
+        nombre = "%s-%s.json" % (g["session_id"] or "sesion",
+                                 g["contexto"]["platform"] or "x")
+        destino = os.path.normpath(os.path.join(GATES_DIR, nombre))
+        with open(destino, "w", encoding="utf-8") as fh:
+            json.dump(g, fh, indent=1, ensure_ascii=False)
+        for fase in sorted(k for k in g if k.startswith("fase_")):
+            print("%-22s %s" % (fase, g[fase]["veredicto"]))
+        print("gates:", destino)
         sys.exit(0)
     if args[:1] == ["--baseline"]:
         ruta = args[1] if len(args) > 1 else _ultima()

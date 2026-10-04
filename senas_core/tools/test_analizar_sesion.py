@@ -138,3 +138,103 @@ def test_tiempos_del_worker_holistic():
     # Sesiones del hilo principal no traen "rt": no aparece en el resumen.
     sin = an.resumir([regs[0], _frame(0), _frame(40)])
     assert "rt" not in sin["timing_ms"]
+
+
+def _sesion_gates(protocolo="manos", pasos=(), perf=True, n_por_paso=60,
+                  swap_en=None, flip_en=None):
+    """Sesion sintetica con marcas: `pasos` = numeros de tecla en orden."""
+    vec = [0.0] * 152
+    vec[2 * 3:2 * 3 + 3] = [0, -0.5, 0]
+    vec[4 * 3:4 * 3 + 3] = [0, -1.2, 0]
+    regs = [{"kind": "session_start", "session_id": "g", "seq": 0,
+             "meta": {"platform": "web", "protocol": protocolo,
+                      "video": {"width": 640, "height": 480},
+                      "holistic_worker": True}}]
+    seq, t = 1, 0
+    contadores = {"swaps": 0, "surface_flips": 0, "invalid_transforms": 0,
+                  "teleports": 0}
+    for paso in pasos:
+        regs.append({"kind": "event", "type": "marker", "step": paso,
+                     "protocol": protocolo, "seq": seq})
+        seq += 1
+        for i in range(n_por_paso):
+            f = _frame(t, vec)
+            f["seq"] = seq
+            superficie = "palm"
+            if flip_en == paso and i % 30 == 15:
+                superficie = "dorsum"
+            f["tracked"]["left_surface"] = superficie
+            if swap_en == paso and i == 10:
+                f["errors"] = ["hand_identity_swap"]
+            regs.append(f)
+            seq += 1
+            t += 33
+            if perf and i % 30 == 29:
+                regs.append({"kind": "event", "type": "perf", "seq": seq,
+                             "latency_ms": [30.0] * 30,
+                             "fps": {"tracking": 31, "render": 60, "pose": 31,
+                                     "inference": 31, "input": 30},
+                             "counters": dict(contadores)})
+                seq += 1
+    return regs
+
+
+def test_gates_sin_marcas_ni_perf_da_sin_datos():
+    regs = [{"kind": "session_start", "session_id": "v", "meta": {}}]
+    regs += [_frame(i * 33, [0.0] * 152) for i in range(10)]
+    g = an.gates(an.leer_registros(regs))
+    assert g["fase_1_rendimiento"]["veredicto"] == "SIN_DATOS"
+    assert g["fase_2_orientacion"]["veredicto"] == "SIN_DATOS"
+    assert g["fase_4_identidad"]["veredicto"] == "SIN_DATOS"
+    # 10 frames < 300: baseline falla por muestra, no por contrato.
+    assert g["fase_0_baseline"]["veredicto"] == "FAIL"
+    assert g["fase_0_baseline"]["vector_152"] is True
+
+
+def test_gates_sesion_limpia_pasa():
+    regs = _sesion_gates(pasos=range(1, 10))
+    g = an.gates(an.leer_registros(regs))
+    assert g["fase_0_baseline"]["veredicto"] == "PASS"
+    r = g["fase_1_rendimiento"]
+    assert r["veredicto"] == "PASS", r
+    assert r["latency_ms"]["p95"] == 30 and r["render_fps_p50"] == 60
+    assert g["fase_2_orientacion"]["veredicto"] == "PASS"
+    assert g["fase_2_orientacion"]["inversion_pct"] == 0.0
+    assert g["fase_3_rig"]["veredicto"] == "PASS"
+    assert g["fase_3_rig"]["jitter_deg"]["left"] < 0.01
+    assert g["fase_4_identidad"]["veredicto"] == "PASS"
+    assert g["contexto"]["holistic_worker"] is True
+
+
+def test_gates_swap_en_cruce_falla_identidad():
+    regs = _sesion_gates(pasos=range(1, 10), swap_en=6)
+    g = an.gates(an.leer_registros(regs))
+    assert g["fase_4_identidad"]["veredicto"] == "FAIL"
+    assert g["fase_4_identidad"]["swaps"] == 1
+
+
+def test_gates_flip_en_paso_estatico_es_inversion():
+    # Paso 1 (estatica) con cambios palma->dorso: inversion; en paso 3
+    # (girar palma/dorso) los cambios son esperados y no cuentan.
+    malo = an.gates(an.leer_registros(_sesion_gates(pasos=range(1, 10), flip_en=1)))
+    assert malo["fase_2_orientacion"]["veredicto"] == "FAIL"
+    assert malo["fase_2_orientacion"]["inversion_pct"] > 1
+    bueno = an.gates(an.leer_registros(_sesion_gates(pasos=range(1, 10), flip_en=3)))
+    assert bueno["fase_2_orientacion"]["veredicto"] == "PASS"
+
+
+def test_gates_latencia_provisional_entre_50_y_120():
+    regs = _sesion_gates(pasos=range(1, 10))
+    for r in regs:
+        if r.get("type") == "perf":
+            r["latency_ms"] = [90.0] * 30
+    g = an.gates(an.leer_registros(regs))
+    assert g["fase_1_rendimiento"]["veredicto"] == "PROVISIONAL"
+
+
+def test_gates_protocolo_cuerpo_sin_maniobras_de_mano():
+    g = an.gates(an.leer_registros(_sesion_gates(protocolo="cuerpo",
+                                                 pasos=range(1, 10))))
+    assert g["fase_2_orientacion"]["veredicto"] == "SIN_DATOS"
+    # El protocolo corporal si tiene cruce (4) y salir/volver (9).
+    assert g["fase_4_identidad"]["veredicto"] == "PASS"
