@@ -5089,12 +5089,14 @@
     // articulacion, no por repintado.
     const safetyReportados = new Map();
     let safetyCodigos = {};
+    let safetyArticulaciones = {};
     function reportSafetyAnomaly(result, jointId) {
       if (!result?.code) return;
       const clave = `${result.frameId}:${result.timestampMs}`;
       if (safetyReportados.get(jointId) === clave) return;
       safetyReportados.set(jointId, clave);
       safetyCodigos[result.code] = (safetyCodigos[result.code] ?? 0) + 1;
+      safetyArticulaciones[jointId] = (safetyArticulaciones[jointId] ?? 0) + 1;
       webCameraState.invalidTransforms++;
       if (result.code === 'teleport_detected') webCameraState.teleports++;
       const side = String(jointId).startsWith('left') ? 'left' :
@@ -6232,8 +6234,10 @@
           holds: s.handHolds, recoveries: s.handRecoveries,
           safety_rejections: s.invalidTransforms, teleports: s.teleports},
         safety_codes: safetyCodigos,
+        safety_joints: safetyArticulaciones,
       });
       safetyCodigos = {};
+      safetyArticulaciones = {};
     }
     function descargarSesionWeb() {
       const lineas = sesionActual?.exportLines() ?? ultimaSesionLineas;

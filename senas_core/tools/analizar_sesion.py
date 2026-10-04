@@ -393,11 +393,14 @@ def gates(registros):
     rechazos = (_deltas(perfs, "safety_rejections") or
                 _deltas(perfs, "invalid_transforms"))
     codigos_seg = collections.Counter()
+    articulaciones = collections.Counter()
     for p in perfs:
         codigos_seg.update(p.get("safety_codes") or {})
+        articulaciones.update(p.get("safety_joints") or {})
     f3 = {"rechazos_compuerta": rechazos,
           "rechazos_por_frame": round(rechazos / len(frames), 3) if frames else None,
           "codigos_compuerta": dict(codigos_seg.most_common()),
+          "articulaciones_compuerta": dict(articulaciones.most_common(8)),
           "teleports": _deltas(perfs, "teleports")}
     if not any("safety_rejections" in (p.get("counters") or {}) for p in perfs):
         f3["nota"] = ("sesion anterior al 2026-10-04: rechazos contados por "

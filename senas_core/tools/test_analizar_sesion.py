@@ -270,11 +270,13 @@ def test_fps_de_manos_solo_en_segundos_con_manos_y_rechazos_informativos():
             p["fps"] = dict(p["fps"], tracking=0)  # brazos abajo
         p["counters"] = {"safety_rejections": i * 5, "teleports": 0}
         p["safety_codes"] = {"joint_limit_violation": 5}
+        p["safety_joints"] = {"leftLowerArm": 5}
     g = an.gates(an.leer_registros(regs))
     assert g["fase_1_rendimiento"]["tracking_fps_p50"] == 31
     f3 = g["fase_3_rig"]
     assert f3["rechazos_compuerta"] == 5 * (len(perfs) - 1)
     assert f3["codigos_compuerta"] == {"joint_limit_violation": 5 * len(perfs)}
+    assert f3["articulaciones_compuerta"] == {"leftLowerArm": 5 * len(perfs)}
     assert f3["veredicto"] == "PASS" and "nota" not in f3
 
 
