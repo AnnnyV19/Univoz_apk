@@ -5,6 +5,8 @@ const xyz = (point) => ({
   y: Number(point?.y ?? point?.[1]),
   z: Number(point?.z ?? point?.[2] ?? 0),
 });
+// Punto de imagen sin profundidad (z = 0) para comparar pose con mano.
+const xy = (point) => ({...xyz(point), z: 0});
 const finite = (point) =>
   Number.isFinite(point?.x) && Number.isFinite(point?.y) && Number.isFinite(point?.z);
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -222,10 +224,13 @@ function armChainCost(candidate, side, pose, shoulderWidth) {
   const sideIndexes = side === 'left'
     ? {shoulder: 11, elbow: 13, wrist: 15}
     : {shoulder: 12, elbow: 14, wrist: 16};
-  const shoulder = xyz(posePoint(pose, side, 'Shoulder', sideIndexes.shoulder));
-  const elbow = xyz(posePoint(pose, side, 'Elbow', sideIndexes.elbow));
-  const expectedWrist = xyz(posePoint(pose, side, 'Wrist', sideIndexes.wrist));
-  const wrist = xyz(candidate?.landmarks?.[0]);
+  // Solo x/y de imagen, como LandmarkEngine.kt: la z de la pose es relativa
+  // a la cadera (~-1.5 en munecas) y la de la mano relativa a su muneca (0);
+  // mezclarlas hacia que la profundidad ruidosa decidiera el lado.
+  const shoulder = xy(posePoint(pose, side, 'Shoulder', sideIndexes.shoulder));
+  const elbow = xy(posePoint(pose, side, 'Elbow', sideIndexes.elbow));
+  const expectedWrist = xy(posePoint(pose, side, 'Wrist', sideIndexes.wrist));
+  const wrist = xy(candidate?.landmarks?.[0]);
   if (![shoulder, elbow, expectedWrist, wrist].every(finite)) return Infinity;
 
   const endpoint = distance(wrist, expectedWrist) / shoulderWidth;

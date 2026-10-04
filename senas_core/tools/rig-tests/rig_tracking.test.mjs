@@ -91,6 +91,27 @@ test('arm chain assignment locks physical hands despite contradictory labels', (
   assert.equal(result.mode, 'pose_arm_chain');
 });
 
+test('arm chain uses image x/y only: pose depth never decides the side', () => {
+  // Datos reales (sesion 20261004T081355Z): la mano esta a 0.03 de la
+  // muneca izquierda en imagen, pero la z de la pose (~-1, relativa a la
+  // cadera) no es comparable con la z de la mano (relativa a su muneca, 0).
+  // En 3D la derecha "ganaba" porque su z estaba mas cerca de 0.
+  const z = (x, y, depth) => ({x, y, z: depth, visibility: .95});
+  const result = assignHandsByArmChain([
+    {landmarks: hand(.38, .676), side: 'Left'},
+  ], {
+    leftShoulder: z(.281, .626, -.09), leftElbow: z(.349, .85, -.39),
+    leftWrist: z(.350, .672, -.97),
+    rightShoulder: z(.046, .635, -.09), rightElbow: z(-.016, .851, -.25),
+    rightWrist: z(-.016, .927, -.72),
+    leftWristVisibility: .96, rightWristVisibility: .10,
+    shoulderWidth: .235,
+  });
+  assert.deepEqual(result.sideByIndex, ['left']);
+  assert.equal(result.mode, 'pose_arm_chain');
+  assert.ok(result.costs[0].left < .5, `costo izquierdo ${result.costs[0].left}`);
+});
+
 test('ambiguous arm chains do not lock either hand to a guessed side', () => {
   const result = assignHandsByArmChain([
     {landmarks: hand(.48, .55), side: 'left'},
