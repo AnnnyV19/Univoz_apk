@@ -71,7 +71,8 @@ class Manejador(http.server.SimpleHTTPRequestHandler):
         return self._json(200, {"ok": True, "lines": len(lineas)})
 
     def log_message(self, fmt, *args):
-        if "/api/" in (args[0] if args else ""):
+        # args[0] no siempre es la linea del pedido: en un 404 es HTTPStatus.
+        if "/api/" in str(args[0] if args else ""):
             return  # sin ruido por cada bloque de sesion
         super().log_message(fmt, *args)
 
