@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   assignHandsByArmChain,
+  handCandidateCost,
   classifySourceSkew,
   createHandTrackCoordinator,
   detectHandContact,
@@ -110,6 +111,19 @@ test('arm chain uses image x/y only: pose depth never decides the side', () => {
   assert.deepEqual(result.sideByIndex, ['left']);
   assert.equal(result.mode, 'pose_arm_chain');
   assert.ok(result.costs[0].left < .5, `costo izquierdo ${result.costs[0].left}`);
+});
+
+test('track without history compares candidates to the pose wrist in x/y', () => {
+  // Mano que reaparece: sin historial, la posicion esperada sale de la
+  // muneca de la pose, cuya z (~-1.5) no es comparable con la de la mano.
+  const z = (x, y, depth) => ({x, y, z: depth});
+  const track = {side: 'left', landmarks: null, lastSeenMs: null,
+    velocity: {x: 0, y: 0, z: 0}, frame: null};
+  const pose = {leftWrist: z(.70, .55, -1.5), rightWrist: z(.30, .55, -1.4),
+    shoulderWidth: .4};
+  const cerca = handCandidateCost(track, {landmarks: hand(.70, .56)}, pose, 0, false, true);
+  const lejos = handCandidateCost(track, {landmarks: hand(.32, .55)}, pose, 0, false, true);
+  assert.ok(cerca + .1 < lejos, `cerca ${cerca} lejos ${lejos}`);
 });
 
 test('ambiguous arm chains do not lock either hand to a guessed side', () => {

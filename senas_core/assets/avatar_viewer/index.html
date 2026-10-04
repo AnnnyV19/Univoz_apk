@@ -1946,14 +1946,16 @@
         };
       }
 
-      function candidateCost(track, candidate, pose, timestampMs, contact,
+      function handCandidateCost(track, candidate, pose, timestampMs, contact,
         ignoreSide = false) {
         if (!ignoreSide && candidate?.sideLocked === true && candidate.side &&
             candidate.side !== track.side) return Infinity;
         const wrist = xyz(candidate.landmarks?.[0]);
         if (!finite(wrist)) return Infinity;
         const width = Math.max(.05, Number(pose?.shoulderWidth) || .4);
-        const expected = expectedWrist(track, timestampMs) ?? xyz(
+        // Sin historial: muneca de la pose solo en x/y (su z es relativa a la
+        // cadera y la de la mano a su propia muneca; no se comparan).
+        const expected = expectedWrist(track, timestampMs) ?? xy(
           track.side === 'left' ? pose?.leftWrist : pose?.rightWrist);
         const position = finite(expected) ? clamp(distance(wrist, expected) / width) : .5;
         let velocity = .5;
@@ -2240,8 +2242,8 @@
           const contactBefore = detectHandContact(
             candidates[0]?.landmarks, candidates[1]?.landmarks, shoulderWidth);
           const costs = candidates.map((candidate) => ({
-            left: candidateCost(tracks.left, candidate, pose, t, contactBefore.active),
-            right: candidateCost(tracks.right, candidate, pose, t, contactBefore.active),
+            left: handCandidateCost(tracks.left, candidate, pose, t, contactBefore.active),
+            right: handCandidateCost(tracks.right, candidate, pose, t, contactBefore.active),
           }));
           const assigned = {left: null, right: null};
           const assignedCosts = {left: null, right: null};
@@ -2266,10 +2268,10 @@
               // temporal continuity. A one-frame arm-chain glitch during a fast
               // crossing must not exchange physical hands in the avatar.
               const neutralCosts = candidates.map((candidate) => ({
-                left: candidateCost(tracks.left,
+                left: handCandidateCost(tracks.left,
                   {...candidate, side: null, sideLocked: false, sideAmbiguous: true},
                   pose, t, contactBefore, true),
-                right: candidateCost(tracks.right,
+                right: handCandidateCost(tracks.right,
                   {...candidate, side: null, sideLocked: false, sideAmbiguous: true},
                   pose, t, contactBefore, true),
               }));
