@@ -80,6 +80,10 @@ Fase 0 pendiente):
   profundidad, `--baseline`, `--comparar`) y Audit Sentinel offline contra el
   perfil (`tools/auditoria.py`) (Fase 0/6).
 - [x] `tools/sincronizar_kotlin.py`: copias Kotlin de `univoz` sin deriva.
+- [x] Holistic web en Web Worker (`rig_holistic_worker.mjs`, solo GPU; cae
+  al hilo principal GPU→CPU si falla; `?worker=0` para comparar). Smoke con
+  cámara falsa: render del avatar 37 → 61 FPS, `proc` del hilo principal
+  24.5 → 2.1 ms. Falta medirlo con cámara física (Fase 0/1).
 - [ ] Baselines físicos reales (requieren sesiones del usuario) (Fase 0).
 - [ ] Retarget `anchors` por defecto tras validación visual (Fase 3).
 - [ ] Un solo `palmFrameV2` y `jointLimits` anatómicos (Fase 3; requieren

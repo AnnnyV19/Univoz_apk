@@ -35,7 +35,9 @@ L = t_render - t_capture
 Reportar `p50`, `p95`, `p99`. Objetivo final: `p95 < 50 ms`. Durante Fase 0,
 `p95 <=120 ms` es solo límite provisional de diagnóstico; no habilita
 producción. Si WebView supera 50 ms después de medir, evaluar worker o capa
-nativa.
+nativa. Web: Holistic corre en un Web Worker por defecto (`?worker=0` para
+comparar con el hilo principal); 2026-10-03 en el hilo principal medía
+~45 ms de inferencia y ~17 FPS.
 
 ### Respuesta de dedos
 

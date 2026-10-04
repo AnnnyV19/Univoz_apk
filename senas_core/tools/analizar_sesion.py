@@ -150,7 +150,8 @@ def resumir(registros):
         ms = [f.get("ms", {}) for f in frames]
         out["timing_ms"] = {k: {"p50": round(pct([m.get(k) for m in ms], .5), 1),
                                 "p95": round(pct([m.get(k) for m in ms], .95), 1)}
-                            for k in ("pose", "hand", "proc")}
+                            for k in ("pose", "hand", "proc", "rt")
+                            if any(m.get(k) is not None for m in ms)}
         # profundidad: antebrazo 3D dentro del 152D (puntos codo 2/3, muneca 4/5)
         prof = {}
         for lado, c, m in (("left", 2, 4), ("right", 3, 5)):
@@ -218,6 +219,7 @@ def baseline(res):
         "platform": meta.get("platform"),
         "screen": meta.get("screen"),
         "capture_mode": meta.get("capture_mode"),
+        "holistic_worker": meta.get("holistic_worker"),
         "device": meta.get("user_agent") or meta.get("device"),
         "video": meta.get("video"),
         "frames": res.get("frames", 0),

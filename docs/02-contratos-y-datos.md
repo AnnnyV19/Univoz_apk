@@ -132,9 +132,11 @@ expresiones (`rig_face.mjs`). La cara nunca entra en `MotionFrameV2`.
 
 JSONL, una línea por registro, cada una con `seq` para deduplicar:
 `session_start` (`schema`, `session_id`, `meta`: plataforma, pantalla,
-modo de captura, video, calibración, perfil), `frame` (landmarks crudos de
-pose e imagen, manos antes/después de la compuerta o asociación del motor,
-cara, 152D, SignSpace, tiempos, errores), `event` (cámara, perfil, fallbacks,
+modo de captura, `holistic_worker` y su error si cayó al hilo principal,
+video, calibración, perfil), `frame` (landmarks crudos de pose e imagen,
+manos antes/después de la compuerta o asociación del motor, cara, 152D,
+SignSpace, tiempos `ms.pose`/`hand`/`proc` y, con worker, `ms.rt` = envío del
+frame → resultado en el hilo principal, errores), `event` (cámara, perfil, fallbacks,
 auditoría, muestras guardadas) y `session_end`. Solo con consentimiento;
 nunca video ni imágenes. Web: `senas_core/sesiones/` vía
 `tools/servidor_visor.py`; Android: `<documentos>/sesiones/`. Se analiza con

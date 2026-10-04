@@ -123,3 +123,18 @@ def test_metricas_por_modo_de_retarget():
     assert r["by_retarget"]["anchors"]["hand_rejects"] == {"hand_duplicate": 2}
     solo = an.resumir(regs[:4])
     assert solo["by_retarget"] == {}
+
+
+def test_tiempos_del_worker_holistic():
+    regs = [{"kind": "session_start", "session_id": "w",
+             "meta": {"platform": "web", "holistic_worker": True}}]
+    for i in range(5):
+        f = _frame(i * 40)
+        f["ms"]["rt"] = 36 + i
+        regs.append(f)
+    r = an.resumir(regs)
+    assert r["timing_ms"]["rt"]["p50"] == 38
+    assert an.baseline(r)["holistic_worker"] is True
+    # Sesiones del hilo principal no traen "rt": no aparece en el resumen.
+    sin = an.resumir([regs[0], _frame(0), _frame(40)])
+    assert "rt" not in sin["timing_ms"]
