@@ -41,6 +41,82 @@ export function holisticWorkerMain(scope, importar) {
   });
   const categorias = (grupos) => lista(grupos).map((g) => lista(g).map((c) => ({
     categoryName: c.categoryName, score: c.score, index: c.index})));
+  const detectar = (frame, timestampMs) => {
+    if (modo === 'holistic') {
+      if (!tarea) throw new Error('worker de captura sin inicializar');
+      return {result: plano(tarea.detectForVideo(frame, timestampMs))};
+    }
+    if (!tareas) throw new Error('worker de captura sin inicializar');
+    const t0 = performance.now();
+    const pose = tareas.pose.detectForVideo(frame, timestampMs);
+    const t1 = performance.now();
+    const hand = tareas.hand.detectForVideo(frame, timestampMs);
+    const t2 = performance.now();
+    const face = tareas.face?.detectForVideo(frame, timestampMs);
+    const t3 = performance.now();
+    return {
+      stages: {pose: t1 - t0, hand: t2 - t1, face: t3 - t2},
+      result: {
+        pose: {landmarks: lista(pose?.landmarks),
+          worldLandmarks: lista(pose?.worldLandmarks)},
+        hand: {landmarks: lista(hand?.landmarks),
+          worldLandmarks: lista(hand?.worldLandmarks),
+          handednesses: categorias(hand?.handednesses ?? hand?.handedness)},
+        face: {faceLandmarks: lista(face?.faceLandmarks)},
+      },
+    };
+  };
+  // Modo stream: el worker lee la camara (ReadableStream de VideoFrame de
+  // MediaStreamTrackProcessor) y procesa siempre el frame mas reciente en
+  // cuanto queda libre, sin esperar al hilo principal (que renderiza el
+  // avatar). Los frames que llegan mientras detecta se descartan.
+  let ultimoTs = 0;
+  const leerStream = async (readable) => {
+    const lector = readable.getReader();
+    let pendiente = null;
+    let descartados = 0;
+    let ocupado = false;
+    const procesar = () => {
+      if (ocupado || !pendiente) return;
+      ocupado = true;
+      const {frame, recibido} = pendiente;
+      pendiente = null;
+      const inicio = performance.now();
+      // VIDEO exige timestamps crecientes; reloj propio del worker.
+      ultimoTs = Math.max(ultimoTs + 1, inicio);
+      try {
+        const {result, stages} = detectar(frame, ultimoTs);
+        responder({type: 'stream_result', result, stages,
+          ms: performance.now() - inicio, capturedAt: recibido,
+          workerTimeOrigin: performance.timeOrigin, dropped: descartados});
+        descartados = 0;
+      } catch (e) {
+        responder({type: 'stream_error', error: error(e)});
+      } finally {
+        try { frame.close(); } catch (_) { /* ya cerrado */ }
+        ocupado = false;
+      }
+      if (pendiente) setTimeout(procesar, 0);
+    };
+    try {
+      for (;;) {
+        const {value, done} = await lector.read();
+        if (done) break;
+        if (pendiente) {
+          try { pendiente.frame.close(); } catch (_) { /* nada */ }
+          descartados++;
+        }
+        pendiente = {frame: value, recibido: performance.now()};
+        procesar();
+      }
+    } catch (e) {
+      responder({type: 'stream_error', error: error(e)});
+    } finally {
+      try { pendiente?.frame.close(); } catch (_) { /* nada */ }
+      pendiente = null;
+      responder({type: 'stream_end'});
+    }
+  };
   scope.onmessage = async (event) => {
     const msg = event.data || {};
     if (msg.type === 'init') {
@@ -111,29 +187,7 @@ export function holisticWorkerMain(scope, importar) {
     if (msg.type === 'detect') {
       const inicio = performance.now();
       try {
-        let result, stages;
-        if (modo === 'holistic') {
-          if (!tarea) throw new Error('worker de captura sin inicializar');
-          result = plano(tarea.detectForVideo(msg.frame, msg.timestampMs));
-        } else {
-          if (!tareas) throw new Error('worker de captura sin inicializar');
-          const t0 = performance.now();
-          const pose = tareas.pose.detectForVideo(msg.frame, msg.timestampMs);
-          const t1 = performance.now();
-          const hand = tareas.hand.detectForVideo(msg.frame, msg.timestampMs);
-          const t2 = performance.now();
-          const face = tareas.face?.detectForVideo(msg.frame, msg.timestampMs);
-          const t3 = performance.now();
-          stages = {pose: t1 - t0, hand: t2 - t1, face: t3 - t2};
-          result = {
-            pose: {landmarks: lista(pose?.landmarks),
-              worldLandmarks: lista(pose?.worldLandmarks)},
-            hand: {landmarks: lista(hand?.landmarks),
-              worldLandmarks: lista(hand?.worldLandmarks),
-              handednesses: categorias(hand?.handednesses ?? hand?.handedness)},
-            face: {faceLandmarks: lista(face?.faceLandmarks)},
-          };
-        }
+        const {result, stages} = detectar(msg.frame, msg.timestampMs);
         responder({type: 'result', id: msg.id, result, stages,
           ms: performance.now() - inicio});
       } catch (e) {
@@ -141,6 +195,10 @@ export function holisticWorkerMain(scope, importar) {
       } finally {
         try { msg.frame?.close?.(); } catch (_) { /* ya cerrado */ }
       }
+      return;
+    }
+    if (msg.type === 'stream') {
+      leerStream(msg.readable);
       return;
     }
     if (msg.type === 'close') {
@@ -204,6 +262,7 @@ export function createHolisticWorkerClient({
   const worker = createWorker(holisticWorkerSource());
   const pendientes = new Map();
   let siguienteId = 1;
+  let alStream = null;
   let listo = null;
   let cerrado = false;
 
@@ -225,6 +284,16 @@ export function createHolisticWorkerClient({
       error.failures = msg.failures ?? [];
       listo?.reject(error);
       listo = null;
+    } else if (msg.type === 'stream_result') {
+      alStream?.onResult({result: msg.result, ms: msg.ms,
+        stages: msg.stages ?? null, dropped: msg.dropped ?? 0,
+        // Reloj del worker llevado al del hilo principal.
+        capturedAtMs: msg.workerTimeOrigin - performance.timeOrigin +
+          msg.capturedAt});
+    } else if (msg.type === 'stream_error') {
+      alStream?.onError?.(new Error(msg.error));
+    } else if (msg.type === 'stream_end') {
+      alStream?.onEnd?.();
     } else if (msg.type === 'result' || msg.type === 'detect_error') {
       const p = pendientes.get(msg.id);
       if (!p) return;
@@ -237,7 +306,9 @@ export function createHolisticWorkerClient({
   };
   worker.onerror = (event) => {
     event?.preventDefault?.();
-    rechazarTodo(new Error('holistic worker: ' + (event?.message ?? 'error')));
+    const error = new Error('holistic worker: ' + (event?.message ?? 'error'));
+    alStream?.onError?.(error);
+    rechazarTodo(error);
   };
 
   return {
@@ -266,10 +337,19 @@ export function createHolisticWorkerClient({
         worker.postMessage({type: 'detect', id, frame, timestampMs}, [frame]);
       });
     },
+    // Entrega un ReadableStream<VideoFrame> al worker (transferido). Los
+    // resultados llegan a onResult({result, ms, stages, capturedAtMs,
+    // dropped}); capturedAtMs ya esta en el reloj performance.now() de aqui.
+    stream(readable, {onResult, onError, onEnd} = {}) {
+      if (cerrado) throw new Error('holistic worker cerrado');
+      alStream = {onResult, onError, onEnd};
+      worker.postMessage({type: 'stream', readable}, [readable]);
+    },
     get pending() { return pendientes.size; },
     close() {
       if (cerrado) return;
       cerrado = true;
+      alStream = null;
       rechazarTodo(new Error('holistic worker cerrado'));
       try { worker.postMessage({type: 'close'}); } catch (_) { /* ya muerto */ }
       worker.terminate?.();

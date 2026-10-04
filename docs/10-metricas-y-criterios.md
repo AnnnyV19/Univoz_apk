@@ -37,7 +37,11 @@ Reportar `p50`, `p95`, `p99`. Objetivo final: `p95 < 50 ms`. Durante Fase 0,
 producción. Si WebView supera 50 ms después de medir, evaluar worker o capa
 nativa. Web: Holistic corre en un Web Worker por defecto (`?worker=0` para
 comparar con el hilo principal); 2026-10-03 en el hilo principal medía
-~45 ms de inferencia y ~17 FPS.
+~45 ms de inferencia y ~17 FPS. Con worker por envío (2026-10-04): 31 ms de
+inferencia pero 38 ms de ida y vuelta (espera al render del avatar), ~25
+FPS. Desde entonces el worker lee la cámara directo
+(`MediaStreamTrackProcessor`, `?stream=0` para comparar); `ms.rt` = captura
+del frame → resultado en el hilo principal.
 
 ### Respuesta de dedos
 

@@ -242,3 +242,39 @@ test('separadoToTaskResults matches the holistic task shapes', () => {
   assert.equal(vacio.face, null);
   assert.deepEqual(vacio.handResult.landmarks, []);
 });
+
+test('stream mode reads frames in the worker and reports each result', async () => {
+  const fake = fakeWorker();
+  const client = createHolisticWorkerClient(opciones(fake));
+  await client.init();
+  const cerrados = [];
+  const frames = [1, 2, 3].map((id) => ({id, close: () => cerrados.push(id)}));
+  const readable = new ReadableStream({
+    start(c) { for (const f of frames) c.enqueue(f); c.close(); },
+  });
+  const resultados = [];
+  const fin = new Promise((resolve) => client.stream(readable, {
+    onResult: (r) => resultados.push(r), onEnd: resolve}));
+  await fin;
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(resultados.length, 3);
+  assert.deepEqual(resultados.map((r) => r.result.poseLandmarks[0].length), [33, 33, 33]);
+  const ahora = performance.now();
+  assert.ok(resultados.every((r) => Number.isFinite(r.capturedAtMs) &&
+    r.capturedAtMs >= 0 && r.capturedAtMs <= ahora));
+  assert.deepEqual(cerrados.sort(), [1, 2, 3], 'cada VideoFrame se libera');
+  assert.deepEqual(fake.worker.transfers.at(-1), [readable]);
+});
+
+test('stream mode reports detect errors without stopping the stream', async () => {
+  const fake = fakeWorker({detectThrows: true});
+  const client = createHolisticWorkerClient(opciones(fake));
+  await client.init();
+  const errores = [];
+  const readable = new ReadableStream({
+    start(c) { c.enqueue({close() {}}); c.enqueue({close() {}}); c.close(); },
+  });
+  await new Promise((resolve) => client.stream(readable, {
+    onResult: () => {}, onError: (e) => errores.push(e.message), onEnd: resolve}));
+  assert.deepEqual(errores, ['webgl lost', 'webgl lost']);
+});

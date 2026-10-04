@@ -84,6 +84,11 @@ Fase 0 pendiente):
   al hilo principal GPU→CPU si falla; `?worker=0` para comparar). Smoke con
   cámara falsa: render del avatar 37 → 61 FPS, `proc` del hilo principal
   24.5 → 2.1 ms. Falta medirlo con cámara física (Fase 0/1).
+- [x] Asignación de lado por cadena de brazo en x/y de imagen (como
+  Kotlin): la z de pose (cadera) y la de mano (muñeca) no son comparables;
+  en sesiones reales 11–24 % de frames iban al lado de la muñeca más lejana.
+- [x] Worker de captura lee la cámara directo (stream) y modo separado
+  (Pose + Hand + Face) medido: más lento que Holistic con video real.
 - [ ] Baselines físicos reales (requieren sesiones del usuario) (Fase 0).
 - [ ] Retarget `anchors` por defecto tras validación visual (Fase 3).
 - [ ] Un solo `palmFrameV2` y `jointLimits` anatómicos (Fase 3; requieren

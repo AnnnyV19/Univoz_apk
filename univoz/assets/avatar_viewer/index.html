@@ -1573,6 +1573,8 @@
         y: Number(point?.y ?? point?.[1]),
         z: Number(point?.z ?? point?.[2] ?? 0),
       });
+      // Punto de imagen sin profundidad (z = 0) para comparar pose con mano.
+      const xy = (point) => ({...xyz(point), z: 0});
       const finite = (point) =>
         Number.isFinite(point?.x) && Number.isFinite(point?.y) && Number.isFinite(point?.z);
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -1790,10 +1792,13 @@
         const sideIndexes = side === 'left'
           ? {shoulder: 11, elbow: 13, wrist: 15}
           : {shoulder: 12, elbow: 14, wrist: 16};
-        const shoulder = xyz(posePoint(pose, side, 'Shoulder', sideIndexes.shoulder));
-        const elbow = xyz(posePoint(pose, side, 'Elbow', sideIndexes.elbow));
-        const expectedWrist = xyz(posePoint(pose, side, 'Wrist', sideIndexes.wrist));
-        const wrist = xyz(candidate?.landmarks?.[0]);
+        // Solo x/y de imagen, como LandmarkEngine.kt: la z de la pose es relativa
+        // a la cadera (~-1.5 en munecas) y la de la mano relativa a su muneca (0);
+        // mezclarlas hacia que la profundidad ruidosa decidiera el lado.
+        const shoulder = xy(posePoint(pose, side, 'Shoulder', sideIndexes.shoulder));
+        const elbow = xy(posePoint(pose, side, 'Elbow', sideIndexes.elbow));
+        const expectedWrist = xy(posePoint(pose, side, 'Wrist', sideIndexes.wrist));
+        const wrist = xy(candidate?.landmarks?.[0]);
         if (![shoulder, elbow, expectedWrist, wrist].every(finite)) return Infinity;
 
         const endpoint = distance(wrist, expectedWrist) / shoulderWidth;
@@ -3763,6 +3768,82 @@
         });
         const categorias = (grupos) => lista(grupos).map((g) => lista(g).map((c) => ({
           categoryName: c.categoryName, score: c.score, index: c.index})));
+        const detectar = (frame, timestampMs) => {
+          if (modo === 'holistic') {
+            if (!tarea) throw new Error('worker de captura sin inicializar');
+            return {result: plano(tarea.detectForVideo(frame, timestampMs))};
+          }
+          if (!tareas) throw new Error('worker de captura sin inicializar');
+          const t0 = performance.now();
+          const pose = tareas.pose.detectForVideo(frame, timestampMs);
+          const t1 = performance.now();
+          const hand = tareas.hand.detectForVideo(frame, timestampMs);
+          const t2 = performance.now();
+          const face = tareas.face?.detectForVideo(frame, timestampMs);
+          const t3 = performance.now();
+          return {
+            stages: {pose: t1 - t0, hand: t2 - t1, face: t3 - t2},
+            result: {
+              pose: {landmarks: lista(pose?.landmarks),
+                worldLandmarks: lista(pose?.worldLandmarks)},
+              hand: {landmarks: lista(hand?.landmarks),
+                worldLandmarks: lista(hand?.worldLandmarks),
+                handednesses: categorias(hand?.handednesses ?? hand?.handedness)},
+              face: {faceLandmarks: lista(face?.faceLandmarks)},
+            },
+          };
+        };
+        // Modo stream: el worker lee la camara (ReadableStream de VideoFrame de
+        // MediaStreamTrackProcessor) y procesa siempre el frame mas reciente en
+        // cuanto queda libre, sin esperar al hilo principal (que renderiza el
+        // avatar). Los frames que llegan mientras detecta se descartan.
+        let ultimoTs = 0;
+        const leerStream = async (readable) => {
+          const lector = readable.getReader();
+          let pendiente = null;
+          let descartados = 0;
+          let ocupado = false;
+          const procesar = () => {
+            if (ocupado || !pendiente) return;
+            ocupado = true;
+            const {frame, recibido} = pendiente;
+            pendiente = null;
+            const inicio = performance.now();
+            // VIDEO exige timestamps crecientes; reloj propio del worker.
+            ultimoTs = Math.max(ultimoTs + 1, inicio);
+            try {
+              const {result, stages} = detectar(frame, ultimoTs);
+              responder({type: 'stream_result', result, stages,
+                ms: performance.now() - inicio, capturedAt: recibido,
+                workerTimeOrigin: performance.timeOrigin, dropped: descartados});
+              descartados = 0;
+            } catch (e) {
+              responder({type: 'stream_error', error: error(e)});
+            } finally {
+              try { frame.close(); } catch (_) { /* ya cerrado */ }
+              ocupado = false;
+            }
+            if (pendiente) setTimeout(procesar, 0);
+          };
+          try {
+            for (;;) {
+              const {value, done} = await lector.read();
+              if (done) break;
+              if (pendiente) {
+                try { pendiente.frame.close(); } catch (_) { /* nada */ }
+                descartados++;
+              }
+              pendiente = {frame: value, recibido: performance.now()};
+              procesar();
+            }
+          } catch (e) {
+            responder({type: 'stream_error', error: error(e)});
+          } finally {
+            try { pendiente?.frame.close(); } catch (_) { /* nada */ }
+            pendiente = null;
+            responder({type: 'stream_end'});
+          }
+        };
         scope.onmessage = async (event) => {
           const msg = event.data || {};
           if (msg.type === 'init') {
@@ -3833,29 +3914,7 @@
           if (msg.type === 'detect') {
             const inicio = performance.now();
             try {
-              let result, stages;
-              if (modo === 'holistic') {
-                if (!tarea) throw new Error('worker de captura sin inicializar');
-                result = plano(tarea.detectForVideo(msg.frame, msg.timestampMs));
-              } else {
-                if (!tareas) throw new Error('worker de captura sin inicializar');
-                const t0 = performance.now();
-                const pose = tareas.pose.detectForVideo(msg.frame, msg.timestampMs);
-                const t1 = performance.now();
-                const hand = tareas.hand.detectForVideo(msg.frame, msg.timestampMs);
-                const t2 = performance.now();
-                const face = tareas.face?.detectForVideo(msg.frame, msg.timestampMs);
-                const t3 = performance.now();
-                stages = {pose: t1 - t0, hand: t2 - t1, face: t3 - t2};
-                result = {
-                  pose: {landmarks: lista(pose?.landmarks),
-                    worldLandmarks: lista(pose?.worldLandmarks)},
-                  hand: {landmarks: lista(hand?.landmarks),
-                    worldLandmarks: lista(hand?.worldLandmarks),
-                    handednesses: categorias(hand?.handednesses ?? hand?.handedness)},
-                  face: {faceLandmarks: lista(face?.faceLandmarks)},
-                };
-              }
+              const {result, stages} = detectar(msg.frame, msg.timestampMs);
               responder({type: 'result', id: msg.id, result, stages,
                 ms: performance.now() - inicio});
             } catch (e) {
@@ -3863,6 +3922,10 @@
             } finally {
               try { msg.frame?.close?.(); } catch (_) { /* ya cerrado */ }
             }
+            return;
+          }
+          if (msg.type === 'stream') {
+            leerStream(msg.readable);
             return;
           }
           if (msg.type === 'close') {
@@ -3926,6 +3989,7 @@
         const worker = createWorker(holisticWorkerSource());
         const pendientes = new Map();
         let siguienteId = 1;
+        let alStream = null;
         let listo = null;
         let cerrado = false;
 
@@ -3947,6 +4011,16 @@
             error.failures = msg.failures ?? [];
             listo?.reject(error);
             listo = null;
+          } else if (msg.type === 'stream_result') {
+            alStream?.onResult({result: msg.result, ms: msg.ms,
+              stages: msg.stages ?? null, dropped: msg.dropped ?? 0,
+              // Reloj del worker llevado al del hilo principal.
+              capturedAtMs: msg.workerTimeOrigin - performance.timeOrigin +
+                msg.capturedAt});
+          } else if (msg.type === 'stream_error') {
+            alStream?.onError?.(new Error(msg.error));
+          } else if (msg.type === 'stream_end') {
+            alStream?.onEnd?.();
           } else if (msg.type === 'result' || msg.type === 'detect_error') {
             const p = pendientes.get(msg.id);
             if (!p) return;
@@ -3959,7 +4033,9 @@
         };
         worker.onerror = (event) => {
           event?.preventDefault?.();
-          rechazarTodo(new Error('holistic worker: ' + (event?.message ?? 'error')));
+          const error = new Error('holistic worker: ' + (event?.message ?? 'error'));
+          alStream?.onError?.(error);
+          rechazarTodo(error);
         };
 
         return {
@@ -3988,10 +4064,19 @@
               worker.postMessage({type: 'detect', id, frame, timestampMs}, [frame]);
             });
           },
+          // Entrega un ReadableStream<VideoFrame> al worker (transferido). Los
+          // resultados llegan a onResult({result, ms, stages, capturedAtMs,
+          // dropped}); capturedAtMs ya esta en el reloj performance.now() de aqui.
+          stream(readable, {onResult, onError, onEnd} = {}) {
+            if (cerrado) throw new Error('holistic worker cerrado');
+            alStream = {onResult, onError, onEnd};
+            worker.postMessage({type: 'stream', readable}, [readable]);
+          },
           get pending() { return pendientes.size; },
           close() {
             if (cerrado) return;
             cerrado = true;
+            alStream = null;
             rechazarTodo(new Error('holistic worker cerrado'));
             try { worker.postMessage({type: 'close'}); } catch (_) { /* ya muerto */ }
             worker.terminate?.();
@@ -5998,6 +6083,13 @@
     // ?worker=0 fuerza el hilo principal para comparar.
     let capturaWorkerWeb = null;
     let capturaWorkerModelo = null;
+    // ?stream=0 vuelve al envio de frames desde el hilo principal.
+    let capturaStreamActivo = false;
+    let capturaStreamPedido = true;
+    try {
+      capturaStreamPedido =
+        new URLSearchParams(location.search).get('stream') !== '0';
+    } catch (_) { /* sin URL: stream */ }
     let capturaRecreando = false;
     // MediaPipe cargado, para recrear detectores si el worker falla.
     let visionWeb = null;
@@ -6085,6 +6177,7 @@
           capture_worker_mode: capturaWorkerWeb?.mode ?? null,
           capture_worker_model: capturaWorkerModelo,
           capture_worker_error: capturaWorkerError,
+          capture_stream: capturaStreamActivo,
           video: {width: video?.videoWidth ?? 0, height: video?.videoHeight ?? 0,
             fps: webCameraState.captureFps},
           retarget_mode: retargetMode,
@@ -6818,10 +6911,10 @@
         (s.validation ? ' · ' + s.validation : '');
     }
 
-    function siguienteTimestampWeb() {
+    function siguienteTimestampWeb(capturadoMs = performance.now()) {
       // MediaPipe Tasks Web espera reloj monotónico en milisegundos. Usar
       // epoch (~1e12) desborda timestamp interno y detiene CalculatorGraph.
-      const ahora = Math.round(performance.now());
+      const ahora = Math.round(capturadoMs);
       camaraUltimoTimestampMs = Math.max(ahora, camaraUltimoTimestampMs + 1);
       return camaraUltimoTimestampMs;
     }
@@ -7199,33 +7292,74 @@
       };
       // Sin bitmap (video aun no listo): se salta el frame, el worker sigue.
       createImageBitmap(video).then((frame) => worker.detect(frame, timestampMs)
-        .then(({result, ms, stages}) => {
+        .then((salida) => {
           soltar();
           if (capturaWorkerWeb !== worker || !webCameraState.running) return;
           enviarFrameWorkerWeb(video);
-          const processStartedAt = performance.now();
-          const sourceFrameId = webCaptureFrameIndex + 1;
-          diagnosticPointIssues = [];
-          diagnosticErrors = [];
-          try {
-            const unificado = worker.mode === 'separado'
-              ? separadoToTaskResults(result) : holisticToTaskResults(result);
-            registrarTiempoWeb('pose', stages?.pose ?? ms);
-            registrarTiempoWeb('hand', stages?.hand ?? 0);
-            caraVivo = unificado.face;
-            procesarDeteccionWeb({timestampMs, sourceFrameId, processStartedAt,
-              ejecutarPose: true, poseResult: unificado.poseResult,
-              handResult: unificado.handResult,
-              workerRtMs: processStartedAt - enviadoAt});
-          } catch (e) {
-            manejarErrorFrameWeb(e);
-          }
+          procesarResultadoWorker(worker, salida, timestampMs, enviadoAt);
         }, (error) => {
           soltar();
           if (capturaWorkerWeb === worker && webCameraState.running) {
             caerWorkerAHiloPrincipal(error);
           }
         }), soltar);
+    }
+
+    // Resultado del worker (envio o stream) al pipeline comun. `desdeMs` =
+    // captura del frame; ms.rt en la sesion = espera + inferencia + entrega.
+    function procesarResultadoWorker(worker, {result, ms, stages}, timestampMs, desdeMs) {
+      const processStartedAt = performance.now();
+      const sourceFrameId = webCaptureFrameIndex + 1;
+      diagnosticPointIssues = [];
+      diagnosticErrors = [];
+      try {
+        const unificado = worker.mode === 'separado'
+          ? separadoToTaskResults(result) : holisticToTaskResults(result);
+        registrarTiempoWeb('pose', stages?.pose ?? ms);
+        registrarTiempoWeb('hand', stages?.hand ?? 0);
+        caraVivo = unificado.face;
+        procesarDeteccionWeb({timestampMs, sourceFrameId, processStartedAt,
+          ejecutarPose: true, poseResult: unificado.poseResult,
+          handResult: unificado.handResult,
+          workerRtMs: processStartedAt - desdeMs});
+      } catch (e) {
+        manejarErrorFrameWeb(e);
+      }
+    }
+
+    // Stream: el worker lee la camara (MediaStreamTrackProcessor) y toma el
+    // frame mas reciente en cuanto termina el anterior, sin esperar a que el
+    // hilo principal termine de renderizar. 2026-10-04: en el modo de envio
+    // la ida y vuelta era 38 ms para 31 ms de inferencia (~25 FPS).
+    function iniciarStreamWorkerWeb() {
+      capturaStreamActivo = false;
+      const worker = capturaWorkerWeb;
+      const track = camaraStream?.getVideoTracks?.()[0];
+      if (!worker || !track || !capturaStreamPedido ||
+          typeof MediaStreamTrackProcessor !== 'function') return false;
+      try {
+        const procesador = new MediaStreamTrackProcessor({track, maxBufferSize: 1});
+        worker.stream(procesador.readable, {
+          onResult: (salida) => {
+            if (capturaWorkerWeb !== worker || !webCameraState.running) return;
+            procesarResultadoWorker(worker, salida,
+              siguienteTimestampWeb(salida.capturedAtMs), salida.capturedAtMs);
+          },
+          onError: (error) => {
+            if (capturaWorkerWeb === worker && webCameraState.running) {
+              capturaStreamActivo = false;
+              caerWorkerAHiloPrincipal(error);
+            }
+          },
+          onEnd: () => {
+            if (capturaWorkerWeb === worker) capturaStreamActivo = false;
+          },
+        });
+        capturaStreamActivo = true;
+      } catch (error) {
+        capturaWorkerError = 'stream: ' + String(error?.message ?? error).slice(0, 280);
+      }
+      return capturaStreamActivo;
     }
 
     function procesarCamaraWeb() {
@@ -7251,7 +7385,7 @@
           (Number(playback.droppedVideoFrames) || 0) - camaraInputQualityDropped);
       }
       if (capturaWorkerWeb) {
-        enviarFrameWorkerWeb(video);
+        if (!capturaStreamActivo) enviarFrameWorkerWeb(video);
       } else if (video && video.readyState >= 2 &&
           video.currentTime !== camaraUltimoVideoTime &&
           !webCameraState.processing) {
@@ -7343,6 +7477,7 @@
         capturaWorkerWeb = null;
       }
       capturaWorkerOcupado = false;
+      capturaStreamActivo = false;
       caraVivo = null;
       webPoseCache = null;
       webCaptureFrameIndex = 0;
@@ -7711,6 +7846,7 @@
         webCameraState.motionScore = 0;
         webCameraState.fingerMotionScore = 0;
         webCameraState.motionQuiet = true;
+        iniciarStreamWorkerWeb();
         iniciarSesionAutomatica();
         pintarEstadoCamaraWeb();
         camaraLoopId = requestAnimationFrame(procesarCamaraWeb);

@@ -70,7 +70,9 @@ La ventana negra de `web.bat` es el servidor: ciérrala para apagarlo.
 | Casilla *Adaptar a mi cuerpo (anclas)* | Mueve los brazos del avatar con las proporciones del avatar (tocar el mentón = tocar SU mentón). Experimental |
 | Casilla *Vista espejo (para mí)* | El avatar se mueve como tu reflejo. Para traducir a otra persona déjala apagada |
 | `&res=640` | Cámara a 640×480 en vez de 360×270 (para comparar calidad de manos) |
-| `&captura=separado` | Captura antigua (Pose + Hand), solo para depurar |
+| `&captura=separado` | Pose lite + Hand + Face en vez de Holistic (más lento con video real; solo para comparar) |
+| `&worker=0` | MediaPipe en el hilo principal (comparación; el avatar se traba) |
+| `&stream=0` | El worker recibe frames enviados por la página en vez de leer la cámara directo |
 | Botones *Sesión JSONL* / *Borrar mis datos* | Descargar la sesión actual / borrar perfil y consentimiento |
 
 ### Grabar una sesión de prueba útil

@@ -27,7 +27,10 @@ void main() {
     expect(html, contains('handAssignmentMode'));
     expect(html, contains('kFrameDim = 152'));
     expect(html, contains('kTFrames = 32'));
-    expect(html, contains('const ahora = Math.round(performance.now())'));
+    // Reloj monotonico (performance.now), nunca epoch; el stream del worker
+    // pasa la hora de captura ya convertida a este reloj.
+    expect(html, contains('function siguienteTimestampWeb(capturadoMs = performance.now())'));
+    expect(html, contains('const ahora = Math.round(capturadoMs)'));
     expect(html, isNot(contains('performance.timeOrigin + performance.now')));
     expect(html, contains('if (webCameraState.running)'));
     expect(html, contains('webCameraState.running = false'));
