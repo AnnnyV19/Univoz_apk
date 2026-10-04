@@ -106,6 +106,18 @@ No usar objetivos sintéticos como garantía de cámara real.
 | 6 IA/equidad | dataset separado por grupo | accuracy, F1, loss, RMSE y gap con `n`/IC | comparación contra baseline; gap objetivo `<=5%` |
 | 7 avanzada | benchmark reproducible | coste/beneficio contra baseline | complejidad justificada por métrica fallida |
 
+## Cálculo automático (`analizar_sesion.py --gates`)
+
+| Fase | Fuente en `SessionLogV1` | Regla |
+|---|---|---|
+| 0 | frames, `vec` | ≥300 frames y todo `vec` de 152 |
+| 1 | eventos `perf` (web) | p50 de `fps.tracking` ≥30 y `fps.render` ≥60; latencia p95 <50 PASS, ≤120 PROVISIONAL, >120 FAIL |
+| 2 | `tracked.*_surface` en pasos estática/pulgar/puño (`protocolo=manos`) | `inversion_pct` = cambios palma↔dorso / frames con cara conocida <1 % |
+| 3 | contadores `perf` + paso estático | `invalid_transforms` = 0, `teleports` = 0, jitter de antebrazo ≤2° RMS |
+| 4 | códigos en pasos cruce/tapar/salir | `hand_identity_swap` = 0 y `hand_position_jump` = 0; pérdida por causa informativa |
+
+`SIN_DATOS` = falta el paso o el evento; no es aprobado.
+
 ## Safety Gate y auditoría
 
 | Criterio | Aceptación |

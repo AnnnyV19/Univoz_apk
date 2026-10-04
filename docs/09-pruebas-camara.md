@@ -63,6 +63,22 @@ Resultado aceptable:
 - pulgar vuelve a neutral;
 - no cambia lado anatómico.
 
+## Registro automático y gates
+
+Las sesiones (`SessionLogV1`) registran todo lo anterior sin intervención:
+frames con códigos, evento `perf` cada segundo (latencia captura→avatar,
+FPS, contadores) y marcas de paso. Protocolo corporal: teclas 1–9 del
+README. Maniobras de esta página: abrir con `&protocolo=manos`
+(1 estática, 2 pulgar, 3 palma/dorso, 4 puño, 5 pronación, 6 cruce,
+7 tapar 200 ms, 8 tapar 500 ms, 9 salir y volver). Luego:
+
+```bash
+python3 senas_core/tools/analizar_sesion.py --gates senas_core/sesiones/<id>.jsonl
+```
+
+Fase 2 solo se evalúa con el protocolo de manos; fase 1 solo en web (Android
+aún no emite `perf`: `SIN_DATOS`).
+
 ## Registro manual de evidencia
 
 Anotar:

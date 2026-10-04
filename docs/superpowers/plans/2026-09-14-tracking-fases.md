@@ -99,6 +99,12 @@ Estado: estas seis casillas describen ejecución física pendiente; el protocolo
 los campos y los gates ya quedaron documentados en `docs/07-roadmap.md`,
 `docs/09-pruebas-camara.md` y `docs/10-metricas-y-criterios.md`.
 
+Herramienta (2026-10-04): pasos 1–4 se evalúan solos con
+`analizar_sesion.py --gates` sobre una sesión web (evento `perf`, marcas
+`&protocolo=manos`). Smoke con cámara falsa: latencia p50 38 / p95 50 ms,
+render 60 FPS. Paso 5 (perfil/capacidad) y 6 (IA/equidad) siguen sin
+automatizar. Las casillas se marcan cuando haya sesión física con PASS.
+
 ### Task 3: Regresiones de orientación y MAD
 
 **Files:**

@@ -92,17 +92,35 @@ marcadas para el análisis:
 
 Termina con **Detener**. La sesión queda en `senas_core\sesiones\<id>.jsonl`.
 
+**Sesión de manos** (gates de orientación e identidad): abre el visor con
+`&protocolo=manos`; las mismas teclas significan:
+
+| Tecla | Maniobra (unos 5 s cada una) |
+|---|---|
+| 1 | Estática, manos abiertas |
+| 2 | Pulgar: abierto → palma → tocar índice |
+| 3 | Girar palma ↔ dorso |
+| 4 | Cerrar el puño lento |
+| 5 | Pronación (girar antebrazo) |
+| 6 | Cruzar y tocar manos |
+| 7 | Tapar una mano ~200 ms |
+| 8 | Tapar una mano ~500 ms |
+| 9 | Sacar la mano del cuadro y volver |
+
 ### Analizar sesiones
 
 ```bat
 py -3 senas_core\tools\analizar_sesion.py
 py -3 senas_core\tools\analizar_sesion.py --comparar senas_core\sesiones\A.jsonl senas_core\sesiones\B.jsonl
 py -3 senas_core\tools\analizar_sesion.py --baseline
+py -3 senas_core\tools\analizar_sesion.py --gates
 ```
 
 Muestra cobertura (pose, manos, cara), manos rechazadas por el filtro
 anti-alucinación, errores más comunes, tiempos, profundidad, auditoría
-contra el perfil corporal y resultados por paso (teclas 1–9).
+contra el perfil corporal y resultados por paso (teclas 1–9). `--gates` da
+PASS / PROVISIONAL / FAIL / SIN_DATOS por fase según `docs/10` y lo guarda en
+`docs/evidence/gates/`.
 
 ## App Android
 

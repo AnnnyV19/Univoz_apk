@@ -137,7 +137,10 @@ video, calibración, perfil), `frame` (landmarks crudos de pose e imagen,
 manos antes/después de la compuerta o asociación del motor, cara, 152D,
 SignSpace, tiempos `ms.pose`/`hand`/`proc` y, con worker, `ms.rt` = envío del
 frame → resultado en el hilo principal, errores), `event` (cámara, perfil, fallbacks,
-auditoría, muestras guardadas) y `session_end`. Solo con consentimiento;
+auditoría, muestras guardadas, `marker` con `step`/`protocol`/`name`, y
+`perf` cada segundo en web: `latency_ms` = muestras captura→avatar de ese
+segundo, `fps` input/inference/tracking/pose/render y `counters` acumulados
+de swaps, flips, holds, recuperaciones, transforms inválidos y teleports) y `session_end`. Solo con consentimiento;
 nunca video ni imágenes. Web: `senas_core/sesiones/` vía
 `tools/servidor_visor.py`; Android: `<documentos>/sesiones/`. Se analiza con
 `tools/analizar_sesion.py`.
