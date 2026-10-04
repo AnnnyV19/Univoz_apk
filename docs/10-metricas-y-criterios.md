@@ -114,7 +114,7 @@ No usar objetivos sintéticos como garantía de cámara real.
 | 1 | eventos `perf` (web) | p50 de `fps.tracking` en segundos con manos ≥30 y `fps.render` ≥60; latencia p95 <50 PASS, ≤120 PROVISIONAL, >120 FAIL |
 | 2 | `tracked.*_surface` en pasos estática/pulgar/puño (`protocolo=manos`) | `inversion_pct` = cambios palma↔dorso / frames con cara conocida <1 % |
 | 3 | contadores `perf` + paso estático | `teleports` = 0 y jitter de antebrazo ≤2° (mediana de RMS por segundo). Rechazos de la compuerta (articulación congelada, nunca aplicada) se reportan con tasa y códigos |
-| 4 | códigos en pasos cruce/tapar/salir | `hand_identity_swap` = 0 y `hand_position_jump` = 0; pérdida por causa informativa |
+| 4 | códigos en pasos cruce/tapar/salir | `hand_identity_swap` = 0 y ningún `hand_position_jump` sin `hand_position_held` (salto aplicado); saltos retenidos y pérdida por causa son informativos |
 
 `SIN_DATOS` = falta el paso o el evento; no es aprobado.
 

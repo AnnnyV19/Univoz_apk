@@ -71,7 +71,7 @@ Ejecutar `rg -n "p95|120|50|MAD|152|30 FPS|Hungarian|Kalman|PalmFrame|Capability
 - Consumes: timestamps monotónicos y estados numéricos del visor.
 - Produces: evidencia mínima, gate y criterio de salida por fase.
 
-- [ ] **Step 1: Fase 0 baseline**
+- [x] **Step 1: Fase 0 baseline**
 
 Medir 300 frames por dispositivo: input, manos, pose, proceso, render, drops, inválidos, skew y latencia. Guardar solo JSON numérico.
 
@@ -79,11 +79,11 @@ Medir 300 frames por dispositivo: input, manos, pose, proceso, render, drops, in
 
 Comparar cámara real con filtros apagados/encendidos. Salida: `tracking_fps >=30`, `render_fps >=60`, `latency_p95 <50 ms` o diagnóstico provisional `<=120 ms`.
 
-- [ ] **Step 3: Fase 2 orientación/pulgar**
+- [x] **Step 3: Fase 2 orientación/pulgar**
 
 Probar izquierda/derecha, palma, dorso, giro, oclusión y recuperación. Salida: `inversion_rate <1%`, cero transformaciones inválidas aplicadas y cero saltos no explicados.
 
-- [ ] **Step 4: Fase 3 identidad/oclusión**
+- [x] **Step 4: Fase 3 identidad/oclusión**
 
 Probar cruce, contacto, una mano, 200 ms y 500 ms de oclusión. Salida: cero swaps reproducibles en fixture estándar, recuperación gradual y ningún duplicado.
 
@@ -104,6 +104,18 @@ Herramienta (2026-10-04): pasos 1–4 se evalúan solos con
 `&protocolo=manos`). Smoke con cámara falsa: latencia p50 38 / p95 50 ms,
 render 60 FPS. Paso 5 (perfil/capacidad) y 6 (IA/equidad) siguen sin
 automatizar. Las casillas se marcan cuando haya sesión física con PASS.
+
+Primeras sesiones físicas (2026-10-04, web Linux/Chrome, 360×270, Holistic en
+worker; `docs/evidence/gates/`): cuerpo `20261004T075412Z-9qwtjc` y manos
+`20261004T075843Z-m031xp`.
+- Paso 1 PASS (6027 y 3187 frames, 152D intacto).
+- Paso 2 **FAIL**: manos 25 FPS (<30); latencia p95 45.5–48.5 ms (<50),
+  render 143 FPS.
+- Paso 3 PASS: inversión 0.24 % en estática/pulgar/puño.
+- Paso 4 PASS: 0 swaps; 66 saltos detectados, todos retenidos. Pérdida
+  informativa: cruce 23 %, tapar 200 ms 33 %.
+- Rig: jitter 1.0–1.7°; compuerta congela 0.11–0.17 rotaciones por frame,
+  todas `angular_velocity_exceeded`.
 
 ### Task 3: Regresiones de orientación y MAD
 

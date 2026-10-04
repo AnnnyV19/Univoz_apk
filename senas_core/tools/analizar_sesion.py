@@ -416,14 +416,22 @@ def gates(registros):
     ident = {k: solo(k) for k in IDENTIDAD if solo(k)}
     codigos = collections.Counter(c for fs in ident.values() for f in fs
                                   for c in f.get("errors", []))
+    # Un salto detectado se retiene (hand_position_held) hasta verlo dos
+    # veces y luego avanza con paso acotado: solo cuenta como fallo el salto
+    # que llego al avatar sin retencion.
+    aplicados = sum(1 for fs in ident.values() for f in fs
+                    if "hand_position_jump" in f.get("errors", []) and
+                    "hand_position_held" not in f.get("errors", []))
     f4 = {"pasos": sorted(ident), "swaps": codigos.get("hand_identity_swap", 0),
-          "saltos": codigos.get("hand_position_jump", 0),
+          "saltos_retenidos": codigos.get("hand_position_jump", 0) - aplicados,
+          "saltos_aplicados": aplicados,
           "recuperaciones": codigos.get("hand_recovered", 0),
           "perdida": {k: _perdida(fs) for k, fs in ident.items()}}
     if not ident:
         f4["veredicto"] = "SIN_DATOS"
     else:
-        f4["veredicto"] = "FAIL" if f4["swaps"] or f4["saltos"] else "PASS"
+        f4["veredicto"] = ("FAIL" if f4["swaps"] or f4["saltos_aplicados"]
+                           else "PASS")
     out["fase_4_identidad"] = f4
     return out
 

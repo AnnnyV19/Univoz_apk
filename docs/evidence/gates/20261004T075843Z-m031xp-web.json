@@ -1,0 +1,124 @@
+{
+ "schema": "GatesV1",
+ "session_id": "20261004T075843Z-m031xp",
+ "umbrales": {
+  "frames_min": 300,
+  "tracking_fps_min": 30,
+  "render_fps_min": 60,
+  "latency_p95_ms": 50,
+  "latency_p95_provisional_ms": 120,
+  "inversion_pct_max": 1.0,
+  "jitter_deg_max": 2.0
+ },
+ "contexto": {
+  "platform": "web",
+  "device": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+  "video": {
+   "width": 360,
+   "height": 270,
+   "fps": 30
+  },
+  "holistic_worker": true,
+  "capture_mode": "holistic",
+  "protocol": "manos",
+  "frames": 3187,
+  "maniobras": {
+   "cruce": 438,
+   "estatica": 444,
+   "giro": 425,
+   "pronacion": 63,
+   "pulgar": 416,
+   "puno": 399,
+   "salir": 68,
+   "tapar_200": 441,
+   "tapar_500": 28
+  }
+ },
+ "fase_0_baseline": {
+  "frames": 3187,
+  "vector_152": true,
+  "veredicto": "PASS"
+ },
+ "fase_1_rendimiento": {
+  "perf_events": 115,
+  "latency_ms": {
+   "n": 3174,
+   "p50": 38.3,
+   "p95": 48.5,
+   "p99": 50.5
+  },
+  "tracking_fps_p50": 25,
+  "segundos_con_manos": 86,
+  "pose_fps_p50": 26,
+  "render_fps_p50": 143,
+  "inference_fps_p50": 26,
+  "veredicto": "FAIL"
+ },
+ "fase_2_orientacion": {
+  "pasos": [
+   "estatica",
+   "pulgar",
+   "puno"
+  ],
+  "cambios_en_giro": 16,
+  "inversion_pct": 0.24,
+  "veredicto": "PASS"
+ },
+ "fase_3_rig": {
+  "rechazos_compuerta": 542,
+  "rechazos_por_frame": 0.17,
+  "codigos_compuerta": {
+   "angular_velocity_exceeded": 542
+  },
+  "teleports": 0,
+  "jitter_deg": {
+   "left": 1.662,
+   "right": 1.576
+  },
+  "veredicto": "PASS"
+ },
+ "fase_4_identidad": {
+  "pasos": [
+   "cruce",
+   "salir",
+   "tapar_200",
+   "tapar_500"
+  ],
+  "swaps": 0,
+  "saltos_retenidos": 39,
+  "saltos_aplicados": 0,
+  "recuperaciones": 50,
+  "perdida": {
+   "cruce": {
+    "loss_pct": 23.1,
+    "causas": {
+     "modelo": 68,
+     "oclusion": 33,
+     "compuerta": 5
+    }
+   },
+   "tapar_200": {
+    "loss_pct": 32.7,
+    "causas": {
+     "modelo": 126,
+     "oclusion": 18,
+     "fuera_de_cuadro": 11
+    }
+   },
+   "tapar_500": {
+    "loss_pct": 89.3,
+    "causas": {
+     "modelo": 25
+    }
+   },
+   "salir": {
+    "loss_pct": 88.2,
+    "causas": {
+     "modelo": 49,
+     "oclusion": 11
+    }
+   }
+  },
+  "veredicto": "PASS"
+ }
+}

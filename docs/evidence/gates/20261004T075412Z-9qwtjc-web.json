@@ -1,0 +1,87 @@
+{
+ "schema": "GatesV1",
+ "session_id": "20261004T075412Z-9qwtjc",
+ "umbrales": {
+  "frames_min": 300,
+  "tracking_fps_min": 30,
+  "render_fps_min": 60,
+  "latency_p95_ms": 50,
+  "latency_p95_provisional_ms": 120,
+  "inversion_pct_max": 1.0,
+  "jitter_deg_max": 2.0
+ },
+ "contexto": {
+  "platform": "web",
+  "device": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+  "video": {
+   "width": 360,
+   "height": 270,
+   "fps": 30
+  },
+  "holistic_worker": true,
+  "capture_mode": "holistic",
+  "protocol": "cuerpo",
+  "frames": 6027,
+  "maniobras": {
+   "cruce": 490,
+   "quieto": 544
+  }
+ },
+ "fase_0_baseline": {
+  "frames": 6027,
+  "vector_152": true,
+  "veredicto": "PASS"
+ },
+ "fase_1_rendimiento": {
+  "perf_events": 214,
+  "latency_ms": {
+   "n": 5989,
+   "p50": 38.1,
+   "p95": 45.5,
+   "p99": 50.2
+  },
+  "tracking_fps_p50": 25,
+  "segundos_con_manos": 157,
+  "pose_fps_p50": 26,
+  "render_fps_p50": 143,
+  "inference_fps_p50": 26,
+  "veredicto": "FAIL"
+ },
+ "fase_2_orientacion": {
+  "pasos": [],
+  "cambios_en_giro": 0,
+  "veredicto": "SIN_DATOS"
+ },
+ "fase_3_rig": {
+  "rechazos_compuerta": 689,
+  "rechazos_por_frame": 0.114,
+  "codigos_compuerta": {
+   "angular_velocity_exceeded": 689
+  },
+  "teleports": 0,
+  "jitter_deg": {
+   "left": 1.047,
+   "right": 1.377
+  },
+  "veredicto": "PASS"
+ },
+ "fase_4_identidad": {
+  "pasos": [
+   "cruce"
+  ],
+  "swaps": 0,
+  "saltos_retenidos": 7,
+  "saltos_aplicados": 0,
+  "recuperaciones": 15,
+  "perdida": {
+   "cruce": {
+    "loss_pct": 26.3,
+    "causas": {
+     "modelo": 114,
+     "oclusion": 15
+    }
+   }
+  },
+  "veredicto": "PASS"
+ }
+}

@@ -275,3 +275,14 @@ def test_fps_de_manos_solo_en_segundos_con_manos_y_rechazos_informativos():
     assert f3["rechazos_compuerta"] == 5 * (len(perfs) - 1)
     assert f3["codigos_compuerta"] == {"joint_limit_violation": 5 * len(perfs)}
     assert f3["veredicto"] == "PASS" and "nota" not in f3
+
+
+def test_salto_retenido_no_falla_identidad_y_sin_retener_si():
+    regs = _sesion_gates(pasos=range(1, 10))
+    cruce = [r for r in regs if r.get("kind") == "frame"][5 * 60 + 10]
+    cruce["errors"] = ["hand_position_jump", "hand_position_held"]
+    g = an.gates(an.leer_registros(regs))["fase_4_identidad"]
+    assert g["veredicto"] == "PASS" and g["saltos_retenidos"] == 1
+    cruce["errors"] = ["hand_position_jump"]
+    g = an.gates(an.leer_registros(regs))["fase_4_identidad"]
+    assert g["veredicto"] == "FAIL" and g["saltos_aplicados"] == 1
