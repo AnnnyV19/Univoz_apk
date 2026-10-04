@@ -135,7 +135,8 @@ def test_tiempos_del_worker_holistic():
         regs.append(f)
     r = an.resumir(regs)
     assert r["timing_ms"]["rt"]["p50"] == 38
-    assert an.baseline(r)["holistic_worker"] is True
+    assert an.baseline(r)["capture_worker"] is True
+    assert an.baseline(r)["capture_worker_mode"] == "holistic"
     # Sesiones del hilo principal no traen "rt": no aparece en el resumen.
     sin = an.resumir([regs[0], _frame(0), _frame(40)])
     assert "rt" not in sin["timing_ms"]
@@ -204,7 +205,7 @@ def test_gates_sesion_limpia_pasa():
     assert g["fase_3_rig"]["veredicto"] == "PASS"
     assert g["fase_3_rig"]["jitter_deg"]["left"] < 0.01
     assert g["fase_4_identidad"]["veredicto"] == "PASS"
-    assert g["contexto"]["holistic_worker"] is True
+    assert g["contexto"]["capture_worker"] is True
 
 
 def test_gates_swap_en_cruce_falla_identidad():

@@ -132,7 +132,9 @@ expresiones (`rig_face.mjs`). La cara nunca entra en `MotionFrameV2`.
 
 JSONL, una línea por registro, cada una con `seq` para deduplicar:
 `session_start` (`schema`, `session_id`, `meta`: plataforma, pantalla,
-modo de captura, `holistic_worker` y su error si cayó al hilo principal,
+modo de captura, `capture_worker`/`capture_worker_mode` (`holistic` o
+`separado`; sesiones viejas: `holistic_worker`) y su error si cayó al hilo
+principal,
 video, calibración, perfil), `frame` (landmarks crudos de pose e imagen,
 manos antes/después de la compuerta o asociación del motor, cara, 152D,
 SignSpace, tiempos `ms.pose`/`hand`/`proc` y, con worker, `ms.rt` = envío del

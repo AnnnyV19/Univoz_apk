@@ -3719,14 +3719,18 @@
     // ---- fin rig_session.mjs ----
 
     // ---- inicio rig_holistic_worker.mjs (antes importado por separado) ----
-    const {holisticWorkerMain, holisticWorkerSource, holisticWorkerSupported, createHolisticWorkerClient} = (() => {
-      // HolisticLandmarker en un Web Worker.
+    const {holisticWorkerMain, separadoToTaskResults, holisticWorkerSource, holisticWorkerSupported, createHolisticWorkerClient} = (() => {
+      // Captura MediaPipe en un Web Worker.
       //
       // detectForVideo es sincrono y tarda ~45 ms por frame (GPU, 2026-10-03):
       // en el hilo principal bloquea el render del avatar y el lazo rAF suma la
       // espera al siguiente frame (~57 ms entre frames, ~17 FPS). En un worker la
       // inferencia corre aparte, el avatar sigue a 60 FPS y el siguiente frame se
       // manda en cuanto el worker queda libre (tubo de un frame).
+      //
+      // Dos modos: 'holistic' (un modelo, producto por defecto) y 'separado'
+      // (Pose lite + Hand + Face). Medido en Chromium GPU (2026-10-04, mismo frame):
+      // Holistic p50 29 ms; Pose 7 + Hand 6 + Face 9 = ~22 ms.
       //
       // El worker se crea desde un Blob (sin archivo propio): el visor tambien
       // vive inline en Android y Flutter Web. Por eso todas las URL que recibe
@@ -3737,9 +3741,12 @@
       // fuera de la funcion. `scope` es el self del worker e `importar` hace el
       // import() dinamico (inyectables para las pruebas).
       function holisticWorkerMain(scope, importar) {
+        let modo = 'holistic';
         let tarea = null;
+        let tareas = null;
         const responder = (msg) => scope.postMessage(msg);
         const lista = (v) => (Array.isArray(v) ? v : []);
+        const error = (e) => String(e?.message ?? e);
         // Solo los campos que usa holisticToTaskResults, como objetos planos.
         const plano = (r) => ({
           poseLandmarks: lista(r?.poseLandmarks),
@@ -3754,6 +3761,8 @@
               categoryName: c.categoryName, score: c.score})),
           })),
         });
+        const categorias = (grupos) => lista(grupos).map((g) => lista(g).map((c) => ({
+          categoryName: c.categoryName, score: c.score, index: c.index})));
         scope.onmessage = async (event) => {
           const msg = event.data || {};
           if (msg.type === 'init') {
@@ -3763,27 +3772,60 @@
               const fileset = await vision.FilesetResolver.forVisionTasks(msg.wasmUrl);
               // Un worker de modulo no tiene importScripts y MediaPipe no llega a
               // definir ModuleFactory ("ModuleFactory not set"): se evalua el
-              // cargador wasm a mano en el ambito global.
-              if (!scope.ModuleFactory && fileset?.wasmLoaderPath && msg.loadWasmLoader !== false) {
-                const codigo = await (await fetch(fileset.wasmLoaderPath)).text();
-                (0, eval)(codigo + '\n;self.ModuleFactory = ModuleFactory;');
+              // cargador wasm a mano en el ambito global. MediaPipe lo borra tras
+              // crear cada tarea, asi que se repone antes de cada creacion.
+              let cargador = null;
+              if (fileset?.wasmLoaderPath && msg.loadWasmLoader !== false) {
+                cargador = await (await fetch(fileset.wasmLoaderPath)).text();
               }
-              for (const modelo of msg.models) {
-                try {
-                  tarea = await vision.HolisticLandmarker.createFromOptions(fileset, {
-                    ...msg.options,
-                    baseOptions: {modelAssetPath: modelo, delegate: 'GPU'},
-                    runningMode: 'VIDEO',
-                  });
-                  responder({type: 'ready', model: modelo, failures: fallos});
-                  return;
-                } catch (error) {
-                  fallos.push({model: modelo, error: String(error?.message ?? error)});
+              const reponerCargador = () => {
+                if (cargador && !scope.ModuleFactory) {
+                  (0, eval)(cargador + '\n;self.ModuleFactory = ModuleFactory;');
                 }
+              };
+              // Primer modelo de la lista que carga en GPU, o null.
+              const crear = async (Clase, modelos, opciones) => {
+                for (const modelo of lista(modelos)) {
+                  try {
+                    reponerCargador();
+                    const t = await Clase.createFromOptions(fileset, {
+                      ...opciones,
+                      baseOptions: {modelAssetPath: modelo, delegate: 'GPU'},
+                      runningMode: 'VIDEO',
+                    });
+                    return {tarea: t, modelo};
+                  } catch (e) {
+                    fallos.push({model: modelo, error: error(e)});
+                  }
+                }
+                return null;
+              };
+              modo = msg.mode === 'separado' ? 'separado' : 'holistic';
+              if (modo === 'holistic') {
+                const r = await crear(vision.HolisticLandmarker, msg.models, msg.options);
+                if (r) {
+                  tarea = r.tarea;
+                  responder({type: 'ready', mode: modo, model: r.modelo, failures: fallos});
+                  return;
+                }
+              } else {
+                const o = msg.options || {};
+                const pose = await crear(vision.PoseLandmarker, msg.models?.pose, o.pose);
+                const hand = pose &&
+                  await crear(vision.HandLandmarker, msg.models?.hand, o.hand);
+                if (pose && hand) {
+                  // La cara es opcional: sin ella sigue el cuerpo y las manos.
+                  const face = await crear(vision.FaceLandmarker, msg.models?.face, o.face);
+                  tareas = {pose: pose.tarea, hand: hand.tarea, face: face?.tarea ?? null};
+                  responder({type: 'ready', mode: modo, failures: fallos, model: {
+                    pose: pose.modelo, hand: hand.modelo, face: face?.modelo ?? null}});
+                  return;
+                }
+                try { pose?.tarea.close(); } catch (_) { /* nada */ }
               }
               responder({type: 'init_error', failures: fallos});
-            } catch (error) {
-              fallos.push({model: null, error: String(error?.message ?? error)});
+            } catch (e) {
+              fallos.push({model: null, error: error(e)});
               responder({type: 'init_error', failures: fallos});
             }
             return;
@@ -3791,22 +3833,64 @@
           if (msg.type === 'detect') {
             const inicio = performance.now();
             try {
-              if (!tarea) throw new Error('holistic worker sin inicializar');
-              const result = plano(tarea.detectForVideo(msg.frame, msg.timestampMs));
-              responder({type: 'result', id: msg.id, result,
+              let result, stages;
+              if (modo === 'holistic') {
+                if (!tarea) throw new Error('worker de captura sin inicializar');
+                result = plano(tarea.detectForVideo(msg.frame, msg.timestampMs));
+              } else {
+                if (!tareas) throw new Error('worker de captura sin inicializar');
+                const t0 = performance.now();
+                const pose = tareas.pose.detectForVideo(msg.frame, msg.timestampMs);
+                const t1 = performance.now();
+                const hand = tareas.hand.detectForVideo(msg.frame, msg.timestampMs);
+                const t2 = performance.now();
+                const face = tareas.face?.detectForVideo(msg.frame, msg.timestampMs);
+                const t3 = performance.now();
+                stages = {pose: t1 - t0, hand: t2 - t1, face: t3 - t2};
+                result = {
+                  pose: {landmarks: lista(pose?.landmarks),
+                    worldLandmarks: lista(pose?.worldLandmarks)},
+                  hand: {landmarks: lista(hand?.landmarks),
+                    worldLandmarks: lista(hand?.worldLandmarks),
+                    handednesses: categorias(hand?.handednesses ?? hand?.handedness)},
+                  face: {faceLandmarks: lista(face?.faceLandmarks)},
+                };
+              }
+              responder({type: 'result', id: msg.id, result, stages,
                 ms: performance.now() - inicio});
-            } catch (error) {
-              responder({type: 'detect_error', id: msg.id,
-                error: String(error?.message ?? error)});
+            } catch (e) {
+              responder({type: 'detect_error', id: msg.id, error: error(e)});
             } finally {
               try { msg.frame?.close?.(); } catch (_) { /* ya cerrado */ }
             }
             return;
           }
           if (msg.type === 'close') {
-            try { tarea?.close(); } catch (_) { /* nada que liberar */ }
+            for (const t of [tarea, tareas?.pose, tareas?.hand, tareas?.face]) {
+              try { t?.close(); } catch (_) { /* nada que liberar */ }
+            }
             tarea = null;
+            tareas = null;
           }
+        };
+      }
+
+      // Resultado del modo 'separado' al mismo formato que holisticToTaskResults.
+      // Las etiquetas de mano siguen siendo solo pista: el lado fisico lo decide
+      // la cadena del brazo.
+      function separadoToTaskResults(result) {
+        const pose = result?.pose?.landmarks?.[0] ?? null;
+        const poseWorld = result?.pose?.worldLandmarks?.[0] ?? null;
+        const caraPts = result?.face?.faceLandmarks?.[0] ?? null;
+        return {
+          poseResult: pose ? {landmarks: [pose],
+            worldLandmarks: poseWorld ? [poseWorld] : []} : null,
+          handResult: {
+            landmarks: result?.hand?.landmarks ?? [],
+            worldLandmarks: result?.hand?.worldLandmarks ?? [],
+            handednesses: result?.hand?.handednesses ?? [],
+          },
+          face: caraPts ? {landmarks: caraPts, blendshapes: {}} : null,
         };
       }
 
@@ -3824,11 +3908,12 @@
           typeof g.Blob === 'function' && typeof g.URL?.createObjectURL === 'function';
       }
 
-      // Cliente: init() -> {model, failures}; detect(frame, t) -> {result, ms}.
+      // Cliente: init() -> {mode, model, failures};
+      // detect(frame, t) -> {result, ms, stages}.
       // Un detect a la vez es responsabilidad del llamador; aun asi las respuestas
       // se correlacionan por id. Cualquier error rechaza la promesa pendiente.
       function createHolisticWorkerClient({
-        bundleUrl, wasmUrl, models, options = {},
+        mode = 'holistic', bundleUrl, wasmUrl, models, options = {},
         createWorker = (source) => {
           const url = URL.createObjectURL(
             new Blob([source], {type: 'text/javascript'}));
@@ -3853,7 +3938,8 @@
         worker.onmessage = (event) => {
           const msg = event.data || {};
           if (msg.type === 'ready') {
-            listo?.resolve({model: msg.model, failures: msg.failures ?? []});
+            listo?.resolve({mode: msg.mode ?? mode, model: msg.model,
+              failures: msg.failures ?? []});
             listo = null;
           } else if (msg.type === 'init_error') {
             const error = new Error('holistic worker: ' +
@@ -3865,7 +3951,9 @@
             const p = pendientes.get(msg.id);
             if (!p) return;
             pendientes.delete(msg.id);
-            if (msg.type === 'result') p.resolve({result: msg.result, ms: msg.ms});
+            if (msg.type === 'result') {
+              p.resolve({result: msg.result, ms: msg.ms, stages: msg.stages ?? null});
+            }
             else p.reject(new Error(msg.error));
           }
         };
@@ -3875,6 +3963,7 @@
         };
 
         return {
+          mode,
           init() {
             return new Promise((resolve, reject) => {
               let temporizador = null;
@@ -3884,7 +3973,8 @@
                 listo?.reject(new Error('holistic worker: init timeout'));
                 listo = null;
               }, initTimeoutMs);
-              worker.postMessage({type: 'init', bundleUrl, wasmUrl, models, options});
+              worker.postMessage({type: 'init', mode, bundleUrl, wasmUrl, models,
+                options});
             });
           },
           detect(frame, timestampMs) {
@@ -3908,7 +3998,7 @@
           },
         };
       }
-      return {holisticWorkerMain, holisticWorkerSource, holisticWorkerSupported, createHolisticWorkerClient};
+      return {holisticWorkerMain, separadoToTaskResults, holisticWorkerSource, holisticWorkerSupported, createHolisticWorkerClient};
     })();
     // ---- fin rig_holistic_worker.mjs ----
 
@@ -3931,6 +4021,10 @@
     // sus modelos nativos en android/app/src/main/assets.
     const kPoseModelWeb = 'pose_landmarker_lite.task';
     const kHandModelWeb = 'hand_landmarker.task';
+    // Cara para la captura separada en worker (Holistic ya trae la suya).
+    // Solo URL oficial: es respaldo, no se empaqueta (3.7 MB).
+    const kFaceModelUrl = 'https://storage.googleapis.com/mediapipe-models/' +
+      'face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
     const $estado = document.getElementById('estado');
     const $estadoTexto = document.getElementById('estadoTexto');
     function avisar(msg) {
@@ -5899,14 +5993,20 @@
     let holisticModelo = HOLISTIC_MODEL_LOCAL;
     let holisticEnCpu = false;
     let holisticReintentando = false;
-    // Holistic en Web Worker (rig_holistic_worker): la inferencia sale del
-    // hilo principal. ?worker=0 fuerza el hilo principal para comparar.
-    let holisticWorkerWeb = null;
-    let holisticWorkerOcupado = false;
-    let holisticWorkerError = null;
-    let holisticWorkerPedido = true;
+    // Captura en Web Worker (rig_holistic_worker), Holistic o separado
+    // (Pose + Hand + Face): la inferencia sale del hilo principal.
+    // ?worker=0 fuerza el hilo principal para comparar.
+    let capturaWorkerWeb = null;
+    let capturaWorkerModelo = null;
+    let capturaRecreando = false;
+    // MediaPipe cargado, para recrear detectores si el worker falla.
+    let visionWeb = null;
+    let filesetWeb = null;
+    let capturaWorkerOcupado = false;
+    let capturaWorkerError = null;
+    let capturaWorkerPedido = true;
     try {
-      holisticWorkerPedido =
+      capturaWorkerPedido =
         new URLSearchParams(location.search).get('worker') !== '0';
     } catch (_) { /* sin URL: worker */ }
     // ---- Sesion automatica (rig_session) --------------------------------
@@ -5978,11 +6078,13 @@
           platform: standaloneWeb ? 'web' : 'android',
           user_agent: navigator.userAgent,
           capture_mode: capturaModo,
-          holistic_model: holisticLandmarkerWeb || holisticWorkerWeb
-            ? holisticModelo : null,
+          holistic_model: holisticLandmarkerWeb ||
+            capturaWorkerWeb?.mode === 'holistic' ? holisticModelo : null,
           holistic_cpu: holisticEnCpu,
-          holistic_worker: !!holisticWorkerWeb,
-          holistic_worker_error: holisticWorkerError,
+          capture_worker: !!capturaWorkerWeb,
+          capture_worker_mode: capturaWorkerWeb?.mode ?? null,
+          capture_worker_model: capturaWorkerModelo,
+          capture_worker_error: capturaWorkerError,
           video: {width: video?.videoWidth ?? 0, height: video?.videoHeight ?? 0,
             fps: webCameraState.captureFps},
           retarget_mode: retargetMode,
@@ -6079,33 +6181,32 @@
         avisar('Holistic no disponible: ' + (e?.message ?? e));
       }).finally(() => { holisticReintentando = false; });
     }
-    // El worker fallo al detectar: Holistic pasa al hilo principal (GPU y
-    // luego CPU). Mientras se crea, los frames se saltan.
+    // El worker fallo al detectar: se recrean los detectores en el hilo
+    // principal con la cadena normal (Holistic GPU -> CPU -> separado), sin
+    // volver a intentar el worker en esta pagina. Mientras, se saltan frames.
     function caerWorkerAHiloPrincipal(error) {
-      const anterior = holisticWorkerWeb;
-      holisticWorkerWeb = null;
-      holisticWorkerOcupado = false;
+      const anterior = capturaWorkerWeb;
+      capturaWorkerWeb = null;
+      capturaWorkerOcupado = false;
       anterior?.close();
-      holisticWorkerError = String(error?.message ?? error).slice(0, 300);
-      eventoSesion('holistic_worker_failed', {error: holisticWorkerError});
-      if (!holisticCrear || holisticReintentando) return;
-      holisticReintentando = true;
-      avisar('Holistic en worker fallo; usando el hilo principal…');
-      holisticCrear(true).then((tarea) => {
-        holisticEnCpu = false;
-        return tarea;
-      }, () => holisticCrear(false).then((tarea) => {
-        holisticEnCpu = true;
-        return tarea;
-      })).then((tarea) => {
-        if (webCameraState.running && !holisticWorkerWeb) {
-          holisticLandmarkerWeb = tarea;
+      capturaWorkerError = String(error?.message ?? error).slice(0, 300);
+      capturaWorkerPedido = false;
+      eventoSesion('capture_worker_failed', {error: capturaWorkerError,
+        mode: anterior?.mode ?? null});
+      if (!visionWeb || capturaRecreando) return;
+      capturaRecreando = true;
+      avisar('Captura en worker fallo; usando el hilo principal…');
+      crearLandmarkersWeb(visionWeb, filesetWeb).then((tasks) => {
+        if (webCameraState.running && !capturaWorkerWeb) {
+          poseLandmarkerWeb = tasks.pose ?? null;
+          handLandmarkerWeb = tasks.hand ?? null;
+          holisticLandmarkerWeb = tasks.holistic ?? null;
         } else {
-          tarea.close();
+          for (const t of [tasks.pose, tasks.hand, tasks.holistic]) t?.close();
         }
       }).catch((e) => {
-        avisar('Holistic no disponible: ' + (e?.message ?? e));
-      }).finally(() => { holisticReintentando = false; });
+        avisar('MediaPipe no disponible: ' + (e?.message ?? e));
+      }).finally(() => { capturaRecreando = false; });
     }
     // Ultima cara detectada por Holistic: {landmarks, blendshapes} o null.
     let caraVivo = null;
@@ -7084,32 +7185,33 @@
     // siguiente antes de procesar este, asi el worker no espera al hilo
     // principal ni al proximo rAF.
     function enviarFrameWorkerWeb(video) {
-      const worker = holisticWorkerWeb;
-      if (!worker || holisticWorkerOcupado || !webCameraState.running) return;
+      const worker = capturaWorkerWeb;
+      if (!worker || capturaWorkerOcupado || !webCameraState.running) return;
       if (!video || video.readyState < 2 ||
           video.currentTime === camaraUltimoVideoTime) return;
       camaraUltimoVideoTime = video.currentTime;
-      holisticWorkerOcupado = true;
+      capturaWorkerOcupado = true;
       const timestampMs = siguienteTimestampWeb();
       const enviadoAt = performance.now();
       // Una respuesta tardia de un worker ya cerrado no libera al nuevo.
       const soltar = () => {
-        if (holisticWorkerWeb === worker) holisticWorkerOcupado = false;
+        if (capturaWorkerWeb === worker) capturaWorkerOcupado = false;
       };
       // Sin bitmap (video aun no listo): se salta el frame, el worker sigue.
       createImageBitmap(video).then((frame) => worker.detect(frame, timestampMs)
-        .then(({result, ms}) => {
+        .then(({result, ms, stages}) => {
           soltar();
-          if (holisticWorkerWeb !== worker || !webCameraState.running) return;
+          if (capturaWorkerWeb !== worker || !webCameraState.running) return;
           enviarFrameWorkerWeb(video);
           const processStartedAt = performance.now();
           const sourceFrameId = webCaptureFrameIndex + 1;
           diagnosticPointIssues = [];
           diagnosticErrors = [];
           try {
-            const unificado = holisticToTaskResults(result);
-            registrarTiempoWeb('pose', ms);
-            registrarTiempoWeb('hand', 0);
+            const unificado = worker.mode === 'separado'
+              ? separadoToTaskResults(result) : holisticToTaskResults(result);
+            registrarTiempoWeb('pose', stages?.pose ?? ms);
+            registrarTiempoWeb('hand', stages?.hand ?? 0);
             caraVivo = unificado.face;
             procesarDeteccionWeb({timestampMs, sourceFrameId, processStartedAt,
               ejecutarPose: true, poseResult: unificado.poseResult,
@@ -7120,7 +7222,7 @@
           }
         }, (error) => {
           soltar();
-          if (holisticWorkerWeb === worker && webCameraState.running) {
+          if (capturaWorkerWeb === worker && webCameraState.running) {
             caerWorkerAHiloPrincipal(error);
           }
         }), soltar);
@@ -7148,7 +7250,7 @@
         webCameraState.framesSkipped = Math.max(0,
           (Number(playback.droppedVideoFrames) || 0) - camaraInputQualityDropped);
       }
-      if (holisticWorkerWeb) {
+      if (capturaWorkerWeb) {
         enviarFrameWorkerWeb(video);
       } else if (video && video.readyState >= 2 &&
           video.currentTime !== camaraUltimoVideoTime &&
@@ -7165,8 +7267,8 @@
           // first lock. Fast finger response gets priority without losing
           // shoulder-chain identity.
           let ejecutarPose, poseResult, handResult;
-          if (capturaModo === 'holistic' && !holisticLandmarkerWeb) {
-            // Recreando en CPU: se salta el frame sin marcar error.
+          if (!holisticLandmarkerWeb && !(poseLandmarkerWeb && handLandmarkerWeb)) {
+            // Recreando detectores: se salta el frame sin marcar error.
             throw kSaltarFrameWeb;
           }
           if (holisticLandmarkerWeb) {
@@ -7236,11 +7338,11 @@
         holisticLandmarkerWeb.close();
         holisticLandmarkerWeb = null;
       }
-      if (holisticWorkerWeb) {
-        holisticWorkerWeb.close();
-        holisticWorkerWeb = null;
+      if (capturaWorkerWeb) {
+        capturaWorkerWeb.close();
+        capturaWorkerWeb = null;
       }
-      holisticWorkerOcupado = false;
+      capturaWorkerOcupado = false;
       caraVivo = null;
       webPoseCache = null;
       webCaptureFrameIndex = 0;
@@ -7287,8 +7389,9 @@
             runningMode: 'VIDEO',
           });
         // Worker primero (solo GPU); si no arranca, cadena del hilo principal.
-        holisticWorkerError = null;
-        if (holisticWorkerPedido && holisticWorkerSupported()) {
+        capturaWorkerError = null;
+        capturaWorkerModelo = null;
+        if (capturaWorkerPedido && holisticWorkerSupported()) {
           const cliente = createHolisticWorkerClient({
             bundleUrl: kMediaPipeBundle,
             wasmUrl: kMediaPipeWasm,
@@ -7300,14 +7403,15 @@
           try {
             const {model} = await cliente.init();
             holisticModelo = model;
+            capturaWorkerModelo = model;
             holisticEnCpu = false;
-            return {holisticWorker: cliente};
+            return {capturaWorker: cliente};
           } catch (error) {
             cliente.close();
-            holisticWorkerError = String(error?.message ?? error).slice(0, 300);
+            capturaWorkerError = String(error?.message ?? error).slice(0, 300);
           }
-        } else if (holisticWorkerPedido) {
-          holisticWorkerError = 'unsupported';
+        } else if (capturaWorkerPedido) {
+          capturaWorkerError = 'unsupported';
         }
         // Local primero (offline); luego la URL oficial; GPU y luego CPU.
         for (const modelo of [HOLISTIC_MODEL_LOCAL, HOLISTIC_MODEL_URL]) {
@@ -7327,6 +7431,38 @@
         capturaModo = 'separado';
         avisar('Holistic no disponible; usando captura separada');
         eventoSesion('capture_fallback', {to: 'separado'});
+      }
+      // Separado en worker: Pose lite + Hand + Face (cara opcional). Medido
+      // 2026-10-04 con video: ida y vuelta 37 ms contra 27 de Holistic y mas
+      // manos perdidas (HandLandmarker busca palmas cada frame mientras no
+      // ve dos manos); por eso Holistic sigue de producto.
+      if (capturaWorkerPedido && holisticWorkerSupported()) {
+        const abs = (modelo) => new URL(modelo, location.href).href;
+        const confianza = {minTrackingConfidence: 0.3};
+        const cliente = createHolisticWorkerClient({
+          mode: 'separado',
+          bundleUrl: kMediaPipeBundle,
+          wasmUrl: kMediaPipeWasm,
+          models: {pose: [abs(kPoseModelWeb)], hand: [abs(kHandModelWeb)],
+            face: [kFaceModelUrl]},
+          options: {
+            pose: {numPoses: 1, minPoseDetectionConfidence: 0.4,
+              minPosePresenceConfidence: 0.4, ...confianza},
+            hand: {numHands: 2, minHandDetectionConfidence: 0.4,
+              minHandPresenceConfidence: 0.4, ...confianza},
+            face: {numFaces: 1, minFaceDetectionConfidence: 0.4,
+              minFacePresenceConfidence: 0.4, ...confianza,
+              outputFaceBlendshapes: false},
+          },
+        });
+        try {
+          const {model} = await cliente.init();
+          capturaWorkerModelo = model;
+          return {capturaWorker: cliente};
+        } catch (error) {
+          cliente.close();
+          capturaWorkerError = String(error?.message ?? error).slice(0, 300);
+        }
       }
       let pose = null;
       let hand = null;
@@ -7385,6 +7521,8 @@
       detectorWarmupWeb = (async () => {
         const vision = await import(kMediaPipeBundle);
         const fileset = await vision.FilesetResolver.forVisionTasks(kMediaPipeWasm);
+        visionWeb = vision;
+        filesetWeb = fileset;
         const tasks = await crearLandmarkersWeb(vision, fileset);
         preloadedLandmarkersWeb = tasks;
         webCameraState.detectorsReady = true;
@@ -7516,8 +7654,8 @@
         poseLandmarkerWeb = tasks.pose ?? null;
         handLandmarkerWeb = tasks.hand ?? null;
         holisticLandmarkerWeb = tasks.holistic ?? null;
-        holisticWorkerWeb = tasks.holisticWorker ?? null;
-        holisticWorkerOcupado = false;
+        capturaWorkerWeb = tasks.capturaWorker ?? null;
+        capturaWorkerOcupado = false;
         webCameraState.detectorsReady = true;
         camaraUltimoVideoTime = -1;
         camaraUltimoTimestampMs = 0;

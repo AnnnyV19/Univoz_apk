@@ -6,6 +6,7 @@ import {
   holisticWorkerMain,
   holisticWorkerSource,
   holisticWorkerSupported,
+  separadoToTaskResults,
 } from '../../assets/avatar_viewer/rig_holistic_worker.mjs';
 
 const pts = (n) => Array.from({length: n}, (_, i) => ({x: i, y: 0, z: 0}));
@@ -14,6 +15,17 @@ const pts = (n) => Array.from({length: n}, (_, i) => ({x: i, y: 0, z: 0}));
 // MediaPipe falso, conectando los dos extremos de postMessage.
 function fakeWorker({failModels = [], failImport = false, detectThrows = false} = {}) {
   const creados = [];
+  const cerrados = [];
+  const tarea = (tipo, resultado) => ({
+    createFromOptions: async (fileset, opts) => {
+      creados.push({tipo, ...opts});
+      if (failModels.includes(opts.baseOptions.modelAssetPath)) {
+        throw new Error('no gpu for ' + opts.baseOptions.modelAssetPath);
+      }
+      return {detectForVideo: (frame, t) => resultado(frame, t),
+        close: () => cerrados.push(tipo)};
+    },
+  });
   const scope = {postMessage: null, onmessage: null};
   const vision = {
     FilesetResolver: {forVisionTasks: async (wasm) => ({wasm})},
@@ -35,6 +47,14 @@ function fakeWorker({failModels = [], failImport = false, detectThrows = false} 
         };
       },
     },
+    PoseLandmarker: tarea('pose', () => ({landmarks: [pts(33)],
+      worldLandmarks: [pts(33)], segmentationMasks: undefined})),
+    HandLandmarker: tarea('hand', () => ({landmarks: [pts(21), pts(21)],
+      worldLandmarks: [pts(21), pts(21)],
+      handedness: [[{categoryName: 'Left', score: 0.9, index: 0, displayName: ''}],
+        [{categoryName: 'Right', score: 0.8, index: 1, displayName: ''}]]})),
+    FaceLandmarker: tarea('face', () => ({faceLandmarks: [pts(478)],
+      faceBlendshapes: [], facialTransformationMatrixes: []})),
   };
   holisticWorkerMain(scope, async (url) => {
     if (failImport) throw new Error('offline ' + url);
@@ -49,7 +69,7 @@ function fakeWorker({failModels = [], failImport = false, detectThrows = false} 
     terminate() { this.terminated = true; },
   };
   scope.postMessage = (data) => queueMicrotask(() => worker.onmessage?.({data}));
-  return {worker, scope, creados};
+  return {worker, scope, creados, cerrados};
 }
 
 const opciones = (fake, extra = {}) => ({
@@ -152,4 +172,73 @@ test('support check needs module workers, OffscreenCanvas and ImageBitmap', () =
   assert.equal(holisticWorkerSupported(base), true);
   assert.equal(holisticWorkerSupported({...base, OffscreenCanvas: undefined}), false);
   assert.equal(holisticWorkerSupported({}), false);
+});
+
+const separado = (fake, models) => ({
+  mode: 'separado', bundleUrl: 'https://cdn/vision_bundle.mjs',
+  wasmUrl: 'https://cdn/wasm',
+  models: models ?? {pose: ['http://l/pose.task'], hand: ['http://l/hand.task'],
+    face: ['http://l/face.task', 'https://r/face.task']},
+  options: {pose: {numPoses: 1}, hand: {numHands: 2}, face: {numFaces: 1}},
+  createWorker: () => fake.worker,
+});
+
+test('separado mode loads pose, hand and face on GPU with their options', async () => {
+  const fake = fakeWorker();
+  const client = createHolisticWorkerClient(separado(fake));
+  assert.equal(client.mode, 'separado');
+  const ready = await client.init();
+  assert.equal(ready.mode, 'separado');
+  assert.deepEqual(ready.model, {pose: 'http://l/pose.task',
+    hand: 'http://l/hand.task', face: 'http://l/face.task'});
+  const porTipo = Object.fromEntries(fake.creados.map((o) => [o.tipo, o]));
+  assert.equal(porTipo.hand.numHands, 2);
+  assert.ok(fake.creados.every((o) => o.baseOptions.delegate === 'GPU' &&
+    o.runningMode === 'VIDEO'));
+
+  const {result, stages} = await client.detect({id: 1}, 10);
+  assert.equal(result.pose.landmarks[0].length, 33);
+  assert.equal(result.hand.landmarks.length, 2);
+  assert.deepEqual(result.hand.handednesses[1],
+    [{categoryName: 'Right', score: 0.8, index: 1}]);
+  assert.equal(result.face.faceLandmarks[0].length, 478);
+  assert.doesNotThrow(() => structuredClone(result));
+  assert.deepEqual(Object.keys(stages).sort(), ['face', 'hand', 'pose']);
+
+  client.close();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(fake.cerrados.sort(), ['face', 'hand', 'pose']);
+});
+
+test('separado mode works without face but needs pose and hand', async () => {
+  const sinCara = fakeWorker({failModels: ['http://l/face.task', 'https://r/face.task']});
+  const client = createHolisticWorkerClient(separado(sinCara));
+  const ready = await client.init();
+  assert.equal(ready.model.face, null);
+  assert.equal(ready.failures.length, 2);
+  const {result} = await client.detect({id: 1}, 10);
+  assert.deepEqual(result.face.faceLandmarks, []);
+
+  const sinMano = fakeWorker({failModels: ['http://l/hand.task']});
+  await assert.rejects(createHolisticWorkerClient(separado(sinMano)).init(),
+    /no gpu for http:\/\/l\/hand.task/);
+});
+
+test('separadoToTaskResults matches the holistic task shapes', () => {
+  const r = separadoToTaskResults({
+    pose: {landmarks: [pts(33)], worldLandmarks: [pts(33)]},
+    hand: {landmarks: [pts(21)], worldLandmarks: [pts(21)],
+      handednesses: [[{categoryName: 'Left', score: 1, index: 0}]]},
+    face: {faceLandmarks: [pts(478)]},
+  });
+  assert.equal(r.poseResult.landmarks[0].length, 33);
+  assert.equal(r.poseResult.worldLandmarks[0].length, 33);
+  assert.equal(r.handResult.landmarks.length, 1);
+  assert.equal(r.handResult.handednesses[0][0].categoryName, 'Left');
+  assert.equal(r.face.landmarks.length, 478);
+  const vacio = separadoToTaskResults({pose: {landmarks: []},
+    hand: {landmarks: []}, face: {faceLandmarks: []}});
+  assert.equal(vacio.poseResult, null);
+  assert.equal(vacio.face, null);
+  assert.deepEqual(vacio.handResult.landmarks, []);
 });

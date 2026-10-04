@@ -333,7 +333,8 @@ def gates(registros):
            "contexto": {"platform": meta.get("platform"),
                         "device": meta.get("user_agent") or meta.get("device"),
                         "video": meta.get("video"),
-                        "holistic_worker": meta.get("holistic_worker"),
+                        "capture_worker": _worker(meta)[0],
+                        "capture_worker_mode": _worker(meta)[1],
                         "capture_mode": meta.get("capture_mode"),
                         "protocol": meta.get("protocol") or "cuerpo",
                         "frames": len(frames),
@@ -446,6 +447,14 @@ def imprimir(res):
 BASELINE_DIR = os.path.join(HERE, "..", "..", "docs", "evidence", "baseline")
 
 
+def _worker(meta):
+    """(en worker?, modo). Sesiones viejas: holistic_worker (solo Holistic)."""
+    if "capture_worker" in meta:
+        return meta["capture_worker"], meta.get("capture_worker_mode")
+    viejo = meta.get("holistic_worker")
+    return viejo, "holistic" if viejo else None
+
+
 def baseline(res):
     """Registro de Fase 0: metricas comparables + contexto del dispositivo.
     Cada gate reporta dispositivo, resolucion y tamano de muestra."""
@@ -456,7 +465,8 @@ def baseline(res):
         "platform": meta.get("platform"),
         "screen": meta.get("screen"),
         "capture_mode": meta.get("capture_mode"),
-        "holistic_worker": meta.get("holistic_worker"),
+        "capture_worker": _worker(meta)[0],
+        "capture_worker_mode": _worker(meta)[1],
         "device": meta.get("user_agent") or meta.get("device"),
         "video": meta.get("video"),
         "frames": res.get("frames", 0),
