@@ -96,6 +96,26 @@ Fase 0 pendiente):
 - [ ] Audit en vivo en el visor, Kalman por track, métricas del clasificador
   (Fase 6).
 
+### Próxima sesión (estado al 2026-10-04, `b07188e`)
+
+Gates de la última sesión física (`20261004T093623Z-wddae4`, manos): fases
+0, 2, 3 y 4 PASS; fase 1 FAIL **limitada por la cámara** (webcam ACER HD a
+15 FPS con 30 pedidos; inferencia 33 ms, latencia p95 44 ms, render 144).
+
+1. Sesión con buena luz de frente (`&protocolo=manos`, teclas 1–9 sin
+   saltar 6 y 8, pestaña siempre al frente) → `analizar_sesion.py --gates`.
+   Si la cámara sigue en 15 FPS: fijar 30 FPS con `v4l-utils`
+   (exposición sin prioridad de cuadro) o probar otra cámara.
+2. Investigar `stage_desync` (48 congelamientos en wddae4) en
+   `rig_safety.mjs`.
+3. Muñecas congeladas por `angular_velocity_exceeded` (`left:hand` 44,
+   `right:hand` 33): revisar el límite contra giros reales de seña.
+4. Pérdida de mano al tapar 200 ms (37 %): causas `modelo` y `compuerta`
+   (`hand_scale_implausible` 83, `hand_duplicate` 78).
+5. Android: emitir evento `perf` para que la fase 1 deje de ser SIN_DATOS.
+6. Pendientes de antes: anchors por defecto, `palmFrameV2`/`jointLimits`,
+   pasos 5–6 del plan `docs/superpowers/plans/2026-09-14-tracking-fases.md`.
+
 ### Fase 0 — Baseline físico
 
 Protocolo [09-pruebas-camara.md](09-pruebas-camara.md) en web y Android, 300
