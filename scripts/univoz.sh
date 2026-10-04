@@ -354,6 +354,14 @@ run_web() {
         PIDS+=("$!")
     fi
 
+    # Un visor anterior que quedo abierto ocupa el puerto: avisar y salir en
+    # vez de mostrar el traceback de "Address already in use".
+    if (exec 3<>"/dev/tcp/127.0.0.1/$WEB_PORT") 2>/dev/null; then
+        log_info "Ya hay un servidor en el puerto $WEB_PORT; el visor ya funciona en $web_url"
+        log_info "Para reiniciarlo: pkill -f servidor_visor y vuelve a correr este comando."
+        return 0
+    fi
+
     log_info 'Servidor web activo; Ctrl+C detiene visor.'
     # Servidor propio: estaticos + recepcion de sesiones (senas_core/sesiones).
     (
