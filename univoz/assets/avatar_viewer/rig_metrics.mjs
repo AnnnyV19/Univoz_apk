@@ -1,4 +1,7 @@
-const finite = (value) => Number.isFinite(Number(value));
+// null/undefined no son 0: Number(null) === 0 hacia que un frame registrado
+// sin render guardara renderedAtMs = 0 y su render real se descartara.
+const finite = (value) => value != null && value !== '' &&
+  Number.isFinite(Number(value));
 
 export function percentile(values, p = .95) {
   const samples = (Array.isArray(values) ? values : [])
@@ -39,6 +42,15 @@ export function createPerformanceMetrics(stageNames = []) {
   const names = [...new Set(stageNames.map(String))];
   const stages = new Map(names.map((name) => [name, []]));
   const latency = [];
+  // Muestras nuevas desde el ultimo drainLatency() (ventana del registro de
+  // sesion); acotada por si nadie drena.
+  const freshLatency = [];
+  const pushLatency = (value) => {
+    latency.push(value);
+    if (latency.length > 300) latency.shift();
+    freshLatency.push(value);
+    if (freshLatency.length > 600) freshLatency.shift();
+  };
   let total = 0;
   let valid = 0;
   let invalid = 0;
@@ -53,6 +65,7 @@ export function createPerformanceMetrics(stageNames = []) {
   const reset = () => {
     for (const values of stages.values()) values.length = 0;
     latency.length = 0;
+    freshLatency.length = 0;
     total = 0;
     valid = 0;
     invalid = 0;
@@ -92,8 +105,7 @@ export function createPerformanceMetrics(stageNames = []) {
         if (finite(renderedAtMs) && previous.renderedAtMs == null &&
             Number(renderedAtMs) >= Number(previous.capturedAtMs)) {
           previous.renderedAtMs = Number(renderedAtMs);
-          latency.push(previous.renderedAtMs - Number(previous.capturedAtMs));
-          if (latency.length > 300) latency.shift();
+          pushLatency(previous.renderedAtMs - Number(previous.capturedAtMs));
         } else {
           duplicateSourceFrames++;
         }
@@ -109,8 +121,7 @@ export function createPerformanceMetrics(stageNames = []) {
       }
       if (finite(capturedAtMs) && finite(renderedAtMs) &&
           Number(renderedAtMs) >= Number(capturedAtMs)) {
-        latency.push(Number(renderedAtMs) - Number(capturedAtMs));
-        if (latency.length > 300) latency.shift();
+        pushLatency(Number(renderedAtMs) - Number(capturedAtMs));
       }
     }
     total++;
@@ -125,8 +136,7 @@ export function createPerformanceMetrics(stageNames = []) {
       if (frameValid === true) valid++;
       if (!Number.isFinite(sourceId) && finite(capturedAtMs) && finite(renderedAtMs) &&
           Number(renderedAtMs) >= Number(capturedAtMs)) {
-        latency.push(Number(renderedAtMs) - Number(capturedAtMs));
-        if (latency.length > 300) latency.shift();
+        pushLatency(Number(renderedAtMs) - Number(capturedAtMs));
       }
     }
     if (frameDropped === true) dropped++;
@@ -158,5 +168,7 @@ export function createPerformanceMetrics(stageNames = []) {
     };
   };
 
-  return {recordStage, recordFrame, snapshot, reset};
+  const drainLatency = () => freshLatency.splice(0, freshLatency.length);
+
+  return {recordStage, recordFrame, snapshot, reset, drainLatency};
 }

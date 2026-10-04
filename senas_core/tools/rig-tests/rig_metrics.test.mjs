@@ -68,6 +68,27 @@ test('performance metrics counts one latency sample per source frame', () => {
   assert.equal(report.frames.total, 2);
 });
 
+test('drainLatency returns only samples since the previous drain', () => {
+  const metrics = createPerformanceMetrics([]);
+  // Captura primero, render despues (como el visor): una muestra por frame.
+  metrics.recordFrame({timestampMs: 100, sourceFrameId: 1, capturedAtMs: 100});
+  metrics.recordFrame({timestampMs: 100, sourceFrameId: 1, capturedAtMs: 100,
+    renderedAtMs: 140});
+  metrics.recordFrame({timestampMs: 133, sourceFrameId: 2, capturedAtMs: 133,
+    renderedAtMs: 153});
+  assert.deepEqual(metrics.drainLatency(), [40, 20]);
+  assert.deepEqual(metrics.drainLatency(), []);
+  metrics.recordFrame({timestampMs: 166, sourceFrameId: 3, capturedAtMs: 166,
+    renderedAtMs: 196});
+  assert.deepEqual(metrics.drainLatency(), [30]);
+  // El acumulado del panel no cambia por drenar.
+  assert.equal(metrics.snapshot().latency_ms.count, 3);
+  metrics.recordFrame({timestampMs: 200, sourceFrameId: 4, capturedAtMs: 200,
+    renderedAtMs: 210});
+  metrics.reset();
+  assert.deepEqual(metrics.drainLatency(), []);
+});
+
 test('next monotonic timestamp repairs missing, duplicate and regressive values', () => {
   assert.equal(nextMonotonicTimestamp(0, 10), 10);
   assert.equal(nextMonotonicTimestamp(10, 10), 11);

@@ -889,7 +889,10 @@
 
     // ---- inicio rig_metrics.mjs (antes importado por separado) ----
     const {createPerformanceMetrics} = (() => {
-      const finite = (value) => Number.isFinite(Number(value));
+      // null/undefined no son 0: Number(null) === 0 hacia que un frame registrado
+      // sin render guardara renderedAtMs = 0 y su render real se descartara.
+      const finite = (value) => value != null && value !== '' &&
+        Number.isFinite(Number(value));
 
       function percentile(values, p = .95) {
         const samples = (Array.isArray(values) ? values : [])
@@ -930,6 +933,15 @@
         const names = [...new Set(stageNames.map(String))];
         const stages = new Map(names.map((name) => [name, []]));
         const latency = [];
+        // Muestras nuevas desde el ultimo drainLatency() (ventana del registro de
+        // sesion); acotada por si nadie drena.
+        const freshLatency = [];
+        const pushLatency = (value) => {
+          latency.push(value);
+          if (latency.length > 300) latency.shift();
+          freshLatency.push(value);
+          if (freshLatency.length > 600) freshLatency.shift();
+        };
         let total = 0;
         let valid = 0;
         let invalid = 0;
@@ -944,6 +956,7 @@
         const reset = () => {
           for (const values of stages.values()) values.length = 0;
           latency.length = 0;
+          freshLatency.length = 0;
           total = 0;
           valid = 0;
           invalid = 0;
@@ -983,8 +996,7 @@
               if (finite(renderedAtMs) && previous.renderedAtMs == null &&
                   Number(renderedAtMs) >= Number(previous.capturedAtMs)) {
                 previous.renderedAtMs = Number(renderedAtMs);
-                latency.push(previous.renderedAtMs - Number(previous.capturedAtMs));
-                if (latency.length > 300) latency.shift();
+                pushLatency(previous.renderedAtMs - Number(previous.capturedAtMs));
               } else {
                 duplicateSourceFrames++;
               }
@@ -1000,8 +1012,7 @@
             }
             if (finite(capturedAtMs) && finite(renderedAtMs) &&
                 Number(renderedAtMs) >= Number(capturedAtMs)) {
-              latency.push(Number(renderedAtMs) - Number(capturedAtMs));
-              if (latency.length > 300) latency.shift();
+              pushLatency(Number(renderedAtMs) - Number(capturedAtMs));
             }
           }
           total++;
@@ -1016,8 +1027,7 @@
             if (frameValid === true) valid++;
             if (!Number.isFinite(sourceId) && finite(capturedAtMs) && finite(renderedAtMs) &&
                 Number(renderedAtMs) >= Number(capturedAtMs)) {
-              latency.push(Number(renderedAtMs) - Number(capturedAtMs));
-              if (latency.length > 300) latency.shift();
+              pushLatency(Number(renderedAtMs) - Number(capturedAtMs));
             }
           }
           if (frameDropped === true) dropped++;
@@ -1049,7 +1059,9 @@
           };
         };
 
-        return {recordStage, recordFrame, snapshot, reset};
+        const drainLatency = () => freshLatency.splice(0, freshLatency.length);
+
+        return {recordStage, recordFrame, snapshot, reset, drainLatency};
       }
       return {createPerformanceMetrics};
     })();
@@ -5894,6 +5906,21 @@
     // errores. Se manda al servidor local (tools/servidor_visor.py) y queda
     // tambien en memoria para exportarla desde el panel.
     const kConsentimientoKey = 'univoz.consentimientoSesion.v1';
+    // Protocolo de marcas (teclas 1-9). 'cuerpo' = README; 'manos' =
+    // maniobras de docs/09 para los gates de orientacion e identidad.
+    const kProtocolos = {
+      cuerpo: ['quieto', 'una mano y la otra', 'brazos a la camara',
+        'cruce y contacto', 'mano a la cara', 'girar cabeza', 'expresiones',
+        'senas rapidas', 'salir y volver'],
+      manos: ['estatica manos abiertas', 'pulgar abierto-palma-indice',
+        'girar palma/dorso', 'puno lento', 'pronacion', 'cruce y contacto',
+        'tapar 200 ms', 'tapar 500 ms', 'salir y volver'],
+    };
+    let protocoloMarcas = 'cuerpo';
+    try {
+      const pedido = new URLSearchParams(location.search).get('protocolo');
+      if (kProtocolos[pedido]) protocoloMarcas = pedido;
+    } catch (_) { /* sin URL: cuerpo */ }
     let sesionActual = null;
     let ultimaSesionLineas = null;
     let servidorSesionesOk = null;
@@ -5951,6 +5978,7 @@
             fps: webCameraState.captureFps},
           retarget_mode: retargetMode,
           view: vistaAvatar,
+          protocol: protocoloMarcas,
           calibration: {invertZ: cal.invertZ, version: cal.version},
           body_profile: perfilCorporal,
           versions: {norm: '2.0.0', sign_space: SIGN_SPACE_VERSION,
@@ -5960,7 +5988,9 @@
       webCameraState.sessionId = sesionActual.sessionId;
       // Envio por tiempo: lo pendiente nunca pasa de ~1 s de frames.
       clearInterval(sesionFlushTimer);
+      webPerformanceMetrics.drainLatency();
       sesionFlushTimer = setInterval(() => {
+        eventoPerfSesion();
         void sesionActual?.flush();
         pintarEstadoCamaraWeb();
       }, 1000);
@@ -5979,6 +6009,22 @@
     }
     function eventoSesion(type, data) {
       sesionActual?.event(type, data);
+    }
+    // Cada segundo: latencia captura->avatar del ultimo segundo (muestras
+    // crudas, para percentiles por paso), FPS y contadores acumulados de
+    // tracking. Lo resume analizar_sesion.py --gates (docs/10).
+    function eventoPerfSesion() {
+      if (!sesionActual) return;
+      const s = webCameraState;
+      eventoSesion('perf', {
+        latency_ms: webPerformanceMetrics.drainLatency()
+          .map((v) => Math.round(v * 10) / 10),
+        fps: {input: s.inputFps, inference: s.inferenceFps,
+          tracking: s.trackingFps, pose: s.poseFps, render: s.renderFps},
+        counters: {swaps: s.handSwaps, surface_flips: s.surfaceFlips,
+          holds: s.handHolds, recoveries: s.handRecoveries,
+          invalid_transforms: s.invalidTransforms, teleports: s.teleports},
+      });
     }
     function descargarSesionWeb() {
       const lineas = sesionActual?.exportLines() ?? ultimaSesionLineas;
@@ -7643,8 +7689,10 @@
           (t?.tagName === 'INPUT' &&
             !['checkbox', 'radio', 'button', 'range'].includes(t.type));
         if (!sesionActual || !/^[1-9]$/.test(event.key) || escribiendo) return;
-        eventoSesion('marker', {step: Number(event.key)});
-        avisar('Marca ' + event.key);
+        const paso = Number(event.key);
+        eventoSesion('marker', {step: paso, protocol: protocoloMarcas,
+          name: kProtocolos[protocoloMarcas][paso - 1]});
+        avisar('Marca ' + paso + ' · ' + kProtocolos[protocoloMarcas][paso - 1]);
       });
       window.addEventListener('pagehide', () => {
         const sesion = sesionActual;
