@@ -289,3 +289,15 @@ def test_salto_retenido_no_falla_identidad_y_sin_retener_si():
     cruce["errors"] = ["hand_position_jump"]
     g = an.gates(an.leer_registros(regs))["fase_4_identidad"]
     assert g["veredicto"] == "FAIL" and g["saltos_aplicados"] == 1
+
+
+def test_rendimiento_limitado_por_la_camara():
+    regs = _sesion_gates(pasos=range(1, 10))
+    for r in regs:
+        if r.get("type") == "perf":
+            r["fps"] = dict(r["fps"], input=15, tracking=15, inference=15)
+    f1 = an.gates(an.leer_registros(regs))["fase_1_rendimiento"]
+    assert f1["veredicto"] == "FAIL"
+    assert f1["camara_fps_p50"] == 15 and f1["limitado_por_camara"] is True
+    sano = an.gates(an.leer_registros(_sesion_gates(pasos=range(1, 10))))
+    assert "limitado_por_camara" not in sano["fase_1_rendimiento"]

@@ -117,6 +117,12 @@ worker; `docs/evidence/gates/`): cuerpo `20261004T075412Z-9qwtjc` y manos
 - Rig: jitter 1.0–1.7°; compuerta congela 0.11–0.17 rotaciones por frame,
   todas `angular_velocity_exceeded`.
 
+Corrección (sesión `20261004T093623Z-wddae4`, worker con stream): la cámara
+entrega 15 FPS; los "25 FPS" anteriores incluían frames repetidos. Paso 2
+queda **limitado por la cámara** (`limitado_por_camara`), no por MediaPipe:
+inferencia 33 ms, latencia p95 43.8 ms. Falta repetir con más luz o con una
+cámara que sostenga 30 FPS.
+
 ### Task 3: Regresiones de orientación y MAD
 
 **Files:**

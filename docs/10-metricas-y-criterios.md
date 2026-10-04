@@ -43,6 +43,13 @@ FPS. Desde entonces el worker lee la cámara directo
 (`MediaStreamTrackProcessor`, `?stream=0` para comparar); `ms.rt` = captura
 del frame → resultado en el hilo principal.
 
+Cámara (2026-10-04, webcam ACER HD de laptop, Linux): entrega **15 FPS** con
+30 pedidos (típico de UVC con poca luz: exposición automática alarga el
+cuadro). Las mediciones previas de ~25 FPS de manos eran frames repetidos:
+el envío usaba `video.currentTime`, que avanza sin frame nuevo; ahora usa
+`requestVideoFrameCallback`. `--gates` reporta `camara_fps_p50` y
+`limitado_por_camara`; el visor avisa si la cámara entrega <24 FPS.
+
 ### Respuesta de dedos
 
 ```text

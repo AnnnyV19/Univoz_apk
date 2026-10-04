@@ -6313,6 +6313,32 @@
     let detectorWarmupWeb = null;
     let camaraLoopId = 0;
     let camaraUltimoVideoTime = -1;
+    // Frames de camara realmente nuevos. video.currentTime avanza con el
+    // reloj de reproduccion aunque la camara no entregue frame: con la
+    // camara a 15 FPS se procesaban ~26 por segundo, repetidos (2026-10-04).
+    let camaraFramesPresentados = 0;
+    let camaraFramesUsados = -1;
+    let avisoFpsCamara = false;
+    function vigilarFramesVideo(video) {
+      if (!video?.requestVideoFrameCallback) return;
+      const alPresentar = (_, meta) => {
+        camaraFramesPresentados = meta.presentedFrames;
+        if (webCameraState.running || webCameraState.loading) {
+          video.requestVideoFrameCallback(alPresentar);
+        }
+      };
+      video.requestVideoFrameCallback(alPresentar);
+    }
+    function hayFrameNuevoVideo(video) {
+      if (!video || video.readyState < 2) return false;
+      return video.requestVideoFrameCallback
+        ? camaraFramesPresentados !== camaraFramesUsados
+        : video.currentTime !== camaraUltimoVideoTime;
+    }
+    function marcarFrameVideoUsado(video) {
+      camaraFramesUsados = camaraFramesPresentados;
+      camaraUltimoVideoTime = video.currentTime;
+    }
     let camaraUltimoTimestampMs = 0;
     let camaraFpsInicio = 0;
     let camaraFpsFrames = 0;
@@ -7286,9 +7312,8 @@
     function enviarFrameWorkerWeb(video) {
       const worker = capturaWorkerWeb;
       if (!worker || capturaWorkerOcupado || !webCameraState.running) return;
-      if (!video || video.readyState < 2 ||
-          video.currentTime === camaraUltimoVideoTime) return;
-      camaraUltimoVideoTime = video.currentTime;
+      if (!hayFrameNuevoVideo(video)) return;
+      marcarFrameVideoUsado(video);
       capturaWorkerOcupado = true;
       const timestampMs = siguienteTimestampWeb();
       const enviadoAt = performance.now();
@@ -7384,6 +7409,15 @@
           webCameraState.inputFps = Math.max(0, Math.round(
             (playback.totalVideoFrames - camaraInputQualityFrames) * 1000 /
             (ahoraEntrada - camaraInputQualityInicio)));
+          // La camara limita todo lo demas: avisar una vez si entrega poco
+          // (webcams UVC bajan a 15 FPS con poca luz para exponer mas).
+          if (!avisoFpsCamara && webCameraState.frames > 90 &&
+              webCameraState.inputFps > 0 && webCameraState.inputFps < 24) {
+            avisoFpsCamara = true;
+            avisar(`La cámara entrega ${webCameraState.inputFps} FPS (se pidieron 30). ` +
+              'Con más luz suele subir a 30.');
+            eventoSesion('camera_low_fps', {input_fps: webCameraState.inputFps});
+          }
           camaraInputQualityInicio = ahoraEntrada;
           camaraInputQualityFrames = playback.totalVideoFrames;
         }
@@ -7392,10 +7426,8 @@
       }
       if (capturaWorkerWeb) {
         if (!capturaStreamActivo) enviarFrameWorkerWeb(video);
-      } else if (video && video.readyState >= 2 &&
-          video.currentTime !== camaraUltimoVideoTime &&
-          !webCameraState.processing) {
-        camaraUltimoVideoTime = video.currentTime;
+      } else if (hayFrameNuevoVideo(video) && !webCameraState.processing) {
+        marcarFrameVideoUsado(video);
         webCameraState.processing = true;
         const processStartedAt = performance.now();
         const timestampMs = siguienteTimestampWeb();
@@ -7799,6 +7831,10 @@
         capturaWorkerOcupado = false;
         webCameraState.detectorsReady = true;
         camaraUltimoVideoTime = -1;
+        camaraFramesPresentados = 0;
+        camaraFramesUsados = -1;
+        avisoFpsCamara = false;
+        vigilarFramesVideo(video);
         camaraUltimoTimestampMs = 0;
         webCaptureFrameIndex = 0;
         webPoseCache = null;

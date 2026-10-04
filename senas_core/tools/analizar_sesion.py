@@ -281,10 +281,16 @@ def _inversiones(frames):
     return cambios, conocidos
 
 
-def _jitter_deg(frames, codo, muneca, ventana=15, bloque=30):
+def _jitter_deg(frames, codo, muneca, ventana=None, bloque=None):
     """Jitter (grados) del antebrazo: residuo contra su media movil centrada
-    (~0.5 s a 30 FPS), RMS por bloques de ~1 s y mediana de los bloques.
-    La mediana descarta los segundos en que el brazo se movio de verdad."""
+    de ~0.5 s, RMS por bloques de ~1 s y mediana de los bloques. La mediana
+    descarta los segundos en que el brazo se movio de verdad. Ventana y
+    bloque salen de los FPS reales (una camara a 15 FPS no es 30)."""
+    ts = [f["t"] for f in frames if isinstance(f.get("t"), (int, float))]
+    dts = sorted(b - a for a, b in zip(ts, ts[1:]) if b > a)
+    fps = 1000.0 / dts[len(dts) // 2] if dts else 30.0
+    ventana = ventana or max(5, int(round(fps * .5)) | 1)
+    bloque = bloque or max(ventana, int(round(fps)))
     dirs = []
     for f in frames:
         v = f.get("vec")
@@ -360,7 +366,14 @@ def gates(registros):
                    "tracking_fps_p50": pct(con_manos, .5) if con_manos else 0,
                    "segundos_con_manos": len(con_manos),
                    "pose_fps_p50": fps("pose"),
-                   "render_fps_p50": fps("render"), "inference_fps_p50": fps("inference")})
+                   "render_fps_p50": fps("render"), "inference_fps_p50": fps("inference"),
+                   "camara_fps_p50": fps("input")})
+        # Con la camara por debajo del objetivo, MediaPipe no puede llegar:
+        # el fallo es de la camara (luz, modo del sensor), no del pipeline.
+        cam = f1["camara_fps_p50"]
+        if (math.isfinite(cam) and 0 < cam < GATES["tracking_fps_min"] and
+                f1["tracking_fps_p50"] >= .9 * cam):
+            f1["limitado_por_camara"] = True
         p95 = f1["latency_ms"]["p95"]
         if (f1["tracking_fps_p50"] < GATES["tracking_fps_min"] or
                 f1["render_fps_p50"] < GATES["render_fps_min"] or
