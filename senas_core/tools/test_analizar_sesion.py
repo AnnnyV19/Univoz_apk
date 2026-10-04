@@ -1,5 +1,6 @@
 """Pruebas del resumen de sesiones."""
 
+import math
 import os
 import sys
 
@@ -238,3 +239,39 @@ def test_gates_protocolo_cuerpo_sin_maniobras_de_mano():
     assert g["fase_2_orientacion"]["veredicto"] == "SIN_DATOS"
     # El protocolo corporal si tiene cruce (4) y salir/volver (9).
     assert g["fase_4_identidad"]["veredicto"] == "PASS"
+
+
+def _frames_brazo(angulos_deg):
+    out = []
+    for i, a in enumerate(angulos_deg):
+        v = [0.0] * 152
+        r = math.radians(a)
+        v[2 * 3:2 * 3 + 3] = [0, 0, 0]
+        v[4 * 3:4 * 3 + 3] = [math.sin(r), -math.cos(r), 0]
+        out.append(_frame(i * 33, v))
+    return out
+
+
+def test_jitter_ignora_un_segundo_de_movimiento_real():
+    quieto = [0.3 * (-1) ** i for i in range(150)]          # ruido +-0.3 grados
+    barrido = [60 * math.sin(i / 3) for i in range(30)]     # 1 s moviendo el brazo
+    j = an._jitter_deg(_frames_brazo(quieto + barrido + quieto), 2, 4)
+    assert j < 1, j
+    ruidoso = [4 * (-1) ** i for i in range(150)]
+    assert an._jitter_deg(_frames_brazo(ruidoso), 2, 4) > 2
+
+
+def test_fps_de_manos_solo_en_segundos_con_manos_y_rechazos_informativos():
+    regs = _sesion_gates(pasos=range(1, 10))
+    perfs = [r for r in regs if r.get("type") == "perf"]
+    for i, p in enumerate(perfs):
+        if i % 2:
+            p["fps"] = dict(p["fps"], tracking=0)  # brazos abajo
+        p["counters"] = {"safety_rejections": i * 5, "teleports": 0}
+        p["safety_codes"] = {"joint_limit_violation": 5}
+    g = an.gates(an.leer_registros(regs))
+    assert g["fase_1_rendimiento"]["tracking_fps_p50"] == 31
+    f3 = g["fase_3_rig"]
+    assert f3["rechazos_compuerta"] == 5 * (len(perfs) - 1)
+    assert f3["codigos_compuerta"] == {"joint_limit_violation": 5 * len(perfs)}
+    assert f3["veredicto"] == "PASS" and "nota" not in f3

@@ -281,9 +281,10 @@ def _inversiones(frames):
     return cambios, conocidos
 
 
-def _jitter_deg(frames, codo, muneca, ventana=15):
-    """RMS (grados) de la direccion del antebrazo menos su media movil
-    centrada (~0.5 s a 30 FPS). Solo para pasos estaticos."""
+def _jitter_deg(frames, codo, muneca, ventana=15, bloque=30):
+    """Jitter (grados) del antebrazo: residuo contra su media movil centrada
+    (~0.5 s a 30 FPS), RMS por bloques de ~1 s y mediana de los bloques.
+    La mediana descarta los segundos en que el brazo se movio de verdad."""
     dirs = []
     for f in frames:
         v = f.get("vec")
@@ -301,7 +302,9 @@ def _jitter_deg(frames, codo, muneca, ventana=15):
         nm = math.sqrt(sum(x * x for x in m)) or 1
         cos = sum(dirs[i][k] * m[k] / nm for k in range(3))
         errs.append(math.degrees(math.acos(max(-1.0, min(1.0, cos)))))
-    return round(math.sqrt(sum(e * e for e in errs) / len(errs)), 3)
+    rms = [math.sqrt(sum(e * e for e in errs[i:i + bloque]) / len(errs[i:i + bloque]))
+           for i in range(0, len(errs), bloque) if len(errs[i:i + bloque]) >= bloque // 2]
+    return round(pct(rms, .5), 3) if rms else None
 
 
 def _perdida(frames):
@@ -343,13 +346,19 @@ def gates(registros):
 
     lat = [x for p in perfs for x in p.get("latency_ms") or []]
     fps = lambda k: pct([(p.get("fps") or {}).get(k) for p in perfs], .5)
+    # FPS de manos solo en segundos con alguna mano: con los brazos abajo
+    # tracking = 0 por diseno, no por lentitud.
+    con_manos = [(p.get("fps") or {}).get("tracking") for p in perfs]
+    con_manos = [x for x in con_manos if isinstance(x, (int, float)) and x > 0]
     f1 = {"perf_events": len(perfs)}
     if not perfs or not lat:
         f1["veredicto"] = "SIN_DATOS"
     else:
         f1.update({"latency_ms": {"n": len(lat), "p50": pct(lat, .5),
                                   "p95": pct(lat, .95), "p99": pct(lat, .99)},
-                   "tracking_fps_p50": fps("tracking"), "pose_fps_p50": fps("pose"),
+                   "tracking_fps_p50": pct(con_manos, .5) if con_manos else 0,
+                   "segundos_con_manos": len(con_manos),
+                   "pose_fps_p50": fps("pose"),
                    "render_fps_p50": fps("render"), "inference_fps_p50": fps("inference")})
         p95 = f1["latency_ms"]["p95"]
         if (f1["tracking_fps_p50"] < GATES["tracking_fps_min"] or
@@ -377,16 +386,28 @@ def gates(registros):
                            else "FAIL")
     out["fase_2_orientacion"] = f2
 
-    f3 = {"invalid_transforms": _deltas(perfs, "invalid_transforms"),
+    # La compuerta congela la articulacion: un rechazo nunca se aplica al
+    # avatar (transform invalido aplicado = 0 por diseno). Se reporta la
+    # tasa y los codigos para saber cuanto se congela el avatar.
+    rechazos = (_deltas(perfs, "safety_rejections") or
+                _deltas(perfs, "invalid_transforms"))
+    codigos_seg = collections.Counter()
+    for p in perfs:
+        codigos_seg.update(p.get("safety_codes") or {})
+    f3 = {"rechazos_compuerta": rechazos,
+          "rechazos_por_frame": round(rechazos / len(frames), 3) if frames else None,
+          "codigos_compuerta": dict(codigos_seg.most_common()),
           "teleports": _deltas(perfs, "teleports")}
+    if not any("safety_rejections" in (p.get("counters") or {}) for p in perfs):
+        f3["nota"] = ("sesion anterior al 2026-10-04: rechazos contados por "
+                      "repintado (inflados)")
     estatica = solo("estatica") or solo("quieto")
     f3["jitter_deg"] = {"left": _jitter_deg(estatica, 2, 4),
                         "right": _jitter_deg(estatica, 3, 5)} if estatica else None
     jit = [v for v in (f3["jitter_deg"] or {}).values() if v is not None]
     if not perfs:
         f3["veredicto"] = "SIN_DATOS"
-    elif (f3["invalid_transforms"] or f3["teleports"] or
-          any(j > GATES["jitter_deg_max"] for j in jit)):
+    elif f3["teleports"] or any(j > GATES["jitter_deg_max"] for j in jit):
         f3["veredicto"] = "FAIL"
     else:
         f3["veredicto"] = "PASS"

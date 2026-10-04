@@ -4903,8 +4903,17 @@
       };
     }
 
+    // El render (60-144 Hz) repinta el mismo frame de camara varias veces y
+    // la compuerta devuelve el rechazo cacheado: contar una vez por frame y
+    // articulacion, no por repintado.
+    const safetyReportados = new Map();
+    let safetyCodigos = {};
     function reportSafetyAnomaly(result, jointId) {
       if (!result?.code) return;
+      const clave = `${result.frameId}:${result.timestampMs}`;
+      if (safetyReportados.get(jointId) === clave) return;
+      safetyReportados.set(jointId, clave);
+      safetyCodigos[result.code] = (safetyCodigos[result.code] ?? 0) + 1;
       webCameraState.invalidTransforms++;
       if (result.code === 'teleport_detected') webCameraState.teleports++;
       const side = String(jointId).startsWith('left') ? 'left' :
@@ -6021,10 +6030,13 @@
           .map((v) => Math.round(v * 10) / 10),
         fps: {input: s.inputFps, inference: s.inferenceFps,
           tracking: s.trackingFps, pose: s.poseFps, render: s.renderFps},
+        // Rechazos de la compuerta (articulacion congelada, nunca aplicada).
         counters: {swaps: s.handSwaps, surface_flips: s.surfaceFlips,
           holds: s.handHolds, recoveries: s.handRecoveries,
-          invalid_transforms: s.invalidTransforms, teleports: s.teleports},
+          safety_rejections: s.invalidTransforms, teleports: s.teleports},
+        safety_codes: safetyCodigos,
       });
+      safetyCodigos = {};
     }
     function descargarSesionWeb() {
       const lineas = sesionActual?.exportLines() ?? ultimaSesionLineas;
