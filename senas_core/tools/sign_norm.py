@@ -59,6 +59,22 @@ N_HAND_PTS = 20  # 21 menos la muneca, que siempre queda en el origen
 MIN_VISIBILITY = 0.5
 EPS = 1e-6
 
+# Validaciones de rig_motion_frame.mjs (handUsable / poseGeometry): una mano
+# o un cuerpo geometricamente imposibles no entran al vector.
+HAND_MARGIN = 0.15
+BODY_MARGIN = 0.15
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+    (5, 9), (9, 13), (13, 17),
+]
+# Las munecas estabilizadas del render mueven la ubicacion a lo sumo esto
+# (en anchos de hombro).
+RENDER_WRIST_CLAMP = 0.75
+
 # LAYOUT del vector de 152 dimensiones
 OFF_BODY = 0        # 24 = 8 puntos x (x, y, z)
 OFF_LOC_L = 24      # 3  = muneca izq en marco del cuerpo
@@ -146,27 +162,139 @@ def _rot(x, y, cos_t, sin_t):
     return (x * cos_t + y * sin_t, -x * sin_t + y * cos_t)
 
 
+def _num(p, i, defecto=float("nan")):
+    try:
+        v = p[i]
+    except (IndexError, TypeError):
+        return defecto
+    return defecto if v is None else float(v)
+
+
+def _coord(p):
+    """(x, y, z, visibility) como coord() de la web: sin visibility, 0."""
+    return (_num(p, 0), _num(p, 1), _num(p, 2), _num(p, 3, 0.0))
+
+
+def _finito(p):
+    return math.isfinite(p[0]) and math.isfinite(p[1]) and math.isfinite(p[2])
+
+
+def _dist(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def hand_usable(hand):
+    """(ok, code, landmark). Rechaza manos parcialmente corruptas: en una
+    oclusion MediaPipe puede devolver un punto aislado fuera de cuadro que
+    deforma angulo y orientacion de toda la mano."""
+    if hand is None or len(hand) != 21:
+        return (False, "hand_landmarks_incomplete", None)
+    pts = [_coord(p) for p in hand]
+    for i, p in enumerate(pts):
+        if not _finito(p):
+            return (False, "point_non_finite", i)
+    w = pts[0]
+    # La muneca debe verse; las puntas pueden salirse un margen chico.
+    if not (0 <= w[0] <= 1 and 0 <= w[1] <= 1):
+        return (False, "wrist_out_of_frame", 0)
+
+    def dentro(p):
+        return (-HAND_MARGIN <= p[0] <= 1 + HAND_MARGIN and
+                -HAND_MARGIN <= p[1] <= 1 + HAND_MARGIN)
+    if sum(1 for p in pts if dentro(p)) < 15:
+        fuera = next((i for i, p in enumerate(pts) if not dentro(p)), None)
+        return (False, "hand_out_of_frame", fuera)
+    escala = math.hypot(pts[9][0] - w[0], pts[9][1] - w[1])
+    if not math.isfinite(escala) or escala < 0.015 or escala > 0.65:
+        return (False, "hand_scale_invalid", 9)
+    # Cada conexion plausible respecto de la escala del MCP medio: atrapa
+    # puntos intercambiados o picos sin rechazar manos abiertas o cerradas.
+    for a, b in HAND_CONNECTIONS:
+        d = _dist(pts[a], pts[b])
+        if not math.isfinite(d) or d < escala * 0.018 or d > escala * 2.2:
+            return (False, "hand_segment_invalid", b)
+    return (True, None, None)
+
+
+def pose_geometry(pose, pose_mundo):
+    """(ok, code, landmark). Cuerpo con anclas visibles y segmentos del
+    esqueleto metrico plausibles respecto del ancho de hombros."""
+    if (pose is None or len(pose) < 33 or
+            pose_mundo is None or len(pose_mundo) < 33):
+        return (False, "pose-formato", None)
+    for i in (L_SHOULDER, R_SHOULDER, L_HIP, R_HIP):
+        p = _coord(pose[i])
+        hombro = i in (L_SHOULDER, R_SHOULDER)
+        # Los hombros deben verse en la imagen; las caderas pueden quedar
+        # fuera del recorte: sus worldLandmarks siguen dando el eje del torso.
+        en_margen = (-BODY_MARGIN <= p[0] <= 1 + BODY_MARGIN and
+                     -BODY_MARGIN <= p[1] <= 1 + BODY_MARGIN)
+        if hombro and (not _finito(p) or not en_margen):
+            return (False, "shoulder_out_of_frame", i)
+        if (not _finito(p) or
+                (hombro and (not math.isfinite(p[3]) or p[3] < 0.2)) or
+                not _finito(_coord(pose_mundo[i]))):
+            return (False, "pose_anchor_unsafe", i)
+    w = [_coord(p) for p in pose_mundo]
+    hombros = _dist(w[L_SHOULDER], w[R_SHOULDER])
+    if not math.isfinite(hombros) or hombros < 1e-3:
+        return (False, "hombros-degenerados", None)
+    for a, b in ((11, 13), (13, 15), (12, 14), (14, 16), (23, 24)):
+        d = _dist(w[a], w[b])
+        if not math.isfinite(d) or d < hombros * 0.08 or d > hombros * 2.5:
+            return (False, "pose_segment_invalid", b)
+
+    def medio(a, b):
+        return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
+    tronco = _dist(medio(w[L_SHOULDER], w[R_SHOULDER]), medio(w[L_HIP], w[R_HIP]))
+    if (not math.isfinite(tronco) or tronco <= hombros * 0.25 or
+            tronco >= hombros * 4.0):
+        return (False, "tronco-invalido", None)
+    return (True, None, None)
+
+
 def normalize_frame(pose, pose_mundo=None, left=None, right=None,
-                    min_visibility=MIN_VISIBILITY):
+                    min_visibility=MIN_VISIBILITY, render_wrists=None,
+                    motivos=None):
     """Normaliza un frame. Devuelve lista de 152 floats, o None si el frame
-    no es utilizable (hombros no visibles, o sin esqueleto metrico)."""
-    if pose is None or len(pose) < 33:
-        return None
-    if pose_mundo is None or len(pose_mundo) < 33:
+    no es utilizable (hombros no visibles, cuerpo imposible o sin esqueleto
+    metrico). Espejo de normalizeMotionFrame (rig_motion_frame.mjs).
+
+    [render_wrists] ({"left": punto, "right": punto} en imagen) desplaza solo
+    la UBICACION de la mano hacia la muneca estabilizada del render (la de la
+    pose puede ir uno o dos frames atrasada), acotado a +-0.75 anchos de
+    hombro. Solo para el vector del avatar; el de reconocimiento no lo usa.
+    [motivos], si se pasa, recibe {stage, code, side, landmark} por cada
+    rechazo (mano o frame), con los codigos de la web.
+    """
+    def motivo(code, side=None, landmark=None):
+        if motivos is not None:
+            motivos.append({"stage": "capture", "code": code, "side": side,
+                            "landmark": landmark})
+
+    if (pose is None or len(pose) < 33 or
+            pose_mundo is None or len(pose_mundo) < 33):
+        motivo("pose_format")
         return None
 
-    ls, rs = pose[L_SHOULDER], pose[R_SHOULDER]
-    if len(ls) < 4 or len(rs) < 4:
-        return None
-    if ls[3] < min_visibility or rs[3] < min_visibility:
+    ls, rs = _coord(pose[L_SHOULDER]), _coord(pose[R_SHOULDER])
+    if (not _finito(ls) or not _finito(rs) or
+            not ls[3] >= min_visibility or not rs[3] >= min_visibility):
+        motivo("shoulder_confidence_low")
         return None
 
     for idx in POSE_BODY_IDX:
-        if (len(pose_mundo[idx]) < 3 or
-                not all(math.isfinite(v) for v in pose_mundo[idx][:3])):
+        if not _finito(_coord(pose_mundo[idx])):
+            motivo("pose_world_non_finite")
             return None
 
-    base = _base_cuerpo(pose_mundo)
+    ok, code, landmark = pose_geometry(pose, pose_mundo)
+    if not ok:
+        motivo(code, None, landmark)
+        return None
+
+    mundo = [_coord(p)[:3] for p in pose_mundo]
+    base = _base_cuerpo(mundo)
     if base is None:
         return None
 
@@ -184,22 +312,36 @@ def normalize_frame(pose, pose_mundo=None, left=None, right=None,
     out = [0.0] * FRAME_DIM
 
     for i, idx in enumerate(POSE_BODY_IDX):
-        q = _proyectar(base, pose_mundo[idx])
+        q = _proyectar(base, mundo[idx])
         out[OFF_BODY + i * 3] = q[0]
         out[OFF_BODY + i * 3 + 1] = q[1]
         out[OFF_BODY + i * 3 + 2] = q[2]
 
-    for hand, off_loc, off_pres, off_shape, idx_muneca in (
-        (left, OFF_LOC_L, OFF_PRES_L, OFF_SHAPE_L, L_WRIST),
-        (right, OFF_LOC_R, OFF_PRES_R, OFF_SHAPE_R, R_WRIST),
+    for hand, side, off_loc, off_pres, off_shape, idx_muneca in (
+        (left, "left", OFF_LOC_L, OFF_PRES_L, OFF_SHAPE_L, L_WRIST),
+        (right, "right", OFF_LOC_R, OFF_PRES_R, OFF_SHAPE_R, R_WRIST),
     ):
-        if hand is None or len(hand) < 21:
+        if hand is None or len(hand) != 21:
+            continue
+        ok, code, landmark = hand_usable(hand)
+        if not ok:
+            motivo(code, side, landmark)
             continue
 
         # Ubicacion: la muneca del modelo de POSE, no la del detector de
         # manos, para que quede en el mismo espacio metrico que el cuerpo.
         # Son practicamente el mismo punto anatomico.
-        q = _proyectar(base, pose_mundo[idx_muneca])
+        q = _proyectar(base, mundo[idx_muneca])
+        # Muneca estabilizada del render: residuo de imagen llevado a los
+        # ejes del cuerpo y acotado.
+        estable = _coord((render_wrists or {}).get(side))
+        muneca_img = _coord(pose[idx_muneca])
+        if _finito(estable) and _finito(muneca_img):
+            ix = (estable[0] - muneca_img[0]) / escala_img
+            iy = (estable[1] - muneca_img[1]) / escala_img
+            bx, by = _rot(ix, iy, cos_t, sin_t)
+            q[0] += max(-RENDER_WRIST_CLAMP, min(RENDER_WRIST_CLAMP, bx))
+            q[1] += max(-RENDER_WRIST_CLAMP, min(RENDER_WRIST_CLAMP, by))
         out[off_loc] = q[0]
         out[off_loc + 1] = q[1]
         out[off_loc + 2] = q[2]
@@ -223,7 +365,7 @@ def normalize_frame(pose, pose_mundo=None, left=None, right=None,
             out[k + 1] = qy / hand_scale
             out[k + 2] = (p[2] - w[2]) / hand_scale
 
-    return out
+    return out if all(math.isfinite(v) for v in out) else None
 
 
 def fill_gaps(frames):

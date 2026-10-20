@@ -1312,6 +1312,19 @@
         return norm > 1e-8 ? output.map((value) => value / norm) : b.slice();
       }
 
+      // Slerp real (no nlerp): el recorte angular necesita avanzar exactamente
+      // `progress` del angulo, no menos.
+      function slerpQuaternion(a, b, progress) {
+        if (!Array.isArray(a) || !Array.isArray(b)) return b?.slice() ?? null;
+        const dot = Math.max(-1, Math.min(1, quaternionDot(a, b)));
+        const theta = Math.acos(dot);
+        if (theta < 1e-6) return b.slice();
+        const sinTheta = Math.sin(theta);
+        const wa = Math.sin((1 - progress) * theta) / sinTheta;
+        const wb = Math.sin(progress * theta) / sinTheta;
+        return normalizeQuaternion(a.map((value, index) => wa * value + wb * b[index]));
+      }
+
       function defaultLimits(value) {
         return {
           min: Array(value.length).fill(-Math.PI),
@@ -1334,6 +1347,32 @@
           0, Number(options.boneLengthTolerance ?? .15));
         const recoveryFrames = Math.max(1, Math.round(
           Number(options.recoveryFrames ?? 3)));
+        // Recuperacion por tiempo: a 15 o 60 FPS dura lo mismo. Sin la opcion se
+        // conserva el conteo por frames.
+        const recoveryMs = options.recoveryMs == null
+          ? null : Math.max(1, Number(options.recoveryMs));
+        // 'audit' registra la deriva de longitud sin congelar (z monocular).
+        const boneLengthMode = options.boneLengthMode === 'audit' ? 'audit' : 'freeze';
+        // Tope por frame: un giro mas rapido que el limite se recorta (avanza a
+        // la velocidad maxima) en vez de congelar. null = congelar (historico).
+        const maxStepRad = options.maxStepRad == null
+          ? null : Math.max(0, Number(options.maxStepRad));
+        // Volteo palma/dorso de MediaPipe: salto enorme en un frame. Se rechaza
+        // salvo que la pose nueva se repita `palmFlipConfirmFrames` frames.
+        const palmFlipRad = options.palmFlipRad == null
+          ? null : Math.max(0, Number(options.palmFlipRad));
+        const palmFlipConfirmFrames = Math.max(1, Math.round(
+          Number(options.palmFlipConfirmFrames ?? 2)));
+        const palmFlipMatchRad = Math.max(0, Number(options.palmFlipMatchRad ?? .26));
+        // Un volteo confirmado gira 120-180 grados: recuperarlo en el tiempo
+        // normal lo deja en uno o dos frames de camara (salto visible).
+        const palmFlipRecoveryMs = options.palmFlipRecoveryMs == null
+          ? null : Math.max(1, Number(options.palmFlipRecoveryMs));
+        const palmFlipJoint = typeof options.palmFlipJoint === 'function'
+          ? options.palmFlipJoint : (jointId) => /:hand$/.test(jointId);
+        // Zona muerta suave: por debajo del umbral se avanza (delta/umbral)^2 del
+        // camino, asi el temblor fino se atenua sin escalones.
+        const angularDeadbandRad = Math.max(0, Number(options.angularDeadbandRad ?? 0));
         const minConfidence = options.minConfidence == null
           ? null : Math.max(0, Math.min(1, Number(options.minConfidence)));
         const states = new Map();
@@ -1353,6 +1392,10 @@
               recoveryStart: null,
               recoveryQuaternionStart: null,
               recoveryStep: 0,
+              recoveryElapsedMs: 0,
+              recoveryOverrideMs: null,
+              flipQuaternion: null,
+              flipCount: 0,
               lastResult: null,
             });
           }
@@ -1377,6 +1420,8 @@
             state.recoveryStart = clone(state.value);
             state.recoveryQuaternionStart = clone(state.quaternion);
             state.recoveryStep = 0;
+            state.recoveryElapsedMs = 0;
+            state.recoveryOverrideMs = null;
             const result = {
               accepted: false,
               applied: false,
@@ -1473,7 +1518,8 @@
             const length = Math.abs(Number(candidate.boneLength));
             if (reference < 1e-8 || Math.abs(length - reference) / reference >
                 boneLengthTolerance) {
-              return fail('bone_length_drift', {anomalies});
+              if (boneLengthMode === 'audit') anomalies.push('bone_length_drift');
+              else return fail('bone_length_drift', {anomalies});
             }
           }
 
@@ -1484,8 +1530,50 @@
               ? quaternionAngle(state.quaternion, quaternion)
               : Math.max(...value.map((item, index) =>
                 Math.abs(item - state.value[index])));
-            if (delta > maxAngularVelocityRadS * dt + .02) {
-              return fail('angular_velocity_exceeded', {anomalies});
+            const allowed = maxAngularVelocityRadS * dt + .02;
+            // Recuperando un volteo ya confirmado: lo que falta del giro no es un
+            // volteo nuevo ni un exceso de velocidad; la recuperacion lo lleva.
+            const recuperandoVolteo = state.state === 'RECOVERING' &&
+              state.recoveryOverrideMs != null;
+            const flipCheck = !recuperandoVolteo && palmFlipRad != null &&
+              palmFlipJoint(jointId) && state.quaternion && delta > palmFlipRad;
+            if (recuperandoVolteo) {
+              // sin chequeos de giro: sigue la recuperacion
+            } else if (flipCheck) {
+              const same = state.flipQuaternion &&
+                quaternionAngle(state.flipQuaternion, quaternion) <= palmFlipMatchRad;
+              state.flipCount = same ? state.flipCount + 1 : 1;
+              state.flipQuaternion = quaternion.slice();
+              if (state.flipCount < palmFlipConfirmFrames) {
+                return fail('palm_flip', {anomalies});
+              }
+              // Volteo sostenido: es real. Entrar por recuperacion gradual.
+              anomalies.push('palm_flip_confirmed');
+              state.flipQuaternion = null;
+              state.flipCount = 0;
+              if (state.state === 'VALID') {
+                state.state = 'FROZEN';
+              }
+              state.recoveryOverrideMs = palmFlipRecoveryMs;
+            } else {
+              state.flipQuaternion = null;
+              state.flipCount = 0;
+              if (delta > allowed) {
+                if (maxStepRad == null || !state.quaternion) {
+                  return fail('angular_velocity_exceeded', {anomalies});
+                }
+                const progress = Math.min(allowed, maxStepRad) / delta;
+                quaternion = slerpQuaternion(state.quaternion, quaternion, progress);
+                value.splice(0, value.length,
+                  ...interpolate(state.value, value, progress));
+                anomalies.push('angular_velocity_clamped');
+              } else if (angularDeadbandRad > 0 && state.state === 'VALID' &&
+                  state.quaternion && delta < angularDeadbandRad) {
+                const progress = (delta / angularDeadbandRad) ** 2;
+                quaternion = slerpQuaternion(state.quaternion, quaternion, progress);
+                value.splice(0, value.length,
+                  ...interpolate(state.value, value, progress));
+              }
             }
           }
 
@@ -1495,13 +1583,23 @@
               state.recoveryStart = clone(state.value) ?? value.slice();
               state.recoveryQuaternionStart = clone(state.quaternion) ?? quaternion.slice();
               state.recoveryStep = 0;
+              state.recoveryElapsedMs = 0;
             }
             state.recoveryStep += 1;
-            const progress = Math.min(1, state.recoveryStep / recoveryFrames);
+            const previousInputMs = Number(state.inputTimestampMs);
+            const stepMs = Number.isFinite(previousInputMs) &&
+              timestampMs > previousInputMs
+              ? Math.min(100, timestampMs - previousInputMs) : 1000 / 30;
+            state.recoveryElapsedMs += stepMs;
+            const duracionMs = state.recoveryOverrideMs ?? recoveryMs;
+            const progress = duracionMs == null
+              ? Math.min(1, state.recoveryStep / recoveryFrames)
+              : Math.min(1, state.recoveryElapsedMs / duracionMs);
             output = interpolate(state.recoveryStart, value, progress);
             quaternion = interpolateQuaternion(
               state.recoveryQuaternionStart, quaternion, progress);
             state.state = progress >= 1 ? 'VALID' : 'RECOVERING';
+            if (progress >= 1) state.recoveryOverrideMs = null;
           } else {
             state.state = 'VALID';
           }
@@ -2270,10 +2368,10 @@
               const neutralCosts = candidates.map((candidate) => ({
                 left: handCandidateCost(tracks.left,
                   {...candidate, side: null, sideLocked: false, sideAmbiguous: true},
-                  pose, t, contactBefore, true),
+                  pose, t, contactBefore.active, true),
                 right: handCandidateCost(tracks.right,
                   {...candidate, side: null, sideLocked: false, sideAmbiguous: true},
-                  pose, t, contactBefore, true),
+                  pose, t, contactBefore.active, true),
               }));
               const temporalNormal = neutralCosts[0].left + neutralCosts[1].right;
               const temporalCrossed = neutralCosts[0].right + neutralCosts[1].left;
@@ -4089,6 +4187,881 @@
     })();
     // ---- fin rig_holistic_worker.mjs ----
 
+    // ---- inicio rig_avatar_state.mjs (antes importado por separado) ----
+    const {AVATAR_STATES, smoothingAlpha, blendWeight, avatarStateFrom, createAvatarStateTracker, slerpQuaternion, createPoseTransitions, adaptiveTauMs, createOutputSmoother} = (() => {
+      // Estado del avatar y transiciones suaves de pose.
+      //
+      // El visor decidia "volver a reposo" escribiendo la pose de reposo de golpe
+      // (mano perdida, stream sin frames, fin de reproduccion) y saltaba de reposo
+      // a la pose en vivo al reaparecer la mano. Aqui vive la parte pura: que
+      // estado tiene el avatar y como mezclar cuaterniones en el tiempo. El visor
+      // pone los huesos (THREE) y llama step() una vez por render.
+
+      const finite = (value) => Number.isFinite(Number(value));
+
+      const AVATAR_STATES = Object.freeze([
+        'REST', 'TRACKING', 'HOLD', 'RETURNING', 'NO_SIGNAL', 'PLAYBACK',
+      ]);
+
+      // Factor de suavizado independiente del framerate: misma respuesta a 15,
+      // 60 o 144 Hz. tau = tiempo para cubrir ~63 % del camino.
+      function smoothingAlpha(dtMs, tauMs) {
+        const dt = Number(dtMs);
+        const tau = Number(tauMs);
+        if (!finite(dt) || dt <= 0) return 0;
+        if (!finite(tau) || tau <= 0) return 1;
+        return 1 - Math.exp(-dt / tau);
+      }
+
+      // Rampa 0..1 con arranque y llegada suaves (smoothstep).
+      function blendWeight(elapsedMs, durationMs) {
+        const duration = Number(durationMs);
+        if (!finite(duration) || duration <= 0) return 1;
+        const x = Math.max(0, Math.min(1, Number(elapsedMs) / duration));
+        return x * x * (3 - 2 * x);
+      }
+
+      /**
+       * Prioridad: reproduccion > sin senal > volviendo a reposo > gracia de mano
+       * perdida > siguiendo > reposo. Solo describe; no mueve huesos.
+       */
+      function avatarStateFrom({
+        playing = false, streamLive = false, streamStale = false,
+        returning = false, holding = false, tracking = false,
+      } = {}) {
+        if (playing) return 'PLAYBACK';
+        if (streamLive && streamStale) return 'NO_SIGNAL';
+        if (returning) return 'RETURNING';
+        if (holding) return 'HOLD';
+        if (tracking) return 'TRACKING';
+        return 'REST';
+      }
+
+      function createAvatarStateTracker({onChange = null} = {}) {
+        let state = 'REST';
+        let sinceMs = null;
+        return {
+          update(flags, nowMs) {
+            const next = avatarStateFrom(flags);
+            if (next === state) return {state, changed: false, sinceMs};
+            const previous = state;
+            state = next;
+            sinceMs = finite(nowMs) ? Number(nowMs) : null;
+            onChange?.({from: previous, to: next, t: sinceMs});
+            return {state, changed: true, previous, sinceMs};
+          },
+          get state() { return state; },
+          reset() { state = 'REST'; sinceMs = null; },
+        };
+      }
+
+      function normalize(q) {
+        if (!Array.isArray(q) || q.length !== 4 || !q.every(finite)) return null;
+        const norm = Math.hypot(...q);
+        return norm > 1e-8 ? q.map((value) => value / norm) : null;
+      }
+
+      function slerpQuaternion(a, b, t) {
+        const qa = normalize(a);
+        let qb = normalize(b);
+        if (!qa) return qb;
+        if (!qb) return qa;
+        let dot = qa.reduce((sum, value, index) => sum + value * qb[index], 0);
+        if (dot < 0) {
+          qb = qb.map((value) => -value);
+          dot = -dot;
+        }
+        const progress = Math.max(0, Math.min(1, Number(t) || 0));
+        if (dot > .9995) {
+          return normalize(qa.map((value, index) =>
+            value + (qb[index] - value) * progress));
+        }
+        const theta = Math.acos(Math.min(1, dot));
+        const sinTheta = Math.sin(theta);
+        const wa = Math.sin((1 - progress) * theta) / sinTheta;
+        const wb = Math.sin(progress * theta) / sinTheta;
+        return qa.map((value, index) => wa * value + wb * qb[index]);
+      }
+
+      const same = (a, b, eps = 1e-6) => Array.isArray(a) && Array.isArray(b) &&
+        a.length === b.length && a.every((value, index) =>
+          Math.abs(value - b[index]) <= eps);
+
+      /**
+       * Transiciones con clave, por hueso (id). Dos modos:
+       * - con `to`: va de `from` a una pose fija (reposo). Si otro codigo escribe
+       *   el hueso durante la mezcla (tracking volvio), ese hueso sale de la
+       *   transicion: manda el tracking.
+       * - sin `to` (crossfade): va de `from` a lo que el visor escribio en ese
+       *   render. Si nadie reescribio el hueso, se usa el ultimo objetivo visto.
+       * Un hueso pertenece a una sola transicion: la mas nueva gana.
+       */
+      function createPoseTransitions({durationMs = 250} = {}) {
+        const transitions = new Map();
+
+        const removeBone = (id, exceptKey) => {
+          for (const [key, item] of transitions) {
+            if (key === exceptKey) continue;
+            item.bones.delete(id);
+            if (!item.bones.size) transitions.delete(key);
+          }
+        };
+
+        return {
+          start(key, {from, to = null, nowMs, durationMs: duration = durationMs}) {
+            const bones = new Map();
+            for (const [id, quaternion] of Object.entries(from ?? {})) {
+              const start = normalize(quaternion);
+              if (!start) continue;
+              const target = to ? normalize(to[id]) : null;
+              if (to && !target) continue;
+              removeBone(id, key);
+              bones.set(id, {from: start, to: target, lastWritten: start,
+                lastTarget: target ?? start});
+            }
+            if (!bones.size) {
+              transitions.delete(key);
+              return false;
+            }
+            transitions.set(key, {startMs: Number(nowMs), durationMs: duration,
+              fixed: !!to, bones});
+            return true;
+          },
+          cancel(key) {
+            transitions.delete(key);
+          },
+          has(key) {
+            return transitions.has(key);
+          },
+          // El hueso esta en alguna transicion activa (ya se mueve suave).
+          owns(id) {
+            for (const item of transitions.values()) {
+              if (item.bones.has(id)) return true;
+            }
+            return false;
+          },
+          get size() {
+            return transitions.size;
+          },
+          keys() {
+            return [...transitions.keys()];
+          },
+          // current(id) -> cuaternion actual del hueso [x, y, z, w].
+          step(nowMs, current) {
+            const writes = [];
+            const done = [];
+            for (const [key, item] of transitions) {
+              const weight = blendWeight(Number(nowMs) - item.startMs, item.durationMs);
+              for (const [id, bone] of item.bones) {
+                const now = normalize(current?.(id));
+                const externo = now && !same(now, bone.lastWritten);
+                if (item.fixed && externo) {
+                  item.bones.delete(id);
+                  continue;
+                }
+                if (!item.fixed && externo) bone.lastTarget = now;
+                const target = item.fixed ? bone.to : bone.lastTarget;
+                const quaternion = weight >= 1
+                  ? target.slice() : slerpQuaternion(bone.from, target, weight);
+                bone.lastWritten = quaternion;
+                writes.push({id, quaternion});
+              }
+              if (weight >= 1 || !item.bones.size) {
+                transitions.delete(key);
+                done.push(key);
+              }
+            }
+            return {writes, done};
+          },
+          reset() {
+            transitions.clear();
+          },
+        };
+      }
+
+      // Suavizado de salida a ritmo de render (estilo VTuber). La pose escrita
+      // por el tracking cambia solo cuando llega un frame de camara (15-30/s) y
+      // el render va a 60-144 Hz: sin esto el avatar avanza a saltos. Cada render
+      // la pose mostrada avanza hacia la escrita con alpha = 1 - exp(-dt/tau); tau
+      // es adaptativo: distancia chica (temblor) = tauMax, mucho suavizado;
+      // distancia grande (movimiento real) = tauMin, poco retraso.
+      function adaptiveTauMs(gapRad, {tauMinMs, tauMaxMs, fastRad}) {
+        const k = Math.max(0, Math.min(1, Number(gapRad) / Number(fastRad)));
+        return tauMaxMs + (tauMinMs - tauMaxMs) * k;
+      }
+
+      const quaternionGap = (a, b) => 2 * Math.acos(Math.min(1,
+        Math.abs(a.reduce((sum, value, index) => sum + value * b[index], 0))));
+
+      /**
+       * Un estado por hueso (id). step(id, escrito, dtMs, params) devuelve la pose
+       * a mostrar. Si nadie reescribio el hueso desde el ultimo step (el valor
+       * actual es el que mostramos), el objetivo sigue siendo el ultimo visto.
+       */
+      function createOutputSmoother() {
+        const bones = new Map();
+        return {
+          step(id, written, dtMs, params) {
+            const now = normalize(written);
+            if (!now) return null;
+            const bone = bones.get(id);
+            if (!bone) {
+              bones.set(id, {shown: now, target: now});
+              return now.slice();
+            }
+            if (!same(now, bone.shown)) bone.target = now;
+            const gap = quaternionGap(bone.shown, bone.target);
+            let alpha = smoothingAlpha(dtMs, adaptiveTauMs(gap, params));
+            // Tope de velocidad: un giro enorme (volteo, salto de IK) se ve como
+            // giro rapido y no como salto de un render.
+            if (params.maxSpeedRadS && gap > 1e-9) {
+              alpha = Math.min(alpha, params.maxSpeedRadS * Number(dtMs) / 1000 / gap);
+            }
+            bone.shown = alpha >= 1
+              ? bone.target.slice() : slerpQuaternion(bone.shown, bone.target, alpha);
+            return bone.shown.slice();
+          },
+          // Sin suavizar (reproduccion, flag apagado): seguir la pose escrita para
+          // que al volver no haya salto.
+          follow(id, written) {
+            const now = normalize(written);
+            if (now) bones.set(id, {shown: now, target: now});
+          },
+          reset() {
+            bones.clear();
+          },
+          get size() {
+            return bones.size;
+          },
+        };
+      }
+      return {AVATAR_STATES, smoothingAlpha, blendWeight, avatarStateFrom, createAvatarStateTracker, slerpQuaternion, createPoseTransitions, adaptiveTauMs, createOutputSmoother};
+    })();
+    // ---- fin rig_avatar_state.mjs ----
+
+    // ---- inicio rig_device_tier.mjs (antes importado por separado) ----
+    const {TIER_RENDER, renderBudgetForTier, shouldRenderFrame, IDLE_FRAME_INTERVAL_MS, idleBudgetFor} = (() => {
+      // Presupuesto de render por nivel de dispositivo (DeviceTier.kt manda el
+      // nivel en sourceMeta.tier). Spec:
+      // docs/superpowers/specs/2026-10-05-android-niveles-dispositivo-design.md
+
+      const TIER_RENDER = Object.freeze({
+        bajo: Object.freeze({frameIntervalMs: 1000 / 30, pixelRatio: .75}),
+        medio: Object.freeze({frameIntervalMs: 1000 / 30, pixelRatio: 1}),
+        alto: Object.freeze({frameIntervalMs: 1000 / 60, pixelRatio: 1.25}),
+      });
+
+      // Nivel desconocido (plugin viejo, null, basura): alto, el comportamiento
+      // de antes. Devuelve siempre el mismo objeto para comparar por identidad.
+      function renderBudgetForTier(tier) {
+        // hasOwnProperty y no Object.hasOwn: WebViews viejos (Chrome < 93) de
+        // telefonos de gama baja no lo tienen.
+        return typeof tier === 'string' &&
+          Object.prototype.hasOwnProperty.call(TIER_RENDER, tier)
+          ? TIER_RENDER[tier] : TIER_RENDER.alto;
+      }
+
+      // rAF corre a la tasa de la pantalla (60/90/120 Hz); se salta frames hasta
+      // cumplir el intervalo. 2 ms de margen absorben el jitter de rAF.
+      function shouldRenderFrame(lastRenderAt, now, budget) {
+        return !lastRenderAt || now - lastRenderAt >= budget.frameIntervalMs - 2;
+      }
+
+      // En reposo (sin frames en vivo, sin transiciones ni plantilla) el avatar
+      // solo parpadea: 15 FPS bastan y el telefono no dibuja de mas. Mismo
+      // pixelRatio que el nivel para que no cambie el tamano del lienzo.
+      const IDLE_FRAME_INTERVAL_MS = 1000 / 15;
+      const idleBudgets = new Map();
+      function idleBudgetFor(budget) {
+        if (!idleBudgets.has(budget)) {
+          idleBudgets.set(budget, Object.freeze({
+            frameIntervalMs: Math.max(budget.frameIntervalMs, IDLE_FRAME_INTERVAL_MS),
+            pixelRatio: budget.pixelRatio,
+          }));
+        }
+        return idleBudgets.get(budget);
+      }
+      return {TIER_RENDER, renderBudgetForTier, shouldRenderFrame, IDLE_FRAME_INTERVAL_MS, idleBudgetFor};
+    })();
+    // ---- fin rig_device_tier.mjs ----
+
+    // ---- inicio rig_embedded_perf.mjs (antes importado por separado) ----
+    const {createEmbeddedPerf} = (() => {
+      // Evento perf del visor embebido (Android): mismo contenido que el de la
+      // camara web (eventoPerfSesion en index.html), medido sobre los frames que
+      // llegan por aplicarFrameVivo. Latencia = inferencia nativa + espera hasta
+      // el render; no incluye el cruce Kotlin -> Dart -> WebView porque los
+      // relojes no son comparables.
+
+      const kMaxPendientes = 8;
+
+      const p95 = (values) => {
+        if (!values.length) return null;
+        const sorted = [...values].sort((a, b) => a - b);
+        return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * .95) - 1)];
+      };
+
+      function createEmbeddedPerf() {
+        let received = 0;
+        let withHand = 0;
+        let rendered = 0;
+        let latency = [];
+        let infer = [];
+        let tier = null;
+        let thermal = null;
+        const pending = new Map();
+
+        const reset = () => {
+          received = 0;
+          withHand = 0;
+          rendered = 0;
+          latency = [];
+          infer = [];
+          pending.clear();
+        };
+
+        const frameReceived = ({frameId, receivedAtMs, inferMs, hasHand,
+          tier: nivel, thermal: termico} = {}) => {
+          received++;
+          if (hasHand === true) withHand++;
+          const ms = typeof inferMs === 'number' && Number.isFinite(inferMs) && inferMs >= 0
+            ? inferMs : null;
+          if (ms !== null) infer.push(ms);
+          tier = typeof nivel === 'string' ? nivel : null;
+          thermal = Number.isInteger(termico) ? termico : null;
+          pending.set(frameId, {receivedAtMs: Number(receivedAtMs) || 0, inferMs: ms ?? 0});
+          if (pending.size > kMaxPendientes) pending.delete(pending.keys().next().value);
+        };
+
+        const frameRendered = ({frameId, renderedAtMs}) => {
+          const p = pending.get(frameId);
+          if (!p) return;
+          pending.delete(frameId);
+          latency.push(Math.round((renderedAtMs - p.receivedAtMs + p.inferMs) * 10) / 10);
+        };
+
+        const renderTick = () => { rendered++; };
+
+        const drain = (extra = {}) => {
+          if (received === 0) {
+            reset();
+            return null;
+          }
+          const out = {
+            latency_ms: latency,
+            fps: {input: received, inference: received, tracking: withHand,
+              pose: received, render: rendered},
+            tier,
+            thermal,
+            infer_ms_p95: p95(infer),
+            ...extra,
+          };
+          reset();
+          return out;
+        };
+
+        return {frameReceived, frameRendered, renderTick, drain, reset};
+      }
+      return {createEmbeddedPerf};
+    })();
+    // ---- fin rig_embedded_perf.mjs ----
+
+    // ---- inicio rig_motion_frame.mjs (antes importado por separado) ----
+    const {HAND_MARGIN, BODY_MARGIN, HAND_CONNECTIONS, coord, finitePoint, pointInFrame, handUsable, poseGeometry, normalizeMotionFrame, frameQuality} = (() => {
+      // Frame de movimiento web (MotionFrameV2, 152D) y sus validaciones: lo que
+      // antes vivia inline en index.html (webManoUtilizable,
+      // webPoseGeometriaValida, normalizarFrameWeb, calcularCalidadFrameWeb).
+      // Puro: devuelve los errores en vez de registrarlos, asi lo comparten la
+      // pagina, el banco de paridad (tools/rig-tests/paridad) y los ports a
+      // Kotlin, Dart y Python. Espejo de normalizeFrame() en sign_norm.dart/py.
+
+      const HAND_MARGIN = 0.15;
+      const BODY_MARGIN = 0.15;
+      const HAND_CONNECTIONS = Object.freeze([
+        [0, 1], [1, 2], [2, 3], [3, 4],
+        [0, 5], [5, 6], [6, 7], [7, 8],
+        [0, 9], [9, 10], [10, 11], [11, 12],
+        [0, 13], [13, 14], [14, 15], [15, 16],
+        [0, 17], [17, 18], [18, 19], [19, 20],
+        [5, 9], [9, 13], [13, 17],
+      ]);
+      const BODY_INDEXES = [11, 12, 13, 14, 15, 16, 23, 24];
+
+      function coord(p) {
+        if (Array.isArray(p)) {
+          return {
+            x: Number(p[0]), y: Number(p[1]), z: Number(p[2]),
+            visibility: Number(p[3] ?? 0),
+          };
+        }
+        return {
+          x: Number(p?.x), y: Number(p?.y), z: Number(p?.z),
+          visibility: Number(p?.visibility ?? 0),
+        };
+      }
+
+      function finitePoint(p) {
+        return Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
+      }
+
+      function pointInFrame(p) {
+        return finitePoint(p) && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+      }
+
+      const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      const ok = {ok: true, code: null, landmark: null};
+      const fail = (code, landmark = null) => ({ok: false, code, landmark});
+
+      /**
+       * No alimentar el normalizador con manos parcialmente corruptas: MediaPipe
+       * puede devolver un punto aislado fuera de cuadro durante una oclusion; si
+       * se acepta, ese punto deforma angulo y orientacion de toda la mano.
+       */
+      function handUsable(hand) {
+        if (!Array.isArray(hand) || hand.length !== 21) {
+          return fail('hand_landmarks_incomplete');
+        }
+        const points = hand.map(coord);
+        const nonFinite = points.findIndex((p) => !finitePoint(p));
+        if (nonFinite >= 0) return fail('point_non_finite', nonFinite);
+        // La muneca debe verse; las puntas pueden salirse un margen chico.
+        if (!pointInFrame(points[0])) return fail('wrist_out_of_frame', 0);
+        const inside = points.filter((p) => p.x >= -HAND_MARGIN &&
+          p.x <= 1 + HAND_MARGIN && p.y >= -HAND_MARGIN &&
+          p.y <= 1 + HAND_MARGIN).length;
+        if (inside < 15) {
+          const outside = points.findIndex((p) => p.x < -HAND_MARGIN ||
+            p.x > 1 + HAND_MARGIN || p.y < -HAND_MARGIN || p.y > 1 + HAND_MARGIN);
+          return fail('hand_out_of_frame', outside >= 0 ? outside : null);
+        }
+        const scale = Math.hypot(points[9].x - points[0].x, points[9].y - points[0].y);
+        if (!Number.isFinite(scale) || scale < 0.015 || scale > 0.65) {
+          return fail('hand_scale_invalid', 9);
+        }
+        // Cada conexion debe ser plausible respecto de la escala del MCP medio:
+        // atrapa puntos intercambiados o picos sin rechazar manos abiertas/cerradas.
+        for (const [a, b] of HAND_CONNECTIONS) {
+          const d = distance(points[a], points[b]);
+          if (!Number.isFinite(d) || d < scale * 0.018 || d > scale * 2.2) {
+            return fail('hand_segment_invalid', b);
+          }
+        }
+        return ok;
+      }
+
+      function poseGeometry(pose, poseWorld) {
+        if (!Array.isArray(pose) || pose.length < 33 ||
+            !Array.isArray(poseWorld) || poseWorld.length < 33) {
+          return fail('pose-formato');
+        }
+        for (const i of [11, 12, 23, 24]) {
+          const p = coord(pose[i]);
+          // Los hombros deben verse en la imagen; las caderas pueden quedar fuera
+          // del recorte superior: sus worldLandmarks siguen dando el eje del torso.
+          const shoulderInMargin = p.x >= -BODY_MARGIN && p.x <= 1 + BODY_MARGIN &&
+            p.y >= -BODY_MARGIN && p.y <= 1 + BODY_MARGIN;
+          if ((i === 11 || i === 12) && (!finitePoint(p) || !shoulderInMargin)) {
+            return fail('shoulder_out_of_frame', i);
+          }
+          const needsVisibility = i === 11 || i === 12;
+          if (!finitePoint(p) || (needsVisibility &&
+              (!Number.isFinite(p.visibility) || p.visibility < 0.2)) ||
+              !finitePoint(coord(poseWorld[i]))) {
+            return fail('pose_anchor_unsafe', i);
+          }
+        }
+        const world = poseWorld.map(coord);
+        const shoulders = distance(world[11], world[12]);
+        if (!Number.isFinite(shoulders) || shoulders < 1e-3) {
+          return fail('hombros-degenerados');
+        }
+        for (const [a, b] of [[11, 13], [13, 15], [12, 14], [14, 16], [23, 24]]) {
+          const d = distance(world[a], world[b]);
+          if (!Number.isFinite(d) || d < shoulders * 0.08 || d > shoulders * 2.5) {
+            return fail('pose_segment_invalid', b);
+          }
+        }
+        const mid = (a, b) => ({x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5,
+          z: (a.z + b.z) * 0.5});
+        const trunk = distance(mid(world[11], world[12]), mid(world[23], world[24]));
+        if (!Number.isFinite(trunk) || trunk <= shoulders * 0.25 ||
+            trunk >= shoulders * 4.0) return fail('tronco-invalido');
+        return ok;
+      }
+
+      const sub = (a, b) => [a.x - b.x, a.y - b.y, a.z - b.z];
+      const subArr = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const length = (a) => Math.hypot(a[0], a[1], a[2]);
+      const unit = (a) => {
+        const m = length(a);
+        return m < 1e-6 ? null : [a[0] / m, a[1] / m, a[2] / m];
+      };
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const cross = (a, b) => [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+      ];
+
+      function bodyBasis(world) {
+        const leftShoulder = coord(world[11]);
+        const rightShoulder = coord(world[12]);
+        const leftHip = coord(world[23]);
+        const rightHip = coord(world[24]);
+        if (!finitePoint(leftShoulder) || !finitePoint(rightShoulder) ||
+            !finitePoint(leftHip) || !finitePoint(rightHip)) return null;
+        const scale = length(sub(rightShoulder, leftShoulder));
+        if (!Number.isFinite(scale) || scale < 1e-6) return null;
+        const right = unit(sub(rightShoulder, leftShoulder));
+        if (!right) return null;
+        const origin = [
+          (leftShoulder.x + rightShoulder.x) * 0.5,
+          (leftShoulder.y + rightShoulder.y) * 0.5,
+          (leftShoulder.z + rightShoulder.z) * 0.5,
+        ];
+        const hips = [
+          (leftHip.x + rightHip.x) * 0.5,
+          (leftHip.y + rightHip.y) * 0.5,
+          (leftHip.z + rightHip.z) * 0.5,
+        ];
+        const trunk = subArr(origin, hips);
+        const up = unit([
+          trunk[0] - right[0] * dot(trunk, right),
+          trunk[1] - right[1] * dot(trunk, right),
+          trunk[2] - right[2] * dot(trunk, right),
+        ]);
+        if (!up) return null;
+        const front = unit(cross(up, right));
+        if (!front) return null;
+        return {right, up, front, origin, scale};
+      }
+
+      function project(basis, point) {
+        const p = coord(point);
+        if (!finitePoint(p)) return null;
+        const q = [p.x - basis.origin[0], p.y - basis.origin[1], p.z - basis.origin[2]];
+        return [
+          dot(q, basis.right) / basis.scale,
+          dot(q, basis.up) / basis.scale,
+          dot(q, basis.front) / basis.scale,
+        ];
+      }
+
+      /**
+       * Pose y manos crudas a MotionFrameV2 (152 valores) o null.
+       * `renderWrists` ({left, right} en coordenadas de imagen) desplaza solo la
+       * ubicacion de la mano del render hacia la muneca estabilizada (la de la
+       * pose puede ir uno o dos frames atrasada), acotado a +-0.75 anchos de hombro.
+       * Devuelve {vector, errors: [{stage, code, side, landmark}], validation}.
+       */
+      function normalizeMotionFrame(pose, poseWorld, left, right,
+        {renderWrists = null} = {}) {
+        const errors = [];
+        let validation = '';
+        const error = (code, side = null, landmark = null) => {
+          errors.push({stage: 'capture', code, side, landmark});
+          validation = code;
+        };
+        const result = (vector) => ({vector, errors, validation});
+        if (!Array.isArray(pose) || pose.length < 33 ||
+            !Array.isArray(poseWorld) || poseWorld.length < 33) {
+          error('pose_format');
+          return result(null);
+        }
+        const ls = coord(pose[11]);
+        const rs = coord(pose[12]);
+        if (!finitePoint(ls) || !finitePoint(rs) ||
+            ls.visibility < 0.5 || rs.visibility < 0.5) {
+          error('shoulder_confidence_low');
+          return result(null);
+        }
+        if (BODY_INDEXES.some((i) => !finitePoint(coord(poseWorld[i])))) {
+          error('pose_world_non_finite');
+          return result(null);
+        }
+        const geometry = poseGeometry(pose, poseWorld);
+        if (!geometry.ok) {
+          error(geometry.code, null, geometry.landmark);
+          return result(null);
+        }
+        const basis = bodyBasis(poseWorld);
+        if (!basis) return result(null);
+
+        const dx = rs.x - ls.x;
+        const dy = rs.y - ls.y;
+        const imageScale = Math.hypot(dx, dy);
+        if (imageScale < 1e-6) return result(null);
+        const cosT = dx / imageScale;
+        const sinT = dy / imageScale;
+        const out = Array(152).fill(0);
+
+        for (let i = 0; i < BODY_INDEXES.length; i++) {
+          const q = project(basis, poseWorld[BODY_INDEXES[i]]);
+          if (!q) return result(null);
+          out[i * 3] = q[0];
+          out[i * 3 + 1] = q[1];
+          out[i * 3 + 2] = q[2];
+        }
+
+        const hands = [
+          [left, 'left', 24, 30, 32, 15],
+          [right, 'right', 27, 31, 92, 16],
+        ];
+        for (const [rawHand, side, offLoc, offPres, offShape, poseWrist] of hands) {
+          if (!Array.isArray(rawHand) || rawHand.length !== 21) continue;
+          const hand = rawHand.map(coord);
+          const usable = handUsable(hand);
+          if (!usable.ok) {
+            error(usable.code, side, usable.landmark);
+            validation = 'mano-geometria';
+            continue;
+          }
+          const q = project(basis, poseWorld[poseWrist]);
+          if (!q) continue;
+          // Muneca estabilizada del render: residuo de imagen proyectado a los
+          // ejes del cuerpo y acotado. El vector semantico conserva la de la pose.
+          const stableWrist = coord(renderWrists?.[side]);
+          const poseWristImage = coord(pose?.[poseWrist]);
+          if (finitePoint(stableWrist) && finitePoint(poseWristImage)) {
+            const imageDx = (stableWrist.x - poseWristImage.x) / imageScale;
+            const imageDy = (stableWrist.y - poseWristImage.y) / imageScale;
+            const bodyDx = imageDx * cosT + imageDy * sinT;
+            const bodyDy = -imageDx * sinT + imageDy * cosT;
+            q[0] += Math.max(-.75, Math.min(.75, bodyDx));
+            q[1] += Math.max(-.75, Math.min(.75, bodyDy));
+          }
+          out[offLoc] = q[0];
+          out[offLoc + 1] = q[1];
+          out[offLoc + 2] = q[2];
+          out[offPres] = 1;
+
+          const w = hand[0];
+          const m = hand[9];
+          let handScale = Math.hypot(m.x - w.x, m.y - w.y);
+          if (handScale < 1e-6) handScale = imageScale * 0.25;
+          for (let j = 1; j < 21; j++) {
+            const p = hand[j];
+            const qx = p.x - w.x;
+            const qy = p.y - w.y;
+            const k = offShape + (j - 1) * 3;
+            out[k] = (qx * cosT + qy * sinT) / handScale;
+            out[k + 1] = (-qx * sinT + qy * cosT) / handScale;
+            out[k + 2] = (p.z - w.z) / handScale;
+          }
+        }
+        return result(out.every(Number.isFinite) ? out : null);
+      }
+
+      /**
+       * Calidad del frame [0, 1]: promedio de visibilidad de los 8 puntos del
+       * cuerpo (el minimo es demasiado sensible: un codo tapado hundia Q) y
+       * presencia de manos (una basta para una sena; dos suben la calidad).
+       */
+      function frameQuality(pose, poseWorld, left, right) {
+        if (!Array.isArray(pose) || pose.length < 33 ||
+            !Array.isArray(poseWorld) || poseWorld.length < 33) return 0;
+        const body = BODY_INDEXES.map((i) => coord(pose[i]).visibility);
+        if (body.some((v) => !Number.isFinite(v))) return 0;
+        const visibility = Math.max(0, Math.min(1,
+          body.reduce((total, value) => total + Math.max(0, Math.min(1, value)), 0) /
+            body.length));
+        const hands = left && right ? 1 : left || right ? 0.82 : 0.65;
+        return Math.max(0, Math.min(1, visibility * 0.75 + hands * 0.25));
+      }
+      return {HAND_MARGIN, BODY_MARGIN, HAND_CONNECTIONS, coord, finitePoint, pointInFrame, handUsable, poseGeometry, normalizeMotionFrame, frameQuality};
+    })();
+    // ---- fin rig_motion_frame.mjs ----
+
+    // ---- inicio rig_hand_capture.mjs (antes importado por separado) ----
+    const {createHandCapture, countHandEvents, nativeTracking} = (() => {
+      // Captura de manos web: lo que antes vivia inline en manosDesdeResultado
+      // (index.html). Candidatas del detector -> compuerta anti-alucinacion ->
+      // compuerta de nacimiento -> lado por cadena de brazo -> mano utilizable ->
+      // seguimiento -> desacuerdo muneca mano/pose. Lo comparten la pagina, el
+      // banco de paridad (tools/rig-tests/paridad) y el port Kotlin
+      // (CapturaManos.kt), que debe dar la misma salida frame a frame.
+      // import {createHandBirthGate, gateHandCandidates} from './rig_hand_gate.mjs'; (nombres ya en ambito)
+      // Imports de una linea: inline_viewer_modules.py los comenta al inlinear.
+      // import {assignHandsByArmChain, classifySourceSkew, createHandTrackCoordinator, resolveAnatomicalHandSide} from './rig_tracking.mjs'; (nombres ya en ambito)
+      // import {coord, finitePoint, handUsable} from './rig_motion_frame.mjs'; (nombres ya en ambito)
+
+      function createHandCapture({birthFrames = 3} = {}) {
+        const tracker = createHandTrackCoordinator();
+        let birthGate = createHandBirthGate({frames: birthFrames});
+        const wristState = {
+          left: {frames: 0, reported: false},
+          right: {frames: 0, reported: false},
+        };
+
+        const reset = () => {
+          tracker.reset();
+          birthGate = createHandBirthGate({frames: birthFrames});
+          for (const state of Object.values(wristState)) {
+            state.frames = 0;
+            state.reported = false;
+          }
+        };
+
+        /**
+         * candidates: [{landmarks, label, confidence}] tal como salen del detector.
+         * pose: landmarks de imagen de la pose usada en este frame (o null).
+         * poseTimestampMs: instante de esa pose (skew = |t - poseTimestampMs|).
+         * Los errores con `via: 'diagnostico'` la pagina los registra con
+         * errorDiagnostico (marcan punto y auditoria); el resto se agrega tal cual.
+         */
+        const process = ({candidates = [], pose = null, timestampMs = 0,
+          poseTimestampMs = null} = {}) => {
+          const t = Number(timestampMs);
+          const errors = [];
+          const gateCandidates = candidates.map((candidate) => ({
+            landmarks: candidate.landmarks,
+            confidence: Number(candidate.confidence ?? .5),
+          }));
+          const gate = gateHandCandidates(gateCandidates, pose);
+          const passed = birthGate.filter(gateCandidates, gate.accepted, gate.unanchored);
+          for (const {code} of gate.rejected) errors.push({stage: 'association', code});
+
+          const kept = passed.map((index) => candidates[index]);
+          const leftShoulder = coord(pose?.[11]);
+          const rightShoulder = coord(pose?.[12]);
+          const shoulderWidth = finitePoint(leftShoulder) && finitePoint(rightShoulder)
+            ? Math.max(.05, Math.hypot(leftShoulder.x - rightShoulder.x,
+              leftShoulder.y - rightShoulder.y)) : .4;
+          const raw = kept.map((candidate) => ({
+            landmarks: candidate.landmarks,
+            side: String(candidate.label ?? ''),
+            confidence: Number(candidate.confidence ?? .5),
+          }));
+          const assignment = assignHandsByArmChain(raw, {
+            leftShoulder,
+            rightShoulder,
+            leftElbow: coord(pose?.[13]),
+            rightElbow: coord(pose?.[14]),
+            leftWrist: coord(pose?.[15]),
+            rightWrist: coord(pose?.[16]),
+            leftWristVisibility: Number(pose?.[15]?.visibility ?? 1),
+            rightWristVisibility: Number(pose?.[16]?.visibility ?? 1),
+            shoulderWidth,
+          });
+          const sideAmbiguous = assignment.mode === 'ambiguous';
+          if (sideAmbiguous) errors.push({stage: 'association', code: 'hand_side_ambiguous'});
+
+          const usable = [];
+          const trackCandidates = raw.map((candidate, index) => {
+            const anatomy = resolveAnatomicalHandSide(assignment, index);
+            const check = handUsable(candidate.landmarks);
+            usable.push(check.ok);
+            if (!check.ok) {
+              errors.push({stage: 'capture', code: check.code, side: anatomy.side,
+                landmark: check.landmark, via: 'diagnostico'});
+            }
+            return {
+              landmarks: check.ok ? candidate.landmarks : null,
+              side: check.ok ? anatomy.side : null,
+              sideLocked: check.ok && anatomy.sideLocked,
+              sideAmbiguous: check.ok && anatomy.sideAmbiguous,
+              confidence: candidate.confidence,
+            };
+          });
+          // Sin cadena de brazo confiable el seguimiento no recibe pista de pose
+          // (usa ancho de hombros .4 y su propia continuidad).
+          const poseHint = assignment.mode === 'pose_arm_chain' ? {
+            leftWrist: coord(pose?.[15]),
+            rightWrist: coord(pose?.[16]),
+            shoulderWidth,
+          } : null;
+          const tracking = tracker.update(trackCandidates, poseHint, t);
+          errors.push(...tracking.diagnostics.errors);
+
+          const continuityHeld = tracking.diagnostics.errors.some((error) =>
+            error.code === 'hand_assignment_hysteresis');
+          const skewMode = classifySourceSkew(Math.abs(t - (poseTimestampMs ?? t))).mode;
+          for (const [side, poseIndex] of [['left', 15], ['right', 16]]) {
+            const handWrist = coord(tracking[side].detected?.[0]);
+            const poseWrist = coord(pose?.[poseIndex]);
+            if (!finitePoint(handWrist) || !finitePoint(poseWrist)) continue;
+            const residual = Math.hypot(handWrist.x - poseWrist.x,
+              handWrist.y - poseWrist.y) / shoulderWidth;
+            // Una pose en cache hasta 120 ms mas vieja que las manos no es una
+            // union rota: solo la fusion directa acusa desacuerdo, y solo si
+            // persiste 3 frames (una vez por episodio).
+            const disagreement = residual > .25 && !continuityHeld && skewMode === 'direct';
+            const state = wristState[side];
+            if (disagreement) {
+              state.frames++;
+              if (state.frames >= 3 && !state.reported) {
+                state.reported = true;
+                errors.push({stage: 'fusion', code: 'wrist_disagreement', side,
+                  landmark: 0, via: 'diagnostico', status: 'yellow'});
+              }
+            } else {
+              state.frames = 0;
+              state.reported = false;
+            }
+          }
+          return {
+            gate,
+            passed,
+            assignment,
+            usable,
+            sideAmbiguous,
+            shoulderWidth,
+            tracking,
+            errors,
+            // El reconocimiento conserva la evidencia cruda del detector; el render
+            // del avatar usa las manos estabilizadas.
+            left: tracking.left.raw ?? tracking.left.detected,
+            right: tracking.right.raw ?? tracking.right.detected,
+            renderLeft: tracking.left.renderLandmarks,
+            renderRight: tracking.right.renderLandmarks,
+            renderWrists: {
+              left: tracking.left.renderLandmarks?.[0] ?? null,
+              right: tracking.right.renderLandmarks?.[0] ?? null,
+            },
+          };
+        };
+        return {process, reset};
+      }
+
+      /** Contadores de perf (retenciones, recuperaciones, swaps, volteos). */
+      function countHandEvents(counters, tracking) {
+        const errors = tracking?.diagnostics?.errors ?? [];
+        return {
+          handHolds: (counters.handHolds ?? 0) + errors.filter((error) =>
+            error.code === 'hand_position_held' || error.code === 'hand_surface_flip').length,
+          handRecoveries: (counters.handRecoveries ?? 0) + ['left', 'right'].filter((side) =>
+            tracking[side]?.recoveryFrames === 2 && errors.some((error) =>
+              error.side === side && error.code === 'hand_recovered')).length,
+          handSwaps: (counters.handSwaps ?? 0) + errors.filter((error) =>
+            error.code === 'hand_identity_swap').length,
+          surfaceFlips: (tracking?.left?.surfaceChanges ?? 0) +
+            (tracking?.right?.surfaceChanges ?? 0),
+        };
+      }
+
+      /**
+       * Seguimiento de la captura nativa (Android, CapturaManos.kt) con la forma
+       * que countHandEvents espera: `handTrack` es sourceMeta.hand_track (estado
+       * por lado) y `errors`, sourceMeta.errors. Null si no hay seguimiento.
+       */
+      function nativeTracking(handTrack, errors = []) {
+        if (!handTrack || typeof handTrack !== 'object') return null;
+        const side = (s) => ({
+          state: s?.state ?? 'LOST',
+          surface: s?.surface ?? null,
+          recoveryFrames: Number(s?.recovery_frames ?? 0),
+          surfaceChanges: Number(s?.surface_changes ?? 0),
+        });
+        return {
+          left: side(handTrack.left),
+          right: side(handTrack.right),
+          diagnostics: {errors: Array.isArray(errors) ? errors : []},
+        };
+      }
+      return {createHandCapture, countHandEvents, nativeTracking};
+    })();
+    // ---- fin rig_hand_capture.mjs ----
+
     // ---- fin modulos inline ----
 
 
@@ -4114,7 +5087,13 @@
       'face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
     const $estado = document.getElementById('estado');
     const $estadoTexto = document.getElementById('estadoTexto');
-    function avisar(msg) {
+    // tecnico: en el telefono no se pinta (queda en consola y en el audit);
+    // en el laboratorio web se ve todo.
+    function avisar(msg, {tecnico = false} = {}) {
+      if (tecnico && !standaloneWeb) {
+        console.error(msg);
+        return;
+      }
       // Errores visibles en el propio WebView: no hay consola a mano en un
       // telefono, asi que si algo se rompe (por ejemplo sin internet la
       // primera vez) al menos se ve un cartel en vez de una pantalla negra
@@ -4128,6 +5107,7 @@
 
     const webCameraState = {
       running: false,
+      avatarState: 'REST',
       loading: false,
       detectorsLoading: false,
       detectorsReady: false,
@@ -4263,6 +5243,9 @@
       // ventana de 45 s en menos de dos segundos (54 huesos x 30 FPS).
       // Guardar anomalías y recuperaciones conserva señal útil sin video.
       if (!event.code && event.action === 'apply') return;
+      // Deriva de longitud en modo auditoria: puede salir cada frame con z
+      // ruidosa; se cuenta en safety_adjustments sin llenar esta ventana.
+      if (event.action === 'apply' && event.code === 'bone_length_drift') return;
       guardarAudit({
         frame: event.frame,
         timestampMs: event.timestampMs ?? performance.now(),
@@ -4279,10 +5262,21 @@
     function safetyGateFor(jointId) {
       if (!rigSafetyGates.has(jointId)) {
         rigSafetyGates.set(jointId, createRigSafetyGate({
-          maxAgeMs: 500,
+          // 200 ms = 3 frames a 15 FPS; por debajo de kFrameStaleMs (450).
+          maxAgeMs: 200,
           maxSourceSkewMs: 120,
-          maxAngularVelocityRadS: 24,
-          recoveryFrames: 3,
+          // docs/14 H2: giro real rapido p95 ~5 rad/s; mas alla se recorta
+          // (tope 100 grados por frame) y un salto > 120 grados en la mano
+          // es volteo palma/dorso hasta que se repita 2 frames.
+          maxAngularVelocityRadS: 20,
+          maxStepRad: 100 * Math.PI / 180,
+          palmFlipRad: 120 * Math.PI / 180,
+          palmFlipConfirmFrames: 2,
+          palmFlipRecoveryMs: 250,
+          angularDeadbandRad: 1.5 * Math.PI / 180,
+          recoveryMs: 100,
+          // Longitud medida con z monocular: auditar antes de congelar.
+          boneLengthMode: 'audit',
           jointLimits: {
             min: [-Math.PI, -Math.PI, -Math.PI],
             max: [Math.PI, Math.PI, Math.PI],
@@ -4345,6 +5339,7 @@
           ultimoDiagnosticoAngulos.left?.fingerLagMs ?? 0,
           ultimoDiagnosticoAngulos.right?.fingerLagMs ?? 0).toFixed(1)} ms · ` +
         `skew ${Number(ultimoSourceMeta?.source_skew_ms ?? 0).toFixed(0)} ms · ` +
+        `avatar ${webCameraState.avatarState} · ` +
         `cal ${webCameraState.calibrationState} ${Number(webCameraState.bodyDeadband).toFixed(4)}/` +
         `${Number(webCameraState.wristDeadband).toFixed(4)} · stride ${webCameraState.poseStride} · ` +
         `surf ${webCameraState.leftSurface}/${webCameraState.rightSurface} · ` +
@@ -4473,13 +5468,25 @@
     const lienzo = document.getElementById('lienzo');
     // Cap GPU fill cost: camera inference blocks main thread, and high-DPI
     // antialiasing otherwise starves VRM render cadence on phones/WebViews.
-    const renderPixelRatio = Math.min(window.devicePixelRatio || 1, 1.25);
+    // Nivel por dispositivo: Android lo manda en sourceMeta.tier; en web se
+    // fuerza con ?tier=bajo|medio|alto para simularlo. Sin nivel: alto.
+    let presupuestoRender = renderBudgetForTier(standaloneWeb
+      ? new URLSearchParams(window.location.search).get('tier') : null);
+    const renderPixelRatio = Math.min(window.devicePixelRatio || 1,
+      presupuestoRender.pixelRatio);
     const renderer = new THREE.WebGLRenderer({
       canvas: lienzo, alpha: true, antialias: false,
       powerPreference: 'high-performance',
     });
     renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
+    function aplicarNivelRender(tier) {
+      const presupuesto = renderBudgetForTier(tier);
+      if (presupuesto === presupuestoRender) return;
+      presupuestoRender = presupuesto;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, presupuesto.pixelRatio));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 20);
@@ -4500,6 +5507,10 @@
     orbita.minDistance = 0.4;
     orbita.maxDistance = 4.0;
     orbita.update();
+    // Mientras se gira la camara a mano, el render en reposo no se frena.
+    let orbitaActiva = false;
+    orbita.addEventListener('start', () => { orbitaActiva = true; });
+    orbita.addEventListener('end', () => { orbitaActiva = false; });
 
     const camaraInicial = {
       pos: camera.position.clone(),
@@ -4561,6 +5572,10 @@
       medirRig();
       calibrarEjesPulgar('left');
       calibrarEjesPulgar('right');
+      transicionesPose.reset();
+      huesosTransicion.clear();
+      suavizadorSalida.reset();
+      huesosSuavizados = null;
       posarReposo();
       window.parlanteVrmListo = true;
     }
@@ -4840,6 +5855,162 @@
     }
 
     // ---------------------------------------------------------------------
+    // Transiciones suaves (rig_avatar_state.mjs). Volver a reposo ya no se
+    // ve de golpe: se escribe el reposo como antes (compuertas y estado
+    // quedan igual), se lee esa pose y se vuelve a la previa para que
+    // avanzarTransicionesPose() la lleve en el tiempo. Al revés, reposo o
+    // reproduccion -> pose nueva entra con crossfade corto.
+    // ?transiciones=0 vuelve al comportamiento de golpe para comparar.
+    // ---------------------------------------------------------------------
+    const kReposoMezclaMs = 250;
+    const kCrossfadeMs = 150;
+    let transicionesActivas = true;
+    try {
+      transicionesActivas =
+        new URLSearchParams(location.search).get('transiciones') !== '0';
+    } catch (_) { /* sin URL: activas */ }
+    const transicionesPose = createPoseTransitions({durationMs: kReposoMezclaMs});
+    const huesosTransicion = new Map();
+    const kDedosTransicion = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
+
+    function huesosMano(lado) {
+      const L = lado === 'left' ? 'Left' : 'Right';
+      const nombres = [`${L}Hand`];
+      for (const dedo of kDedosTransicion) {
+        const fases = dedo === 'Thumb' ? kFasesPulgar : kFasesGenericas;
+        for (const fase of fases) nombres.push(`${L}${dedo}${fase}`);
+      }
+      return nombres;
+    }
+
+    function huesosBrazo(lado) {
+      const L = lado === 'left' ? 'Left' : 'Right';
+      return [`${L}UpperArm`, `${L}LowerArm`, ...huesosMano(lado)];
+    }
+
+    function huesosCuerpo() {
+      return ['Hips', 'Spine', 'Chest', 'UpperChest', 'LeftShoulder',
+        'RightShoulder', 'Neck', 'Head',
+        ...huesosBrazo('left'), ...huesosBrazo('right')];
+    }
+
+    function capturarPose(nombres) {
+      const pose = {};
+      for (const nombre of nombres) {
+        const h = VRMHumanBoneName[nombre] ? bone(VRMHumanBoneName[nombre]) : null;
+        if (!h) continue;
+        huesosTransicion.set(nombre, h);
+        const q = h.quaternion;
+        pose[nombre] = [q.x, q.y, q.z, q.w];
+      }
+      return pose;
+    }
+
+    function transicionReposo(clave, nombres, escribirReposo) {
+      if (!vrm || !transicionesActivas) {
+        escribirReposo();
+        return;
+      }
+      const desde = capturarPose(nombres);
+      escribirReposo();
+      const hasta = capturarPose(nombres);
+      for (const [nombre, q] of Object.entries(desde)) {
+        huesosTransicion.get(nombre)?.quaternion.set(...q);
+      }
+      transicionesPose.start(`reposo:${clave}`,
+        {from: desde, to: hasta, nowMs: performance.now()});
+    }
+
+    function crossfadePose(clave, nombres, duracionMs = kCrossfadeMs) {
+      if (!vrm || !transicionesActivas) return;
+      // En vivo el suavizado de salida ya entra suave a la pose nueva; un
+      // crossfade encima lo anularia (el hueso en transicion no se suaviza).
+      // La plantilla si lo usa: durante la reproduccion no hay suavizado.
+      if (suavizadoSalidaActivo && clave !== 'reproduccion') return;
+      transicionesPose.start(`entrada:${clave}`, {from: capturarPose(nombres),
+        nowMs: performance.now(), durationMs: duracionMs});
+    }
+
+    function avanzarTransicionesPose(ahoraMs) {
+      if (!transicionesPose.size) return;
+      const {writes} = transicionesPose.step(ahoraMs, (nombre) => {
+        const q = huesosTransicion.get(nombre)?.quaternion;
+        return q ? [q.x, q.y, q.z, q.w] : null;
+      });
+      for (const {id, quaternion} of writes) {
+        huesosTransicion.get(id)?.quaternion.set(...quaternion);
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // Suavizado de salida a ritmo de render (rig_avatar_state.mjs). La pose
+    // escrita por el tracking solo cambia cuando llega un frame de camara:
+    // sin esto el avatar avanza a saltos (sesion 2026-10-19: 15 cambios por
+    // segundo con render a 144 Hz). tau adaptativo por grupo: temblor =
+    // tauMax, movimiento real = tauMin. Cabeza y cuello quedan fuera (la cara
+    // ya se suaviza por render). ?suavizado=0 lo apaga para comparar.
+    // ---------------------------------------------------------------------
+    let suavizadoSalidaActivo = true;
+    try {
+      suavizadoSalidaActivo =
+        new URLSearchParams(location.search).get('suavizado') !== '0';
+    } catch (_) { /* sin URL: activo */ }
+    const kGrados = Math.PI / 180;
+    const kSuavizadoGrupos = {
+      cuerpo: {tauMinMs: 40, tauMaxMs: 90, fastRad: 15 * kGrados,
+        maxSpeedRadS: 360 * kGrados},
+      brazo: {tauMinMs: 30, tauMaxMs: 80, fastRad: 20 * kGrados,
+        maxSpeedRadS: 900 * kGrados},
+      mano: {tauMinMs: 30, tauMaxMs: 90, fastRad: 25 * kGrados,
+        maxSpeedRadS: 720 * kGrados},
+      // Dedos: la forma de la mano en LSM necesita respuesta rapida.
+      dedos: {tauMinMs: 15, tauMaxMs: 45, fastRad: 20 * kGrados,
+        maxSpeedRadS: 1440 * kGrados},
+    };
+    const suavizadorSalida = createOutputSmoother();
+    let huesosSuavizados = null;
+    let ultimoSuavizadoMs = 0;
+
+    function listaHuesosSuavizados() {
+      const lista = ['Hips', 'Spine', 'Chest', 'UpperChest', 'LeftShoulder',
+        'RightShoulder'].map((nombre) => [nombre, 'cuerpo']);
+      for (const lado of ['left', 'right']) {
+        const L = lado === 'left' ? 'Left' : 'Right';
+        lista.push([`${L}UpperArm`, 'brazo'], [`${L}LowerArm`, 'brazo'],
+          [`${L}Hand`, 'mano']);
+        for (const nombre of huesosMano(lado).slice(1)) lista.push([nombre, 'dedos']);
+      }
+      return lista.map(([nombre, grupo]) => [nombre, grupo,
+        VRMHumanBoneName[nombre] ? bone(VRMHumanBoneName[nombre]) : null])
+        .filter(([, , h]) => h);
+    }
+
+    function suavizarSalida(ahoraMs) {
+      if (!vrm) return;
+      huesosSuavizados ??= listaHuesosSuavizados();
+      const dt = ultimoSuavizadoMs
+        ? Math.min(100, Math.max(0, ahoraMs - ultimoSuavizadoMs)) : 16;
+      ultimoSuavizadoMs = ahoraMs;
+      // La plantilla ya viene interpolada y limpia: solo seguirla.
+      const seguir = !suavizadoSalidaActivo || reproduciendo;
+      for (const [nombre, grupo, h] of huesosSuavizados) {
+        const q = h.quaternion;
+        const escrito = [q.x, q.y, q.z, q.w];
+        if (seguir || transicionesPose.owns(nombre)) {
+          suavizadorSalida.follow(nombre, escrito);
+          continue;
+        }
+        const mostrado = suavizadorSalida.step(nombre, escrito, dt,
+          kSuavizadoGrupos[grupo]);
+        if (mostrado) q.set(...mostrado);
+      }
+    }
+
+    function volviendoAReposo() {
+      return transicionesPose.keys().some((clave) => clave.startsWith('reposo:'));
+    }
+
+    // ---------------------------------------------------------------------
     // Resolucion de brazos en 3D.
     //
     // sign_norm 2.0.0 entrega cuerpo 3D. Al cargar el modelo se miden sus
@@ -5076,10 +6247,16 @@
     function metaRigFrame(meta = {}) {
       const timestampMs = Number(meta.timestampMs);
       const t = Number.isFinite(timestampMs) ? timestampMs : performance.now();
+      // Edad del frame (docs/14 H8): tiempo desde que llego a esta pagina
+      // (receivedAtMs, reloj performance.now()) hasta que se aplica. Sirve
+      // en web y Android (Dart manda epoch). Sin el (reproduccion), edad 0.
+      const recibido = Number(meta.receivedAtMs);
+      const nowMs = Number.isFinite(recibido) && Number.isFinite(timestampMs)
+        ? t + Math.max(0, performance.now() - recibido) : t;
       return {
         frameId: meta.frameId ?? null,
         timestampMs: t,
-        nowMs: t,
+        nowMs,
         sourceSkewMs: Number(meta.sourceSkewMs ?? 0),
       };
     }
@@ -5095,13 +6272,41 @@
       const clave = `${result.frameId}:${result.timestampMs}`;
       if (safetyReportados.get(jointId) === clave) return;
       safetyReportados.set(jointId, clave);
-      safetyCodigos[result.code] = (safetyCodigos[result.code] ?? 0) + 1;
+      // stage_desync es del frame entero (skew pose/manos), no del hueso:
+      // contarlo una vez por frame (docs/14 H9).
+      const porFrame = result.code === 'stage_desync';
+      if (!porFrame || safetyReportados.get('*stage_desync') !== clave) {
+        safetyCodigos[result.code] = (safetyCodigos[result.code] ?? 0) + 1;
+      }
+      if (porFrame) safetyReportados.set('*stage_desync', clave);
       safetyArticulaciones[jointId] = (safetyArticulaciones[jointId] ?? 0) + 1;
       webCameraState.invalidTransforms++;
       if (result.code === 'teleport_detected') webCameraState.teleports++;
       const side = String(jointId).startsWith('left') ? 'left' :
         String(jointId).startsWith('right') ? 'right' : null;
       errorDiagnostico('safety_gate', result.code, side);
+    }
+
+    // Ajustes aceptados (recorte angular, volteo confirmado, deriva de
+    // longitud auditada): no congelan, pero se cuentan para calibrar.
+    const safetyAjustesReportados = new Map();
+    let safetyAjustes = {};
+    let safetyAjustesArticulaciones = {};
+    function reportSafetyAdjustments(result, jointId) {
+      const codigos = (result?.anomalies ?? []).filter((code) =>
+        code !== 'quaternion_flip');
+      if (!codigos.length) return;
+      const clave = `${result.frameId}:${result.timestampMs}`;
+      if (safetyAjustesReportados.get(jointId) === clave) return;
+      safetyAjustesReportados.set(jointId, clave);
+      for (const code of codigos) {
+        safetyAjustes[code] = (safetyAjustes[code] ?? 0) + 1;
+      }
+      // Recortes por articulacion: separan giros rapidos de brazo y de mano.
+      if (codigos.includes('angular_velocity_clamped')) {
+        safetyAjustesArticulaciones[jointId] =
+          (safetyAjustesArticulaciones[jointId] ?? 0) + 1;
+      }
     }
 
     function aplicarRotacionSegura(hueso, jointId, rotation, meta = {}, options = {}) {
@@ -5120,6 +6325,7 @@
       });
       if (result.accepted && Array.isArray(result.value)) {
         hueso.rotation.set(...result.value);
+        reportSafetyAdjustments(result, jointId);
       } else {
         reportSafetyAnomaly(result, jointId);
       }
@@ -5150,6 +6356,7 @@
       });
       if (result.accepted && Array.isArray(result.quaternion)) {
         hueso.quaternion.set(...result.quaternion);
+        reportSafetyAdjustments(result, jointId);
       } else {
         reportSafetyAnomaly(result, jointId);
       }
@@ -5272,9 +6479,41 @@
         arm.wrist[1] - hombro[1], arm.wrist[2] - hombro[2]), kBase);
     }
 
+    // Longitud de referencia por segmento: mediana de las ultimas medidas
+    // (en anchos de hombro). Antes se pasaba la longitud del rig como
+    // referencia y como medida, y el chequeo nunca podia fallar.
+    const kLongitudesVentana = 30;
+    const kLongitudesMinimas = 10;
+    const longitudesBrazo = new Map();
+    function referenciaLongitud(clave, medida, frameKey) {
+      if (!Number.isFinite(medida) || medida <= 1e-6) return null;
+      const entrada = longitudesBrazo.get(clave) ??
+        {muestras: [], frameKey: null, referencia: null};
+      // El render repinta el mismo frame varias veces: una muestra por frame.
+      if (frameKey != null && entrada.frameKey === frameKey) {
+        return entrada.referencia;
+      }
+      const ordenadas = entrada.muestras.slice().sort((a, b) => a - b);
+      entrada.referencia = ordenadas.length >= kLongitudesMinimas
+        ? ordenadas[Math.floor(ordenadas.length / 2)] : null;
+      entrada.frameKey = frameKey;
+      entrada.muestras.push(medida);
+      if (entrada.muestras.length > kLongitudesVentana) entrada.muestras.shift();
+      longitudesBrazo.set(clave, entrada);
+      return entrada.referencia;
+    }
+
     function resolverBrazo(lado, base, hombro, codo, muneca, meta = {}) {
       const r = refRig[lado];
       if (!r) return;
+      const largoUp = hombro.distanceTo(codo);
+      const largoLo = codo.distanceTo(muneca);
+      const frameKey = `${meta.frameId ?? ''}:${meta.timestampMs ?? ''}`;
+      const medirLongitud = typeof referenciaLongitud === 'function';
+      const refUp = medirLongitud
+        ? referenciaLongitud(`${lado}:upperArm`, largoUp, frameKey) : null;
+      const refLo = medirLongitud
+        ? referenciaLongitud(`${lado}:lowerArm`, largoLo, frameKey) : null;
       const up = bone(lado === 'left' ? VRMHumanBoneName.LeftUpperArm : VRMHumanBoneName.RightUpperArm);
       const lo = bone(lado === 'left' ? VRMHumanBoneName.LeftLowerArm : VRMHumanBoneName.RightLowerArm);
 
@@ -5341,7 +6580,7 @@
       const localUp = padreActual.invert().multiply(mundoU);
       if (typeof aplicarQuaternionSegura === 'function') {
         aplicarQuaternionSegura(up, `${lado}:upperArm`, localUp, meta,
-          {referenceBoneLength: r.lenUp, boneLength: r.lenUp,
+          {referenceBoneLength: refUp ?? undefined, boneLength: largoUp,
             recovery: meta.recovery === true});
       } else {
         up.quaternion.copy(localUp);
@@ -5354,7 +6593,7 @@
       const localLo = mundoU.clone().invert().multiply(mundoL);
       if (typeof aplicarQuaternionSegura === 'function') {
         aplicarQuaternionSegura(lo, `${lado}:lowerArm`, localLo, meta,
-          {referenceBoneLength: r.lenLo, boneLength: r.lenLo,
+          {referenceBoneLength: refLo ?? undefined, boneLength: largoLo,
             recovery: meta.recovery === true});
       } else {
         lo.quaternion.copy(localLo);
@@ -5404,6 +6643,12 @@
       const estado = estadoPerdidaMano[lado];
       if (presente) {
         const reaparecioTrasReposo = estado.enReposo;
+        // Brazo o mano ya posados en reposo: entrar a la pose viva con
+        // crossfade, no de golpe.
+        if ((estado.enReposo || estado.reposoAplicado) &&
+            typeof crossfadePose === 'function') {
+          crossfadePose(lado, huesosBrazo(lado));
+        }
         estado.desde = 0;
         estado.enReposo = false;
         estado.reposoAplicado = false;
@@ -5426,8 +6671,15 @@
       if (!estado.desde) estado.desde = ahoraMs;
       if (ahoraMs - estado.desde < kHandLossGraceMs) return false;
       if (!estado.enReposo) {
-        ponerManoReposo(lado);
-        ponerMunecaReposo(lado);
+        const aReposo = () => {
+          ponerManoReposo(lado);
+          ponerMunecaReposo(lado);
+        };
+        if (typeof transicionReposo === 'function') {
+          transicionReposo(`${lado}:mano`, huesosMano(lado), aReposo);
+        } else {
+          aReposo();
+        }
         estado.enReposo = true;
         estado.reposoAplicado = false;
       }
@@ -5718,6 +6970,7 @@
     let caraAplicadaAt = 0;
     let aspectoImagenVivo = null;
     const caraSuave = {expressions: {}, head: null};
+    const kCaraTauMs = 1000 / 60 / Math.LN2;
     function aplicarCara(cara, espejo, meta = {}) {
       if (!vrm || !cara) return false;
       // Web: proporcion del <video>; Android: la que manda Kotlin.
@@ -5733,8 +6986,11 @@
           mirrorFaceSignals(expresiones, cabeza));
       }
       // Suavizado exponencial ligero: la malla facial tiembla mas que el
-      // cuerpo y una ceja saltando cambia el significado.
-      const a = 0.5;
+      // cuerpo y una ceja saltando cambia el significado. Corre por render:
+      // factor por tiempo (0.5 a 60 Hz) para que a 144 Hz no suavice menos.
+      const dtCaraMs = caraAplicadaAt
+        ? Math.min(100, Math.max(0, performance.now() - caraAplicadaAt)) : 100;
+      const a = smoothingAlpha(dtCaraMs, kCaraTauMs);
       for (const [k, v] of Object.entries(expresiones)) {
         const previo = caraSuave.expressions[k] ?? v;
         caraSuave.expressions[k] = previo + a * (v - previo);
@@ -5910,6 +7166,7 @@
 
     let colaFrames = [];
     let frameActual = 0;
+    let reproduccionRenderId = 0;
     let reproduciendo = false;
     let kFps = 30; // tracking y replay usan 30 FPS; render sigue a 60 FPS.
     let frameVivo = null;
@@ -5931,6 +7188,8 @@
     // (epoch) o de performance.now() web; no sirve para medir silencio entre
     // mensajes. Esto cubre tambien stream nativo detenido dentro de WebView.
     let frameVivoRecibidoAt = 0;
+    // Llegada del ultimo frame de la camara web (performance.now()).
+    let frameVivoLlegadaMs = 0;
     let frameVivoExterno = false;
     let frameVivoStale = false;
     const kFrameStaleMs = 450;
@@ -6105,6 +7364,21 @@
       capturaWorkerPedido =
         new URLSearchParams(location.search).get('worker') !== '0';
     } catch (_) { /* sin URL: worker */ }
+    // Confianza de MediaPipe para cuerpo y manos. 'sensible' es la de
+    // siempre: la sesion quiere ver tambien detecciones dificiles (la K).
+    // ?perfil=estable sube umbrales para un espejo con menos manos fantasma;
+    // comparar con analizar_sesion.py --comparar antes de cambiar el default.
+    // Android usa sus propios valores (LandmarkEngine.kt). Cara fija en .4/.3.
+    const kPerfilesTracking = {
+      sensible: {deteccion: 0.4, presencia: 0.4, seguimiento: 0.3},
+      estable: {deteccion: 0.65, presencia: 0.55, seguimiento: 0.55},
+    };
+    let perfilTracking = 'sensible';
+    try {
+      const pedido = new URLSearchParams(location.search).get('perfil');
+      if (kPerfilesTracking[pedido]) perfilTracking = pedido;
+    } catch (_) { /* sin URL: sensible */ }
+    const confianzaTracking = kPerfilesTracking[perfilTracking];
     // ---- Sesion automatica (rig_session) --------------------------------
     // Con consentimiento (una vez), cada vez que se enciende la camara se
     // mide el cuerpo y se graba TODO lo que pasa (sin video) para encontrar
@@ -6174,6 +7448,9 @@
           platform: standaloneWeb ? 'web' : 'android',
           user_agent: navigator.userAgent,
           capture_mode: capturaModo,
+          tracking_profile: perfilTracking,
+          tracking_confidence: confianzaTracking,
+          pose_transitions: transicionesActivas,
           holistic_model: holisticLandmarkerWeb ||
             capturaWorkerWeb?.mode === 'holistic' ? holisticModelo : null,
           holistic_cpu: holisticEnCpu,
@@ -6184,7 +7461,9 @@
           capture_stream: capturaStreamActivo,
           video: {width: video?.videoWidth ?? 0, height: video?.videoHeight ?? 0,
             fps: webCameraState.captureFps},
+          camera: webCameraState.cameraInfo ?? null,
           retarget_mode: retargetMode,
+          output_smoothing: suavizadoSalidaActivo,
           view: vistaAvatar,
           protocol: protocoloMarcas,
           calibration: {invertZ: cal.invertZ, version: cal.version},
@@ -6235,10 +7514,47 @@
           safety_rejections: s.invalidTransforms, teleports: s.teleports},
         safety_codes: safetyCodigos,
         safety_joints: safetyArticulaciones,
+        safety_adjustments: safetyAjustes,
+        safety_clamped_joints: safetyAjustesArticulaciones,
+        render_motion: drenarFluidezRender(),
       });
       safetyCodigos = {};
       safetyArticulaciones = {};
+      safetyAjustes = {};
+      safetyAjustesArticulaciones = {};
     }
+
+    // Android: el visor no tiene la sesion (vive en Dart); Dart avisa si hay
+    // sesion con consentimiento y el visor le manda un perf por segundo, con
+    // el mismo formato que eventoPerfSesion (analizar_sesion.py --gates),
+    // incluida la fluidez del render y el estado del avatar.
+    const perfEmbebido = createEmbeddedPerf();
+    let perfEmbebidoTimer = null;
+    window.configurarSesion = function (activa) {
+      if (perfEmbebidoTimer) clearInterval(perfEmbebidoTimer);
+      perfEmbebidoTimer = null;
+      perfEmbebido.reset();
+      if (!activa || standaloneWeb || !window.SenasChannel) return;
+      perfEmbebidoTimer = setInterval(() => {
+        const s = webCameraState;
+        const perf = perfEmbebido.drain({
+          counters: {swaps: s.handSwaps, surface_flips: s.surfaceFlips,
+            holds: s.handHolds, recoveries: s.handRecoveries,
+            safety_rejections: s.invalidTransforms, teleports: s.teleports},
+          safety_codes: safetyCodigos,
+          safety_joints: safetyArticulaciones,
+          safety_adjustments: safetyAjustes,
+          safety_clamped_joints: safetyAjustesArticulaciones,
+          render_motion: drenarFluidezRender(),
+          avatar_state: webCameraState.avatarState,
+        });
+        safetyCodigos = {};
+        safetyArticulaciones = {};
+        safetyAjustes = {};
+        safetyAjustesArticulaciones = {};
+        if (perf) window.SenasChannel.postMessage('perf:' + JSON.stringify(perf));
+      }, 1000);
+    };
     function descargarSesionWeb() {
       const lineas = sesionActual?.exportLines() ?? ultimaSesionLineas;
       if (!lineas?.length) return;
@@ -6319,6 +7635,35 @@
     let camaraFramesPresentados = 0;
     let camaraFramesUsados = -1;
     let avisoFpsCamara = false;
+    // Calentamiento de la captura: los primeros resultados del worker llegan
+    // con 1-2.5 s de retraso (carga de modelos y shaders; sesiones del
+    // 2026-10-19). No mueven el avatar: termina con 3 frames seguidos de
+    // latencia <= 200 ms o a los 3 s, lo que pase antes.
+    const kCalentamientoMaxMs = 200;
+    const kCalentamientoFrames = 3;
+    const kCalentamientoTopeMs = 3000;
+    const calentamientoWeb = {activo: true, inicio: 0, buenos: 0, descartados: 0};
+    function reiniciarCalentamientoWeb() {
+      calentamientoWeb.activo = true;
+      calentamientoWeb.inicio = 0;
+      calentamientoWeb.buenos = 0;
+      calentamientoWeb.descartados = 0;
+    }
+    function enCalentamientoWeb(latenciaMs, ahoraMs) {
+      const c = calentamientoWeb;
+      if (!c.activo) return false;
+      if (!c.inicio) c.inicio = ahoraMs;
+      c.buenos = latenciaMs <= kCalentamientoMaxMs ? c.buenos + 1 : 0;
+      if (c.buenos >= kCalentamientoFrames ||
+          ahoraMs - c.inicio > kCalentamientoTopeMs) {
+        c.activo = false;
+        eventoSesion('capture_warmup', {discarded: c.descartados,
+          ms: Math.round(ahoraMs - c.inicio)});
+        return false;
+      }
+      c.descartados++;
+      return true;
+    }
     function vigilarFramesVideo(video) {
       if (!video?.requestVideoFrameCallback) return;
       const alPresentar = (_, meta) => {
@@ -6352,6 +7697,8 @@
     let camaraPoseFpsFrames = 0;
     let webCaptureFrameIndex = 0;
     let webPoseCache = null;
+    // Igual a maxSourceSkewMs de la compuerta: mas viejo ya congelaria.
+    const kPoseCacheMaxMs = 120;
     let webGrabacion = [];
     let webUltimaSecuencia = null;
     // Perfil corporal (Fast User Capture). Local, versionado y borrable:
@@ -6476,300 +7823,41 @@
         p.y >= 0 && p.y <= 1;
     }
 
-    // No alimentar normalizador con manos parcialmente corruptas. MediaPipe
-    // puede devolver un punto aislado fuera de cuadro durante oclusion; si se
-    // acepta, ese punto deforma angulo y orientacion de toda mano.
-    const kMargenManoWeb = 0.15;
-    const kMargenCuerpoWeb = 0.15;
-    const kConexionesManoWeb = [
-      [0, 1], [1, 2], [2, 3], [3, 4],
-      [0, 5], [5, 6], [6, 7], [7, 8],
-      [0, 9], [9, 10], [10, 11], [11, 12],
-      [0, 13], [13, 14], [14, 15], [15, 16],
-      [0, 17], [17, 18], [18, 19], [19, 20],
-      [5, 9], [9, 13], [13, 17],
-    ];
-
-    function webDistancia(a, b) {
-      return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-    }
-
+    // Validaciones de mano y pose: rig_motion_frame.mjs (puro; compartido
+    // con el banco de paridad y los ports a Kotlin, Dart y Python). Aqui solo
+    // se registran sus motivos en diagnostico.
     function webManoUtilizable(hand, side = null) {
-      const fail = (code, landmark = null) => {
-        if (typeof errorDiagnostico === 'function') {
-          errorDiagnostico('capture', code, side, landmark);
-        }
-        return false;
-      };
-      if (!Array.isArray(hand) || hand.length !== 21) {
-        return fail('hand_landmarks_incomplete');
+      const r = handUsable(hand);
+      if (!r.ok && typeof errorDiagnostico === 'function') {
+        errorDiagnostico('capture', r.code, side, r.landmark);
       }
-      const puntos = hand.map(webCoord);
-      const nonFinite = puntos.findIndex((p) => !webFinito(p));
-      if (nonFinite >= 0) return fail('point_non_finite', nonFinite);
-      // Wrist must be in view; tips may leave a small margin at frame edge.
-      if (!puntoEnCuadroWeb(puntos[0])) return fail('wrist_out_of_frame', 0);
-      const dentro = puntos.filter((p) => p.x >= -kMargenManoWeb &&
-        p.x <= 1 + kMargenManoWeb && p.y >= -kMargenManoWeb &&
-        p.y <= 1 + kMargenManoWeb).length;
-      if (dentro < 15) {
-        const outside = puntos.findIndex((p) => p.x < -kMargenManoWeb ||
-          p.x > 1 + kMargenManoWeb || p.y < -kMargenManoWeb ||
-          p.y > 1 + kMargenManoWeb);
-        return fail('hand_out_of_frame', outside >= 0 ? outside : null);
-      }
-      const escala = Math.hypot(puntos[9].x - puntos[0].x,
-        puntos[9].y - puntos[0].y);
-      if (!Number.isFinite(escala) || escala < 0.015 || escala > 0.65) {
-        return fail('hand_scale_invalid', 9);
-      }
-      // Each connection must stay plausible relative to middle-MCP scale.
-      // This catches landmark swaps/spikes while tolerating open/closed hands.
-      for (const [a, b] of kConexionesManoWeb) {
-        const d = webDistancia(puntos[a], puntos[b]);
-        if (!Number.isFinite(d) || d < escala * 0.018 ||
-            d > escala * 2.2) return fail('hand_segment_invalid', b);
-      }
-      return true;
+      return r.ok;
     }
 
     function webPoseGeometriaValida(pose, poseMundo) {
-      const falla = (motivo, landmark = null) => {
-        if (typeof webCameraState !== 'undefined') {
-          webCameraState.validation = motivo;
-        }
+      const r = poseGeometry(pose, poseMundo);
+      if (!r.ok) {
+        if (typeof webCameraState !== 'undefined') webCameraState.validation = r.code;
         if (typeof errorDiagnostico === 'function') {
-          errorDiagnostico('capture', motivo, null, landmark);
-        }
-        return false;
-      };
-      if (!Array.isArray(pose) || pose.length < 33 ||
-          !Array.isArray(poseMundo) || poseMundo.length < 33) {
-        return falla('pose-formato');
-      }
-      const anclas = [11, 12, 23, 24];
-      for (const i of anclas) {
-        const p = webCoord(pose[i]);
-        // Hombros deben estar visibles en imagen; caderas pueden quedar
-        // fuera del recorte superior, pero worldLandmarks siguen siendo
-        // validos para formar eje vertical del torso.
-        const hombroEnMargen = p.x >= -kMargenCuerpoWeb &&
-          p.x <= 1 + kMargenCuerpoWeb && p.y >= -kMargenCuerpoWeb &&
-          p.y <= 1 + kMargenCuerpoWeb;
-        if ((i === 11 || i === 12) &&
-            (!webFinito(p) || !hombroEnMargen)) {
-          return falla('shoulder_out_of_frame', i);
-        }
-        const visNecesaria = i === 11 || i === 12;
-        if (!webFinito(p) || (visNecesaria &&
-            (!Number.isFinite(p.visibility) || p.visibility < 0.2)) ||
-            !webFinito(webCoord(poseMundo[i]))) {
-          return falla('pose_anchor_unsafe', i);
+          errorDiagnostico('capture', r.code, null, r.landmark);
         }
       }
-      const mundo = poseMundo.map(webCoord);
-      const hombros = webDistancia(mundo[11], mundo[12]);
-      if (!Number.isFinite(hombros) || hombros < 1e-3) {
-        return falla('hombros-degenerados');
-      }
-      const segmentos = [[11, 13], [13, 15], [12, 14], [14, 16], [23, 24]];
-      for (const [a, b] of segmentos) {
-        const d = webDistancia(mundo[a], mundo[b]);
-        if (!Number.isFinite(d) || d < hombros * 0.08 ||
-            d > hombros * 2.5) return falla('pose_segment_invalid', b);
-      }
-      const centroHombros = {
-        x: (mundo[11].x + mundo[12].x) * 0.5,
-        y: (mundo[11].y + mundo[12].y) * 0.5,
-        z: (mundo[11].z + mundo[12].z) * 0.5,
-      };
-      const centroCaderas = {
-        x: (mundo[23].x + mundo[24].x) * 0.5,
-        y: (mundo[23].y + mundo[24].y) * 0.5,
-        z: (mundo[23].z + mundo[24].z) * 0.5,
-      };
-      const tronco = webDistancia(centroHombros, centroCaderas);
-      if (!Number.isFinite(tronco) || tronco <= hombros * 0.25 ||
-          tronco >= hombros * 4.0) return falla('tronco-invalido');
-      return true;
-    }
-
-    function webResta(a, b) {
-      return [a.x - b.x, a.y - b.y, a.z - b.z];
-    }
-
-    function webPuntoResta(a, b) {
-      return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    }
-
-    function webLargo(a) {
-      return Math.hypot(a[0], a[1], a[2]);
-    }
-
-    function webUnitario(a) {
-      const m = webLargo(a);
-      return m < 1e-6 ? null : [a[0] / m, a[1] / m, a[2] / m];
-    }
-
-    function webPto(a, b) {
-      return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    }
-
-    function webCruz(a, b) {
-      return [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-      ];
-    }
-
-    function webBaseCuerpo(world) {
-      const hombroI = webCoord(world[11]);
-      const hombroD = webCoord(world[12]);
-      const caderaI = webCoord(world[23]);
-      const caderaD = webCoord(world[24]);
-      if (!webFinito(hombroI) || !webFinito(hombroD) ||
-          !webFinito(caderaI) || !webFinito(caderaD)) {
-        return null;
-      }
-      const escala = webLargo(webResta(hombroD, hombroI));
-      if (!Number.isFinite(escala) || escala < 1e-6) return null;
-
-      const derecha = webUnitario(webResta(hombroD, hombroI));
-      if (!derecha) return null;
-      const origen = [
-        (hombroI.x + hombroD.x) * 0.5,
-        (hombroI.y + hombroD.y) * 0.5,
-        (hombroI.z + hombroD.z) * 0.5,
-      ];
-      const centroCaderas = [
-        (caderaI.x + caderaD.x) * 0.5,
-        (caderaI.y + caderaD.y) * 0.5,
-        (caderaI.z + caderaD.z) * 0.5,
-      ];
-      const tronco = webPuntoResta(
-        origen, centroCaderas);
-      const arriba = webUnitario([
-        tronco[0] - derecha[0] * webPto(tronco, derecha),
-        tronco[1] - derecha[1] * webPto(tronco, derecha),
-        tronco[2] - derecha[2] * webPto(tronco, derecha),
-      ]);
-      if (!arriba) return null;
-      const frente = webUnitario(webCruz(arriba, derecha));
-      if (!frente) return null;
-      return { derecha, arriba, frente, origen, escala };
-    }
-
-    function webProyectar(base, punto) {
-      const p = webCoord(punto);
-      if (!webFinito(p)) return null;
-      const q = [
-        p.x - base.origen[0],
-        p.y - base.origen[1],
-        p.z - base.origen[2],
-      ];
-      return [
-        webPto(q, base.derecha) / base.escala,
-        webPto(q, base.arriba) / base.escala,
-        webPto(q, base.frente) / base.escala,
-      ];
+      return r.ok;
     }
 
     /**
-     * Espejo JS de normalizeFrame() en sign_norm.dart/sign_norm.py.
-     * Entrada: resultados crudos de PoseLandmarker y HandLandmarker.
-     * Salida: vector MotionFrameV2, exactamente 152 valores o null.
+     * MotionFrameV2 (152 valores) o null: rig_motion_frame.normalizeMotionFrame,
+     * espejo de normalizeFrame() en sign_norm.dart/sign_norm.py. Registra los
+     * motivos de rechazo en diagnostico y en webCameraState.validation.
      */
     function normalizarFrameWeb(pose, poseMundo, left, right,
       renderWrists = null) {
-      webCameraState.validation = '';
-      if (!Array.isArray(pose) || pose.length < 33 ||
-          !Array.isArray(poseMundo) || poseMundo.length < 33) {
-        errorDiagnostico('capture', 'pose_format');
-        return null;
+      const r = normalizeMotionFrame(pose, poseMundo, left, right, {renderWrists});
+      for (const e of r.errors) {
+        errorDiagnostico(e.stage, e.code, e.side, e.landmark);
       }
-      const ls = webCoord(pose[11]);
-      const rs = webCoord(pose[12]);
-      if (!webFinito(ls) || !webFinito(rs) ||
-          ls.visibility < 0.5 || rs.visibility < 0.5) {
-        errorDiagnostico('capture', 'shoulder_confidence_low');
-        return null;
-      }
-
-      const bodyIdx = [11, 12, 13, 14, 15, 16, 23, 24];
-      if (bodyIdx.some((i) => !webFinito(webCoord(poseMundo[i])))) {
-        errorDiagnostico('capture', 'pose_world_non_finite');
-        return null;
-      }
-      if (!webPoseGeometriaValida(pose, poseMundo)) {
-        if (!webCameraState.validation) webCameraState.validation = 'pose-geometria';
-        return null;
-      }
-      const base = webBaseCuerpo(poseMundo);
-      if (!base) return null;
-
-      const dx = rs.x - ls.x;
-      const dy = rs.y - ls.y;
-      const escalaImg = Math.hypot(dx, dy);
-      if (escalaImg < 1e-6) return null;
-      const cosT = dx / escalaImg;
-      const sinT = dy / escalaImg;
-      const out = Array(152).fill(0);
-
-      for (let i = 0; i < bodyIdx.length; i++) {
-        const q = webProyectar(base, poseMundo[bodyIdx[i]]);
-        if (!q) return null;
-        out[i * 3] = q[0];
-        out[i * 3 + 1] = q[1];
-        out[i * 3 + 2] = q[2];
-      }
-
-      const manos = [
-        [left, 'left', 24, 30, 32, 15],
-        [right, 'right', 27, 31, 92, 16],
-      ];
-      for (const [rawHand, side, offLoc, offPres, offShape, poseWrist] of manos) {
-        if (!Array.isArray(rawHand) || rawHand.length !== 21) continue;
-        const hand = rawHand.map(webCoord);
-        if (!webManoUtilizable(hand, side)) {
-          webCameraState.validation = 'mano-geometria';
-          continue;
-        }
-        const q = webProyectar(base, poseMundo[poseWrist]);
-        if (!q) continue;
-        // Pose wrist can lag one or two inference frames. Render position
-        // follows stabilized hand wrist, while semantic vector keeps raw pose
-        // wrist above. Project image residual into body axes, bounded.
-        const stableWrist = webCoord(renderWrists?.[side]);
-        const poseWristImage = webCoord(pose?.[poseWrist]);
-        if (webFinito(stableWrist) && webFinito(poseWristImage)) {
-          const imageDx = (stableWrist.x - poseWristImage.x) / escalaImg;
-          const imageDy = (stableWrist.y - poseWristImage.y) / escalaImg;
-          const bodyDx = imageDx * cosT + imageDy * sinT;
-          const bodyDy = -imageDx * sinT + imageDy * cosT;
-          q[0] += Math.max(-.75, Math.min(.75, bodyDx));
-          q[1] += Math.max(-.75, Math.min(.75, bodyDy));
-        }
-        out[offLoc] = q[0];
-        out[offLoc + 1] = q[1];
-        out[offLoc + 2] = q[2];
-        out[offPres] = 1;
-
-        const w = hand[0];
-        const m = hand[9];
-        let escalaMano = Math.hypot(m.x - w.x, m.y - w.y);
-        if (escalaMano < 1e-6) escalaMano = escalaImg * 0.25;
-        for (let j = 1; j < 21; j++) {
-          const p = hand[j];
-          const qx = p.x - w.x;
-          const qy = p.y - w.y;
-          const k = offShape + (j - 1) * 3;
-          out[k] = (qx * cosT + qy * sinT) / escalaMano;
-          out[k + 1] = (-qx * sinT + qy * cosT) / escalaMano;
-          out[k + 2] = (p.z - w.z) / escalaMano;
-        }
-      }
-      return out.every(Number.isFinite) ? out : null;
+      webCameraState.validation = r.validation;
+      return r.vector;
     }
 
     window.normalizarFrameWeb = normalizarFrameWeb;
@@ -6951,85 +8039,44 @@
       return camaraUltimoTimestampMs;
     }
 
-    const webHandTracker = createHandTrackCoordinator();
-    // `hand_assignment_hysteresis` is numeric evidence when continuity holds
-    // identity through a transient contradictory arm-chain label.
+    // Captura de manos: rig_hand_capture.mjs (compuerta, nacimiento, lado por
+    // cadena de brazo, mano utilizable, seguimiento y desacuerdo de muneca).
+    // Aqui quedan el registro de sesion, diagnostico y contadores.
+    const webHandCapture = createHandCapture({birthFrames: 3});
     let ultimoTrackingWeb = null;
     let ultimoSourceMeta = null;
-    const wristDisagreementState = {
-      left: {frames: 0, reported: false},
-      right: {frames: 0, reported: false},
-    };
 
-    function reiniciarDesacuerdoMuñeca() {
-      for (const state of Object.values(wristDisagreementState)) {
-        state.frames = 0;
-        state.reported = false;
-      }
-    }
-
-    // Compuerta anti-alucinacion (rig_hand_gate): duplicados, manos lejos
-    // del brazo y tamanos imposibles se descartan antes de asignar lados.
-    const webHandBirthGate = createHandBirthGate({frames: 3});
     function manosDesdeResultado(resultado, pose, timestampMs = 0) {
-      let manos = resultado?.landmarks ?? [];
-      let etiquetas = resultado?.handednesses ?? resultado?.handedness ?? [];
+      const manos = resultado?.landmarks ?? [];
+      const etiquetas = resultado?.handednesses ?? resultado?.handedness ?? [];
       const t = Number(timestampMs);
-      const candidatosPuerta = manos.map((mano, index) => ({
-        landmarks: mano,
-        confidence: Number(etiquetas?.[index]?.[0]?.score ?? .5),
-      }));
-      const puerta = gateHandCandidates(candidatosPuerta, pose);
-      const pasan = webHandBirthGate.filter(
-        candidatosPuerta, puerta.accepted, puerta.unanchored);
-      for (const {code} of puerta.rejected) {
-        diagnosticErrors.push({stage: 'association', code});
-        webCameraState.handRejects = (webCameraState.handRejects ?? 0) + 1;
-      }
-      ultimaEntradaManosWeb = sesionActual ? {
-        candidates: candidatosPuerta.map((c, index) => ({
-          lm: compactLandmarks(c.landmarks),
-          label: String(etiquetas?.[index]?.[0]?.categoryName ?? ''),
-          conf: Number(c.confidence.toFixed(3)),
-        })),
-        accepted: puerta.accepted, unanchored: puerta.unanchored,
-        rejected: puerta.rejected, passed: pasan,
-      } : null;
-      manos = pasan.map((index) => manos[index]);
-      etiquetas = pasan.map((index) => etiquetas?.[index] ?? []);
-      const hombroI = webCoord(pose?.[11]);
-      const hombroD = webCoord(pose?.[12]);
-      const anchoHombros = webFinito(hombroI) && webFinito(hombroD)
-        ? Math.max(.05, Math.hypot(
-          hombroI.x - hombroD.x, hombroI.y - hombroD.y)) : .4;
-      const candidatosCrudos = manos.map((mano, index) => {
-        const categoria = etiquetas?.[index]?.[0] ?? {};
-        return {
+      const captura = webHandCapture.process({
+        candidates: manos.map((mano, index) => ({
           landmarks: mano,
-          side: String(categoria.categoryName ?? ''),
-          confidence: Number(categoria.score ?? .5),
-        };
+          label: etiquetas?.[index]?.[0]?.categoryName,
+          confidence: etiquetas?.[index]?.[0]?.score,
+        })),
+        pose,
+        timestampMs: t,
+        poseTimestampMs: webPoseCache?.timestampMs ?? t,
       });
-      const asignacion = assignHandsByArmChain(candidatosCrudos, {
-        leftShoulder: hombroI,
-        rightShoulder: hombroD,
-        leftElbow: webCoord(pose?.[13]),
-        rightElbow: webCoord(pose?.[14]),
-        leftWrist: webCoord(pose?.[15]),
-        rightWrist: webCoord(pose?.[16]),
-        leftWristVisibility: Number(pose?.[15]?.visibility ?? 1),
-        rightWristVisibility: Number(pose?.[16]?.visibility ?? 1),
-        shoulderWidth: anchoHombros,
-      });
-      if (ultimaEntradaManosWeb) {
-        ultimaEntradaManosWeb.assignment = {mode: asignacion.mode,
-          sides: asignacion.sideByIndex};
-      }
-      webCameraState.handAssignmentMode = asignacion.mode === 'pose_arm_chain' ||
-        asignacion.mode === 'ambiguous' ? asignacion.mode : 'pose_pending';
-      if (asignacion.mode === 'ambiguous') {
+      webCameraState.handRejects = (webCameraState.handRejects ?? 0) +
+        captura.gate.rejected.length;
+      ultimaEntradaManosWeb = sesionActual ? {
+        candidates: manos.map((mano, index) => ({
+          lm: compactLandmarks(mano),
+          label: String(etiquetas?.[index]?.[0]?.categoryName ?? ''),
+          conf: Number(Number(etiquetas?.[index]?.[0]?.score ?? .5).toFixed(3)),
+        })),
+        accepted: captura.gate.accepted, unanchored: captura.gate.unanchored,
+        rejected: captura.gate.rejected, passed: captura.passed,
+        assignment: {mode: captura.assignment.mode,
+          sides: captura.assignment.sideByIndex},
+      } : null;
+      webCameraState.handAssignmentMode = captura.assignment.mode === 'pose_arm_chain' ||
+        captura.assignment.mode === 'ambiguous' ? captura.assignment.mode : 'pose_pending';
+      if (captura.sideAmbiguous) {
         webCameraState.validation = 'hand_side_ambiguous';
-        diagnosticErrors.push({stage: 'association', code: 'hand_side_ambiguous'});
         guardarAudit({
           frame: frameVivoFrameId + 1,
           timestampMs: t || performance.now(),
@@ -7038,104 +8085,30 @@
           code: 'hand_side_ambiguous',
         });
       }
-      const candidatosTrack = candidatosCrudos.map((candidato, index) => {
-        const categoria = etiquetas?.[index]?.[0] ?? {};
-        const anatomia = resolveAnatomicalHandSide(asignacion, index);
-        const completa = webManoUtilizable(candidato.landmarks, anatomia.side);
-        return {
-          landmarks: completa ? candidato.landmarks : null,
-          side: completa ? anatomia.side : null,
-          sideLocked: completa && anatomia.sideLocked,
-          sideAmbiguous: completa && anatomia.sideAmbiguous,
-          confidence: Number(categoria.score ?? .5),
-        };
-      });
-      const poseHint = asignacion.mode === 'pose_arm_chain' ? {
-        leftWrist: webCoord(pose?.[15]),
-        rightWrist: webCoord(pose?.[16]),
-        shoulderWidth: anchoHombros,
-      } : null;
-      ultimoTrackingWeb = webHandTracker.update(candidatosTrack, poseHint, t);
-      diagnosticErrors.push(...ultimoTrackingWeb.diagnostics.errors);
-      const trackingErrors = ultimoTrackingWeb.diagnostics.errors;
-      webCameraState.leftSurface = ultimoTrackingWeb.left.surface ?? 'unknown';
-      webCameraState.rightSurface = ultimoTrackingWeb.right.surface ?? 'unknown';
-      webCameraState.handHolds += trackingErrors.filter((error) =>
-        error.code === 'hand_position_held' || error.code === 'hand_surface_flip').length;
-      webCameraState.handRecoveries += ['left', 'right'].filter((side) =>
-        ultimoTrackingWeb[side].recoveryFrames === 2 &&
-        trackingErrors.some((error) => error.side === side &&
-          error.code === 'hand_recovered')).length;
-      webCameraState.handSwaps += trackingErrors.filter((error) =>
-        error.code === 'hand_identity_swap').length;
-      webCameraState.surfaceFlips =
-        (ultimoTrackingWeb.left.surfaceChanges ?? 0) +
-        (ultimoTrackingWeb.right.surfaceChanges ?? 0);
-      const continuityHeld = ultimoTrackingWeb.diagnostics.errors.some((error) =>
-        error.code === 'hand_assignment_hysteresis');
-      const wristFusionMode = classifySourceSkew(
-        Math.abs(t - (webPoseCache?.timestampMs ?? t))).mode;
-      for (const [side, poseIndex] of [['left', 15], ['right', 16]]) {
-        const track = ultimoTrackingWeb[side];
-        const handWrist = webCoord(track.detected?.[0]);
-        const poseWrist = webCoord(pose?.[poseIndex]);
-        if (webFinito(handWrist) && webFinito(poseWrist)) {
-          const residual = Math.hypot(
-            handWrist.x - poseWrist.x, handWrist.y - poseWrist.y) /
-            anchoHombros;
-          // A cached pose can be up to 120 ms older than hands. Do not call
-          // that expected temporal skew a broken union; only direct fusion
-          // may raise wrist disagreement.
-          const disagreement = residual > .25 && !continuityHeld &&
-            wristFusionMode === 'direct';
-          const state = wristDisagreementState[side];
-          if (disagreement) {
-            state.frames++;
-            // One crossing or one noisy direct frame is not enough to declare
-            // a broken union. Require persistence, then report once per episode.
-            if (state.frames >= 3 && !state.reported) {
-              state.reported = true;
-              errorDiagnostico('fusion', 'wrist_disagreement', side, 0,
-                'yellow');
-            }
-          } else {
-            state.frames = 0;
-            state.reported = false;
-          }
+      for (const error of captura.errors) {
+        if (error.via === 'diagnostico') {
+          errorDiagnostico(error.stage, error.code, error.side, error.landmark,
+            error.status);
+        } else {
+          diagnosticErrors.push(error);
         }
       }
+      ultimoTrackingWeb = captura.tracking;
+      webCameraState.leftSurface = ultimoTrackingWeb.left.surface ?? 'unknown';
+      webCameraState.rightSurface = ultimoTrackingWeb.right.surface ?? 'unknown';
+      Object.assign(webCameraState, countHandEvents(webCameraState, ultimoTrackingWeb));
       return {
-        // Recognition keeps detector evidence raw. Avatar render consumes
-        // stabilized landmarks below, preventing gates from contaminating
-        // semantic input while still blocking visual jumps.
-        left: ultimoTrackingWeb.left.raw ?? ultimoTrackingWeb.left.detected,
-        right: ultimoTrackingWeb.right.raw ?? ultimoTrackingWeb.right.detected,
-        renderLeft: ultimoTrackingWeb.left.renderLandmarks,
-        renderRight: ultimoTrackingWeb.right.renderLandmarks,
-        renderWrists: {
-          left: ultimoTrackingWeb.left.renderLandmarks?.[0] ?? null,
-          right: ultimoTrackingWeb.right.renderLandmarks?.[0] ?? null,
-        },
+        left: captura.left,
+        right: captura.right,
+        renderLeft: captura.renderLeft,
+        renderRight: captura.renderRight,
+        renderWrists: captura.renderWrists,
         tracking: ultimoTrackingWeb,
       };
     }
 
     function calcularCalidadFrameWeb(pose, poseMundo, left, right) {
-      if (!Array.isArray(pose) || pose.length < 33 ||
-          !Array.isArray(poseMundo) || poseMundo.length < 33) return 0;
-      const cuerpo = [11, 12, 13, 14, 15, 16, 23, 24]
-        .map((i) => webCoord(pose[i]).visibility);
-      if (cuerpo.some((v) => !Number.isFinite(v))) return 0;
-      // El mínimo es demasiado sensible: un codo parcialmente tapado hunde
-      // Q aunque hombros y caderas sigan siendo utilizables. Promedio evita
-      // ese falso cero y mantiene rango [0,1].
-      const visibilidad = Math.max(0, Math.min(1,
-        cuerpo.reduce((total, valor) => total + Math.max(0, Math.min(1, valor)), 0)
-          / cuerpo.length));
-      // Una mano basta para una seña valida. Dos manos suben calidad, pero
-      // perder una no degrada frame completo a cero.
-      const manos = left && right ? 1 : left || right ? 0.82 : 0.65;
-      return Math.max(0, Math.min(1, visibilidad * 0.75 + manos * 0.25));
+      return frameQuality(pose, poseMundo, left, right);
     }
 
     // Todo lo que sigue a la deteccion (asignacion de manos, 152D,
@@ -7148,6 +8121,11 @@
           poseMundo: poseResult?.worldLandmarks?.[0] ?? null,
           timestampMs,
         };
+      } else if (webPoseCache &&
+          timestampMs - webPoseCache.timestampMs > kPoseCacheMaxMs) {
+        // docs/14 H9: sin caducar, una pose vieja seguia armando el vector
+        // y el skew crecia hasta congelar todo el cuerpo (stage_desync).
+        webPoseCache = null;
       }
       webCaptureFrameIndex = sourceFrameId;
       const pose = webPoseCache?.pose ?? null;
@@ -7205,15 +8183,20 @@
         webCameraState.stale = false;
         webCameraState.staleMs = 0;
         frameVivoQuality = calidad;
-        frameVivoFrameId++;
-        frameVivoSourceFrameId = sourceFrameId;
-        frameVivoSourceSkewMs = Math.abs(timestampMs - poseTimestampMs);
         signSpaceVivo = filtrarSignSpace(
           signSpaceFrame(pose, poseMundo, {profile: perfilCorporal}),
           timestampMs);
         alimentarCapturaPerfil(pose, poseMundo);
-        frameVivo = suavizarFrameWeb(vectorRender ?? vector, timestampMs);
-        frameVivoTimestampMs = timestampMs;
+        // Durante el calentamiento el frame se registra y alimenta perfil y
+        // calibracion, pero no mueve el avatar.
+        if (!enCalentamientoWeb(ahoraValido - timestampMs, ahoraValido)) {
+          frameVivoFrameId++;
+          frameVivoSourceFrameId = sourceFrameId;
+          frameVivoSourceSkewMs = Math.abs(timestampMs - poseTimestampMs);
+          frameVivo = suavizarFrameWeb(vectorRender ?? vector, timestampMs);
+          frameVivoTimestampMs = timestampMs;
+          frameVivoLlegadaMs = ahoraValido;
+        }
         procesarCalibracionPulgares(vector, calidad);
         registrarDiagnostico(
           vector, frameVivo, timestampMs, calidad, ultimoSourceMeta);
@@ -7250,6 +8233,8 @@
             proc: performance.now() - processStartedAt,
             ...(workerRtMs != null ? {rt: workerRtMs} : {})},
           pose_ran: !!ejecutarPose,
+          avatar: poseAvatarMedida,
+          skew_ms: pose ? Math.round(Math.abs(timestampMs - poseTimestampMs)) : null,
           pose: compactLandmarks(pose),
           world: compactLandmarks(poseMundo),
           hands: ultimaEntradaManosWeb,
@@ -7415,8 +8400,10 @@
               webCameraState.inputFps > 0 && webCameraState.inputFps < 24) {
             avisoFpsCamara = true;
             avisar(`La cámara entrega ${webCameraState.inputFps} FPS (se pidieron 30). ` +
-              'Con más luz suele subir a 30.');
-            eventoSesion('camera_low_fps', {input_fps: webCameraState.inputFps});
+              'Con más luz suele subir a 30. En Linux se puede fijar con ' +
+              'v4l2-ctl: exposure_dynamic_framerate=0 (o exposure_auto_priority=0).');
+            eventoSesion('camera_low_fps', {input_fps: webCameraState.inputFps,
+              requested_fps: webCameraState.captureFps});
           }
           camaraInputQualityInicio = ahoraEntrada;
           camaraInputQualityFrames = playback.totalVideoFrames;
@@ -7526,7 +8513,10 @@
       reiniciarFiltroWeb();
       reiniciarNeutralPulgar();
       reiniciarEstadoPerdidaMano();
-      if (vrm) posarReposo();
+      if (vrm) {
+        transicionReposo('camara',
+          [...huesosBrazo('left'), ...huesosBrazo('right')], posarReposo);
+      }
       webCameraState.running = false;
       webCameraState.processing = false;
       webCameraState.detectorsReady = !!preloadedLandmarkersWeb;
@@ -7546,9 +8536,9 @@
       });
       if (capturaModo === 'holistic') {
         const opciones = {
-          minPoseDetectionConfidence: 0.4,
-          minPosePresenceConfidence: 0.4,
-          minHandLandmarksConfidence: 0.4,
+          minPoseDetectionConfidence: confianzaTracking.deteccion,
+          minPosePresenceConfidence: confianzaTracking.presencia,
+          minHandLandmarksConfidence: confianzaTracking.presencia,
           minFaceDetectionConfidence: 0.4,
           minFacePresenceConfidence: 0.4,
           // El subgrafo de blendshapes falla en GPU WebGL ("No support of
@@ -7611,7 +8601,7 @@
       // ve dos manos); por eso Holistic sigue de producto.
       if (capturaWorkerPedido && holisticWorkerSupported()) {
         const abs = (modelo) => new URL(modelo, location.href).href;
-        const confianza = {minTrackingConfidence: 0.3};
+        const confianza = {minTrackingConfidence: confianzaTracking.seguimiento};
         const cliente = createHolisticWorkerClient({
           mode: 'separado',
           bundleUrl: kMediaPipeBundle,
@@ -7619,12 +8609,14 @@
           models: {pose: [abs(kPoseModelWeb)], hand: [abs(kHandModelWeb)],
             face: [kFaceModelUrl]},
           options: {
-            pose: {numPoses: 1, minPoseDetectionConfidence: 0.4,
-              minPosePresenceConfidence: 0.4, ...confianza},
-            hand: {numHands: 2, minHandDetectionConfidence: 0.4,
-              minHandPresenceConfidence: 0.4, ...confianza},
+            pose: {numPoses: 1,
+              minPoseDetectionConfidence: confianzaTracking.deteccion,
+              minPosePresenceConfidence: confianzaTracking.presencia, ...confianza},
+            hand: {numHands: 2,
+              minHandDetectionConfidence: confianzaTracking.deteccion,
+              minHandPresenceConfidence: confianzaTracking.presencia, ...confianza},
             face: {numFaces: 1, minFaceDetectionConfidence: 0.4,
-              minFacePresenceConfidence: 0.4, ...confianza,
+              minFacePresenceConfidence: 0.4, minTrackingConfidence: 0.3,
               outputFaceBlendshapes: false},
           },
         });
@@ -7644,17 +8636,17 @@
             baseOptions: base(kPoseModelWeb, true),
             runningMode: 'VIDEO',
             numPoses: 1,
-            minPoseDetectionConfidence: 0.4,
-            minPosePresenceConfidence: 0.4,
-            minTrackingConfidence: 0.3,
+            minPoseDetectionConfidence: confianzaTracking.deteccion,
+            minPosePresenceConfidence: confianzaTracking.presencia,
+            minTrackingConfidence: confianzaTracking.seguimiento,
           });
         hand = await HandLandmarker.createFromOptions(fileset, {
             baseOptions: base(kHandModelWeb, true),
             runningMode: 'VIDEO',
             numHands: 2,
-            minHandDetectionConfidence: 0.4,
-            minHandPresenceConfidence: 0.4,
-            minTrackingConfidence: 0.3,
+            minHandDetectionConfidence: confianzaTracking.deteccion,
+            minHandPresenceConfidence: confianzaTracking.presencia,
+            minTrackingConfidence: confianzaTracking.seguimiento,
           });
         return { pose, hand };
       } catch (gpuError) {
@@ -7665,17 +8657,17 @@
             baseOptions: base(kPoseModelWeb, false),
             runningMode: 'VIDEO',
             numPoses: 1,
-            minPoseDetectionConfidence: 0.4,
-            minPosePresenceConfidence: 0.4,
-            minTrackingConfidence: 0.3,
+            minPoseDetectionConfidence: confianzaTracking.deteccion,
+            minPosePresenceConfidence: confianzaTracking.presencia,
+            minTrackingConfidence: confianzaTracking.seguimiento,
           }),
           hand: await HandLandmarker.createFromOptions(fileset, {
             baseOptions: base(kHandModelWeb, false),
             runningMode: 'VIDEO',
             numHands: 2,
-            minHandDetectionConfidence: 0.4,
-            minHandPresenceConfidence: 0.4,
-            minTrackingConfidence: 0.3,
+            minHandDetectionConfidence: confianzaTracking.deteccion,
+            minHandPresenceConfidence: confianzaTracking.presencia,
+            minTrackingConfidence: confianzaTracking.seguimiento,
           }),
         };
       }
@@ -7834,11 +8826,12 @@
         camaraFramesPresentados = 0;
         camaraFramesUsados = -1;
         avisoFpsCamara = false;
+        reiniciarCalentamientoWeb();
         vigilarFramesVideo(video);
         camaraUltimoTimestampMs = 0;
         webCaptureFrameIndex = 0;
         webPoseCache = null;
-        webHandTracker.reset();
+        webHandCapture.reset();
         reiniciarFiltroWeb();
         camaraFpsInicio = 0;
         camaraFpsFrames = 0;
@@ -7847,7 +8840,6 @@
         camaraInputQualityInicio = 0;
         camaraInputQualityFrames = 0;
         camaraInputQualityDropped = 0;
-        reiniciarDesacuerdoMuñeca();
         reiniciarTiemposWeb();
         webPerformanceMetrics.reset();
         actualizarMetricasWeb();
@@ -7855,7 +8847,22 @@
         renderFpsFrames = 0;
         frameVivoSourceFrameId = 0;
         ultimoSourceFrameRenderizado = 0;
-        const videoSettings = camaraStream.getVideoTracks?.()[0]?.getSettings?.() ?? {};
+        poseAvatarMedida = null;
+        ultimoSourceMedido = 0;
+        const pistaVideo = camaraStream.getVideoTracks?.()[0];
+        const videoSettings = pistaVideo?.getSettings?.() ?? {};
+        // Que deja controlar el navegador de esta camara: con poca luz las
+        // webcams UVC bajan FPS por exposicion; queda en la sesion para
+        // saber si se puede corregir desde la pagina o solo con v4l2-ctl.
+        let capacidades = {};
+        try { capacidades = pistaVideo?.getCapabilities?.() ?? {}; } catch (_) { /* sin API */ }
+        webCameraState.cameraInfo = {
+          label: pistaVideo?.label ?? null,
+          frame_rate: capacidades.frameRate ?? null,
+          exposure_mode: capacidades.exposureMode ?? null,
+          exposure_time: capacidades.exposureTime ?? null,
+          exposure_mode_now: videoSettings.exposureMode ?? null,
+        };
         webCameraState.captureFps = Number(videoSettings.frameRate) || 0;
         webCameraState.captureWidth = Number(videoSettings.width) || 0;
         webCameraState.captureHeight = Number(videoSettings.height) || 0;
@@ -7928,12 +8935,11 @@
       webCameraState.captureFps = 0;
       webCameraState.captureWidth = 0;
       webCameraState.captureHeight = 0;
-      reiniciarDesacuerdoMuñeca();
       reiniciarTiemposWeb();
       webPerformanceMetrics.reset();
       actualizarMetricasWeb();
       webCameraState.renderFps = 0;
-      webHandTracker.reset();
+      webHandCapture.reset();
       reiniciarFiltroWeb();
       webCameraState.poseStride = adaptivePoseScheduler.getStride();
       webCameraState.calibrationState = 'WARMUP';
@@ -8158,7 +9164,8 @@
           estado.recoveryFrames = Math.max(0, estado.recoveryFrames - 1);
         } else if (!brazoIVisible || estado.enReposo) {
           if (!estado.reposoAplicado) {
-            posarReposoBrazo('left', meta);
+            transicionReposo('left:brazo', huesosBrazo('left'),
+              () => posarReposoBrazo('left', meta));
             estado.reposoAplicado = true;
             guardarAudit({
               frame: meta.frameId ?? null,
@@ -8181,7 +9188,8 @@
           estado.recoveryFrames = Math.max(0, estado.recoveryFrames - 1);
         } else if (!brazoDVisible || estado.enReposo) {
           if (!estado.reposoAplicado) {
-            posarReposoBrazo('right', meta);
+            transicionReposo('right:brazo', huesosBrazo('right'),
+              () => posarReposoBrazo('right', meta));
             estado.reposoAplicado = true;
             guardarAudit({
               frame: meta.frameId ?? null,
@@ -8203,7 +9211,7 @@
     window.reproducirSecuencia = function (seqJson, fps, normVersion,
         signSpaceJson = null) {
       if (normVersion != null && String(normVersion) !== '2.0.0') {
-        avisar('norm_version incompatible: ' + normVersion);
+        avisar('norm_version incompatible: ' + normVersion, {tecnico: true});
         return;
       }
       try {
@@ -8211,14 +9219,15 @@
         // tal cual por postMessage. JSON.parse(arreglo) fallaba siempre.
         colaFrames = typeof seqJson === 'string' ? JSON.parse(seqJson) : seqJson;
       } catch (e) {
-        avisar('secuencia invalida: ' + e);
+        avisar('secuencia invalida: ' + e, {tecnico: true});
         return;
       }
       if (!Array.isArray(colaFrames) || colaFrames.length !== kTFrames ||
           colaFrames.some((frame) => !Array.isArray(frame) ||
             frame.length !== kFrameDim ||
             frame.some((value) => !Number.isFinite(Number(value))))) {
-        avisar('secuencia incompatible: se requieren 32 frames de 152 valores');
+        avisar('secuencia incompatible: se requieren 32 frames de 152 valores',
+          {tecnico: true});
         colaFrames = [];
         return;
       }
@@ -8244,12 +9253,25 @@
       reiniciarFiltroWeb();
       reiniciarNeutralPulgar();
       reiniciarEstadoPerdidaMano();
+      // La plantilla reinicia su reloj en 0: con compuertas que vieron
+      // frames en vivo (o la plantilla anterior) todo el torso quedaba
+      // rechazado como stale_frame.
+      resetSafetyGates();
+      reproduccionRenderId = 0;
+      acumMs = 0;
+      crossfadePose('reproduccion', huesosCuerpo());
       reproduciendo = colaFrames.length > 0;
     };
 
     // Modo espejo: aplica UN frame al instante, sin cola ni interpolacion.
     // Lo alimenta la camara en vivo (pantalla_espejo.dart). Corta cualquier
     // reproduccion en curso para que no peleen por los mismos huesos.
+    // Dart (Traducir) lo activa para cortar senas con el filtro del visor.
+    let movimientoParaDart = false;
+    window.configurarMovimiento = function (activo) {
+      movimientoParaDart = activo === true;
+    };
+
     window.aplicarFrameVivo = function (frameJson, timestampMs, quality,
         renderFrameJson = null, sourceMetaJson = null) {
       if (!vrm) return;
@@ -8316,6 +9338,27 @@
       caraVivo = caraPuntos ? {landmarks: caraPuntos, blendshapes: {}} : null;
       frameVivoQuality = Number(quality) || 0;
       frameVivoRecibidoAt = performance.now();
+      if (!standaloneWeb) {
+        aplicarNivelRender(sourceMeta?.tier);
+        perfEmbebido.frameReceived({
+          frameId: frameVivoFrameId,
+          receivedAtMs: frameVivoRecibidoAt,
+          inferMs: sourceMeta?.infer_ms,
+          hasHand: sourceMeta?.has_hand === true,
+          tier: sourceMeta?.tier,
+          thermal: sourceMeta?.thermal,
+        });
+        // El seguimiento corre en Kotlin (CapturaManos): sus errores y su
+        // estado por lado alimentan los mismos contadores que la web.
+        const trackingNativo = nativeTracking(sourceMeta?.hand_track,
+          sourceMeta?.errors);
+        if (trackingNativo) {
+          Object.assign(webCameraState,
+            countHandEvents(webCameraState, trackingNativo));
+          webCameraState.leftSurface = trackingNativo.left.surface ?? 'unknown';
+          webCameraState.rightSurface = trackingNativo.right.surface ?? 'unknown';
+        }
+      }
       frameVivoExterno = !standaloneWeb;
       frameVivoStale = false;
       diagnosticPointIssues = [];
@@ -8344,6 +9387,21 @@
         }
       }
       frameVivo = suavizarFrameWeb(renderV, frameVivoTimestampMs);
+      // Traducir (Android) corta las senas con el mismo quieto/movimiento
+      // adaptativo del laboratorio web: movimiento intencional del cuerpo o
+      // la muneca, o de los dedos, con alguna mano presente.
+      if (movimientoParaDart && window.SenasChannel) {
+        const d = ultimoDiagnosticoFiltro ?? {};
+        const conMano = v[kOffPresL] >= .5 || v[kOffPresR] >= .5;
+        const dedos = Number(d.fingerMotionScore ?? 0);
+        const enMovimiento = conMano &&
+          (d.intentionalMotion === true || dedos >= .8);
+        window.SenasChannel.postMessage('motion:' + JSON.stringify({
+          t: frameVivoTimestampMs, m: enMovimiento ? 1 : 0,
+          s: Math.round(Number(d.motionScore ?? 0) * 100) / 100,
+          f: Math.round(dedos * 100) / 100, h: conMano,
+        }));
+      }
       procesarCalibracionPulgares(v, frameVivoQuality);
       registrarDiagnostico(v, frameVivo, frameVivoTimestampMs,
         frameVivoQuality, ultimoSourceMeta);
@@ -8358,28 +9416,189 @@
 
     let ultimoT = 0;
     let acumMs = 0;
+    // Stream que se quedo sin frames: al volver entra con crossfade.
+    let volverConCrossfade = false;
+
+    // Interpola dos frames 152D de una plantilla solo si tienen la misma
+    // estructura (misma presencia de manos, brazos con datos): un hueco en
+    // cero interpolado llevaria la mano al pecho. Si no, el mas cercano.
+    function interpolarFramePlantilla(a, b, f) {
+      if (!b || f <= 0) return a;
+      if (f >= 1) return b;
+      const conCodo = (v, punto) => Math.hypot(v[kOffBody + punto * 3],
+        v[kOffBody + punto * 3 + 1]) > 0.05;
+      const misma = (a[kOffPresL] >= .5) === (b[kOffPresL] >= .5) &&
+        (a[kOffPresR] >= .5) === (b[kOffPresR] >= .5) &&
+        conCodo(a, kPtCodoI) === conCodo(b, kPtCodoI) &&
+        conCodo(a, kPtCodoD) === conCodo(b, kPtCodoD);
+      if (!misma) return f < .5 ? a : b;
+      return a.map((x, k) => x + (b[k] - x) * f);
+    }
+
+    function interpolarSignSpacePlantilla(a, b, f) {
+      if (!a || !b) return f < .5 ? a : b;
+      const misma = a.mode === b.mode && Object.keys(a.mask).every((k) =>
+        a.mask[k] === b.mask[k]);
+      if (!misma) return f < .5 ? a : b;
+      return {...a, values: a.values.map((x, k) => x + (b.values[k] - x) * f)};
+    }
+
+    // Estado del avatar (rig_avatar_state.mjs): solo describe, para el panel
+    // y la sesion. Los huesos los mueven aplicarFrame y las transiciones.
+    const estadoAvatar = createAvatarStateTracker({onChange: (cambio) => {
+      webCameraState.avatarState = cambio.to;
+      eventoSesion('avatar_state', {from: cambio.from, to: cambio.to});
+    }});
+    function actualizarEstadoAvatar(ahoraMs) {
+      const camaraEnVivo = standaloneWeb && webCameraState.running;
+      const enGracia = (lado) => estadoPerdidaMano[lado].desde > 0 &&
+        !estadoPerdidaMano[lado].enReposo;
+      estadoAvatar.update({
+        playing: reproduciendo,
+        streamLive: camaraEnVivo || (!standaloneWeb && frameVivoExterno),
+        streamStale: frameVivoStale,
+        returning: volviendoAReposo(),
+        holding: enGracia('left') || enGracia('right'),
+        tracking: !!frameVivo && !frameVivoStale,
+      }, ahoraMs);
+    }
+
+    // Pose que de verdad ve el usuario (tras compuerta, filtros, zona muerta
+    // y transiciones): cuaterniones locales de brazos, manos y cabeza, una
+    // vez por frame de camara web. Viaja en el registro de sesion del frame
+    // siguiente; analizar_sesion.py mide jitter sobre ella (docs/10 fase 3).
+    const kHuesosMedidos = ['LeftUpperArm', 'LeftLowerArm', 'LeftHand',
+      'RightUpperArm', 'RightLowerArm', 'RightHand', 'Head'];
+    let poseAvatarMedida = null;
+    let ultimoSourceMedido = 0;
+    function medirPoseAvatar() {
+      if (!vrm || !frameVivo) return;
+      if (!frameVivoFrameId || frameVivoFrameId === ultimoSourceMedido) return;
+      ultimoSourceMedido = frameVivoFrameId;
+      const q = {};
+      for (const nombre of kHuesosMedidos) {
+        const h = bone(VRMHumanBoneName[nombre]);
+        if (!h) continue;
+        const {x, y, z, w} = h.quaternion;
+        q[nombre] = [x, y, z, w].map((v) => Math.round(v * 1e4) / 1e4);
+      }
+      poseAvatarMedida = {id: frameVivoSourceFrameId || frameVivoFrameId,
+        state: webCameraState.avatarState, q};
+      webCameraState.avatarPose = poseAvatarMedida;
+    }
+
+    // Fluidez visible: por render, el mayor giro de los huesos medidos. Si la
+    // pose solo cambia cuando llega un frame de camara, el avatar avanza a
+    // saltos (15 cambios/s aunque el render vaya a 144 Hz); esto lo cuenta
+    // por segundo en el evento perf (render_motion).
+    const fluidezRender = {renders: 0, cambios: 0, totalDeg: 0, maxDeg: 0,
+      inicio: 0, segundos: [], previo: new Map()};
+    function medirFluidezRender() {
+      if (!vrm || !frameVivo) {
+        fluidezRender.previo.clear();
+        return;
+      }
+      let paso = 0;
+      let huesoPaso = null;
+      for (const nombre of kHuesosMedidos) {
+        const h = bone(VRMHumanBoneName[nombre]);
+        if (!h) continue;
+        const previo = fluidezRender.previo.get(nombre);
+        if (previo) {
+          const giro = previo.angleTo(h.quaternion);
+          if (giro > paso) {
+            paso = giro;
+            huesoPaso = nombre;
+          }
+          previo.copy(h.quaternion);
+        } else {
+          fluidezRender.previo.set(nombre, h.quaternion.clone());
+        }
+      }
+      const grados = paso * 180 / Math.PI;
+      const f = fluidezRender;
+      f.renders++;
+      if (grados > .05) f.cambios++;
+      f.totalDeg += grados;
+      if (grados > f.maxDeg) {
+        f.maxDeg = grados;
+        f.maxHueso = huesoPaso;
+        f.maxEstado = webCameraState.avatarState;
+      }
+      const ahora = performance.now();
+      if (!f.inicio) f.inicio = ahora;
+      if (ahora - f.inicio >= 1000) {
+        const segundo = {renders: f.renders, changed: f.cambios,
+          total_deg: Math.round(f.totalDeg * 10) / 10,
+          max_deg: Math.round(f.maxDeg * 100) / 100, max_bone: f.maxHueso,
+          max_state: f.maxEstado};
+        webCameraState.renderMotion = segundo;
+        f.segundos.push(segundo);
+        if (f.segundos.length > 10) f.segundos.shift();
+        f.renders = 0; f.cambios = 0; f.totalDeg = 0; f.maxDeg = 0;
+        f.maxHueso = null; f.maxEstado = null;
+        f.inicio = ahora;
+      }
+    }
+    // Segundos completos desde el ultimo evento perf, sumados.
+    function drenarFluidezRender() {
+      const out = {renders: 0, changed: 0, total_deg: 0, max_deg: 0};
+      for (const s of fluidezRender.segundos) {
+        out.renders += s.renders;
+        out.changed += s.changed;
+        out.total_deg = Math.round((out.total_deg + s.total_deg) * 10) / 10;
+        if (s.max_deg >= out.max_deg) {
+          out.max_deg = s.max_deg;
+          out.max_bone = s.max_bone;
+        }
+      }
+      fluidezRender.segundos.length = 0;
+      return out;
+    }
+
+    // Telefono con el avatar quieto: sin frames en vivo (o stream cortado),
+    // sin plantilla ni transiciones en curso y sin mover la camara.
+    function avatarEnReposo() {
+      return !standaloneWeb && !reproduciendo && !orbitaActiva &&
+        transicionesPose.size === 0 && (!frameVivo || frameVivoStale);
+    }
+
+    let ultimoRenderAt = 0;
     function animar(t) {
       requestAnimationFrame(animar);
+      const presupuesto = avatarEnReposo()
+        ? idleBudgetFor(presupuestoRender) : presupuestoRender;
+      if (!shouldRenderFrame(ultimoRenderAt, t, presupuesto)) return;
+      ultimoRenderAt = t;
       const dt = ultimoT ? t - ultimoT : 16;
       ultimoT = t;
 
       if (reproduciendo) {
+        // Un frame interpolado por render (no saltos de 33 ms): la
+        // plantilla tiene 32 frames y el render corre a 60+ Hz.
         acumMs += dt;
         const msPorFrame = 1000 / kFps;
-        while (acumMs >= msPorFrame && reproduciendo) {
-          acumMs -= msPorFrame;
-          if (frameActual >= colaFrames.length) {
-            reproduciendo = false;
-            posarReposo();
-            if (window.SenasChannel) window.SenasChannel.postMessage('fin');
-            break;
-          }
-          RigBodyEngine.aplicarFrame(colaFrames[frameActual], {
-            frameId: frameActual + 1,
-            timestampMs: frameActual * 1000 / kFps,
-            signSpace: colaSignSpace?.[frameActual] ?? null,
-          });
-          frameActual++;
+        const posicion = acumMs / msPorFrame;
+        if (posicion >= colaFrames.length) {
+          reproduciendo = false;
+          // Mismo motivo que al empezar: el vivo que siga trae ids nuevos.
+          resetSafetyGates();
+          transicionReposo('fin',
+            [...huesosBrazo('left'), ...huesosBrazo('right')], posarReposo);
+          if (window.SenasChannel) window.SenasChannel.postMessage('fin');
+        } else {
+          const ultimo = colaFrames.length - 1;
+          const i = Math.min(ultimo, Math.floor(posicion));
+          const f = i < ultimo ? posicion - i : 0;
+          frameActual = i;
+          reproduccionRenderId++;
+          RigBodyEngine.aplicarFrame(
+            interpolarFramePlantilla(colaFrames[i], colaFrames[i + 1], f), {
+              frameId: reproduccionRenderId,
+              timestampMs: posicion * msPorFrame,
+              signSpace: interpolarSignSpacePlantilla(
+                colaSignSpace?.[i] ?? null, colaSignSpace?.[i + 1] ?? null, f),
+            });
         }
       } else if (frameVivo) {
         // Último frame gana: render 60 FPS, entrada de tracking ~30 FPS,
@@ -8399,22 +9618,37 @@
             frameVivoStale = true;
             webCameraState.stale = true;
             reiniciarEstadoPerdidaMano();
-            posarReposo();
+            transicionReposo('sin_senal',
+              [...huesosBrazo('left'), ...huesosBrazo('right')], posarReposo);
+            volverConCrossfade = true;
           }
         } else {
           frameVivoStale = false;
           webCameraState.stale = false;
+          if (volverConCrossfade) {
+            volverConCrossfade = false;
+            crossfadePose('vivo', huesosCuerpo());
+          }
           const espejo = vistaAvatar === 'espejo';
+          // Edad desde la llegada al visor, no desde la captura: con
+          // "ultimo frame gana" un frame lento sigue siendo el mas nuevo, y
+          // medir latencia de captura congelaba todo en equipos lentos.
+          const llegadaFrameVivo = frameVivoExterno
+            ? frameVivoRecibidoAt : frameVivoLlegadaMs;
           RigBodyEngine.aplicarFrame(
             espejo ? mirrorMotionFrame(frameVivo) : frameVivo, {
               frameId: frameVivoFrameId,
               timestampMs: frameVivoTimestampMs,
+              receivedAtMs: llegadaFrameVivo,
               sourceSkewMs: frameVivoSourceSkewMs,
               signSpace: espejo ? mirrorSignSpaceFrame(signSpaceVivo)
                 : signSpaceVivo,
             });
           aplicarCara(caraVivo, espejo, {frameId: frameVivoFrameId,
-            timestampMs: frameVivoTimestampMs});
+            timestampMs: frameVivoTimestampMs, receivedAtMs: llegadaFrameVivo});
+          if (streamExternoEnVivo) {
+            perfEmbebido.frameRendered({frameId: frameVivoFrameId, renderedAtMs: t});
+          }
           if (standaloneWeb && frameVivoSourceFrameId > 0 &&
               frameVivoSourceFrameId !== ultimoSourceFrameRenderizado) {
             webPerformanceMetrics.recordFrame({
@@ -8430,6 +9664,11 @@
         }
       }
 
+      avanzarTransicionesPose(performance.now());
+      suavizarSalida(performance.now());
+      actualizarEstadoAvatar(performance.now());
+      medirPoseAvatar();
+      medirFluidezRender();
       moverExpresionBasica(t / 1000);
       orbita.update();
       // three-vrm NO aplica solo lo que se escribe en los huesos
@@ -8443,6 +9682,7 @@
       const renderStartedAt = performance.now();
       if (vrm) vrm.update(dt / 1000);
       renderer.render(scene, camera);
+      if (!standaloneWeb) perfEmbebido.renderTick();
       if (standaloneWeb) {
         registrarTiempoWeb('render', performance.now() - renderStartedAt);
       }

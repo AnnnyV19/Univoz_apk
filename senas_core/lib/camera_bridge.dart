@@ -111,6 +111,25 @@ class LandmarkFrame {
   /// Ancho / alto de la imagen analizada (ya rotada), o null.
   final double? imageAspect;
 
+  /// Nivel por dispositivo ('bajo' | 'medio' | 'alto'), DeviceTier.kt.
+  final String? tier;
+
+  /// Inferencia del ultimo resultado nativo, ms.
+  final double? inferMs;
+
+  /// PowerManager.THERMAL_STATUS_* (0-6); null sin API (Android < 10).
+  final int? thermal;
+
+  /// Entrada de manos de la captura nativa con el esquema de sesion web
+  /// (`hands`: candidatas, compuerta, nacimiento, lados, utilizables).
+  final Map<String, dynamic>? handsIn;
+
+  /// Seguimiento por lado (estado, superficie palma/dorso, recuperacion).
+  final Map<String, dynamic>? track;
+
+  /// La pose de este frame salio del mismo instante (no del cache).
+  final bool? poseRan;
+
   const LandmarkFrame({
     required this.timestampMs,
     this.pose,
@@ -129,6 +148,12 @@ class LandmarkFrame {
     this.rightWorld,
     this.captureMode = 'separado',
     this.imageAspect,
+    this.tier,
+    this.inferMs,
+    this.thermal,
+    this.handsIn,
+    this.track,
+    this.poseRan,
   });
 
   /// Decodifica desde el mapa que llega por el canal del lado nativo.
@@ -187,8 +212,24 @@ class LandmarkFrame {
       rightWorld: mundoDer,
       captureMode: map['capture_mode'] as String? ?? 'separado',
       imageAspect: _aspecto(map['image_w'], map['image_h']),
+      tier: map['tier'] is String ? map['tier'] as String : null,
+      inferMs: (map['infer_ms'] as num?)?.toDouble(),
+      thermal: (map['thermal'] as num?)?.toInt(),
+      handsIn: _mapa(map['hands_in']),
+      track: _mapa(map['track']),
+      poseRan: map['pose_ran'] is bool ? map['pose_ran'] as bool : null,
     );
   }
+
+  /// Mapa del canal (Map<Object?, Object?> anidado) con claves String.
+  static Map<String, dynamic>? _mapa(Object? raw) =>
+      raw is Map ? raw.map((k, v) => MapEntry(k.toString(), _valor(v))) : null;
+
+  static Object? _valor(Object? v) => v is Map
+      ? _mapa(v)
+      : v is List && v is! TypedData
+          ? v.map(_valor).toList(growable: false)
+          : v;
 
   static double? _aspecto(Object? w, Object? h) {
     if (w is! num || h is! num || w <= 0 || h <= 0) return null;
@@ -228,7 +269,9 @@ class LandmarkFrame {
           : normalizeFrame(pose!, poseMundo!, left: left, right: right);
 
   /// Frame efímero para avatar. Puede contener muñeca predicha y última forma
-  /// durante oclusión; nunca se usa para grabación ni reconocimiento.
+  /// durante oclusión; nunca se usa para grabación ni reconocimiento. La
+  /// ubicacion de cada mano sigue a la muneca estabilizada del render (la de
+  /// la pose puede ir atrasada), acotada como en la web.
   List<double>? normalizeForRender() =>
       (!fusionAceptada || pose == null || poseMundo == null)
           ? null
@@ -237,7 +280,18 @@ class LandmarkFrame {
               poseMundo!,
               left: renderLeft ?? left,
               right: renderRight ?? right,
+              munecasRender: {
+                if (renderLeft != null && renderLeft!.isNotEmpty)
+                  'left': renderLeft![0],
+                if (renderRight != null && renderRight!.isNotEmpty)
+                  'right': renderRight![0],
+              },
             );
+
+  /// Calidad del frame en [0, 1] con la formula de la web (calidadFrame); 0
+  /// si el frame no da vector.
+  double get calidad =>
+      normalize() == null ? 0.0 : calidadFrame(pose, poseMundo, left, right);
 
   /// SignSpaceFrame v1 para el avatar (independiente del cuerpo), o null.
   /// No reemplaza a [normalize]: el reconocimiento sigue usando 152D.
@@ -284,6 +338,13 @@ class LandmarkFrame {
         if (visibilidadMin != null) 'visibilidad_min': visibilidadMin,
         'capture_mode': captureMode,
         if (imageAspect != null) 'image_aspect': imageAspect,
+        if (tier != null) 'tier': tier,
+        if (inferMs != null) 'infer_ms': inferMs,
+        if (thermal != null) 'thermal': thermal,
+        if (handsIn != null) 'hands_in': handsIn,
+        if (track != null) 'track': track,
+        if (poseRan != null) 'pose_ran': poseRan,
+        'quality': calidad,
         if (face != null) 'face': face,
         if (leftWorld != null) 'leftWorld': leftWorld,
         if (rightWorld != null) 'rightWorld': rightWorld,

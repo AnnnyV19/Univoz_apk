@@ -301,3 +301,155 @@ def test_rendimiento_limitado_por_la_camara():
     assert f1["camara_fps_p50"] == 15 and f1["limitado_por_camara"] is True
     sano = an.gates(an.leer_registros(_sesion_gates(pasos=range(1, 10))))
     assert "limitado_por_camara" not in sano["fase_1_rendimiento"]
+
+
+def test_estados_de_avatar_skew_y_ajustes_de_compuerta():
+    regs = _sesion_gates(pasos=range(1, 10))
+    regs[0]["meta"]["tracking_profile"] = "estable"
+    regs[0]["meta"]["pose_transitions"] = True
+    for i, f in enumerate(r for r in regs if r.get("kind") == "frame"):
+        f["skew_ms"] = None if i % 10 == 0 else i % 7
+    regs += [{"kind": "event", "type": "avatar_state", "from": "REST",
+              "to": "TRACKING"},
+             {"kind": "event", "type": "avatar_state", "from": "TRACKING",
+              "to": "HOLD"},
+             {"kind": "event", "type": "avatar_state", "from": "HOLD",
+              "to": "TRACKING"}]
+    for p in (r for r in regs if r.get("type") == "perf"):
+        p["safety_adjustments"] = {"angular_velocity_clamped": 2}
+    r = an.resumir(an.leer_registros(regs))
+    assert r["avatar_states"] == {"TRACKING": 2, "HOLD": 1}
+    assert r["skew_ms"]["max"] == 6
+    g = an.gates(an.leer_registros(regs))
+    assert g["contexto"]["tracking_profile"] == "estable"
+    assert g["contexto"]["pose_transitions"] is True
+    n_perf = sum(1 for r in regs if r.get("type") == "perf")
+    assert g["fase_3_rig"]["ajustes_compuerta"] == {
+        "angular_velocity_clamped": 2 * n_perf}
+    assert an.baseline(r)["tracking_profile"] == "estable"
+
+
+def _q_x(grados):
+    a = math.radians(grados) / 2
+    return [math.sin(a), 0.0, 0.0, math.cos(a)]
+
+
+def test_jitter_de_cuaterniones_alinea_signo_y_mide_ruido():
+    fijos = [{"t": i * 66, "avatar": {"q": {"LeftLowerArm":
+              _q_x(30) if i % 2 else [-x for x in _q_x(30)]}}} for i in range(60)]
+    assert an._jitter_unitarios(fijos, an._hueso_avatar("LeftLowerArm"),
+                                cuaternion=True) == 0
+    ruido = [{"t": i * 66, "avatar": {"q": {"LeftLowerArm":
+              _q_x(30 + (2 if i % 2 else -2))}}} for i in range(60)]
+    j = an._jitter_unitarios(ruido, an._hueso_avatar("LeftLowerArm"),
+                             cuaternion=True)
+    assert 1.5 < j < 2.5
+
+
+def _frames_quietos(n, ruido_entrada, ruido_avatar, mover_desde=None):
+    frames = []
+    for i in range(n):
+        signo = 1 if i % 2 else -1
+        ang = math.radians(signo * ruido_entrada)
+        if mover_desde is not None and i >= mover_desde:
+            ang += math.radians(3 * (i - mover_desde))  # movimiento real
+        vec = [0.0] * 152
+        vec[2 * 3:2 * 3 + 3] = [0, -0.5, 0]
+        vec[4 * 3:4 * 3 + 3] = [math.sin(ang) * .7, -0.5 - math.cos(ang) * .7, 0]
+        frames.append({"kind": "frame", "t": i * 66, "vec": vec,
+                       "tracked": {"left": True, "right": False},
+                       "avatar": {"state": "TRACKING", "q": {
+                           "LeftLowerArm": _q_x(30 + signo * ruido_avatar),
+                           "LeftHand": _q_x(10), "LeftUpperArm": _q_x(5)}}})
+    return frames
+
+
+def test_jitter_automatico_compara_entrada_y_avatar_en_bloques_quietos():
+    r = an._jitter_auto(_frames_quietos(150, 2.0, .3))
+    izq = r["left"]
+    assert izq["bloques"] == 10
+    assert 1.5 < izq["entrada"] < 2.5
+    assert izq["avatar"]["LowerArm"] < .5
+    assert izq["avatar"]["Hand"] == 0
+    assert r["right"]["bloques"] == 0 and r["right"]["avatar"] is None
+    # Un tramo con movimiento real no cuenta como quieto.
+    movido = an._jitter_auto(_frames_quietos(150, 2.0, .3, mover_desde=75))
+    assert movido["left"]["bloques"] < 7
+
+
+def test_gates_reporta_recortes_por_articulacion_y_calentamiento():
+    regs = _sesion_gates(pasos=range(1, 10))
+    for p in (r for r in regs if r.get("type") == "perf"):
+        p["safety_clamped_joints"] = {"left:hand": 3, "left:lowerArm": 1}
+    regs.insert(1, {"kind": "event", "type": "capture_warmup",
+                    "discarded": 12, "ms": 1400})
+    g = an.gates(an.leer_registros(regs))
+    n_perf = sum(1 for r in regs if r.get("type") == "perf")
+    assert g["fase_3_rig"]["articulaciones_recortes"] == {
+        "left:hand": 3 * n_perf, "left:lowerArm": n_perf}
+    assert g["contexto"]["calentamiento"] == {"descartados": 12, "ms": 1400}
+    # Sin datos del avatar el jitter del avatar no se inventa.
+    assert g["fase_3_rig"]["jitter_avatar_deg"] is None
+
+
+def test_fluidez_cuenta_renders_que_cambian_en_segundos_con_movimiento():
+    regs = _sesion_gates(pasos=range(1, 10))
+    perfs = [r for r in regs if r.get("type") == "perf"]
+    for i, p in enumerate(perfs):
+        # Pares: avatar a saltos (un cambio por frame de camara). Impares:
+        # quieto (no cuenta como movimiento).
+        p["render_motion"] = ({"renders": 144, "changed": 31, "total_deg": 60,
+                               "max_deg": 4.2} if i % 2 == 0 else
+                              {"renders": 144, "changed": 2, "total_deg": .3,
+                               "max_deg": .2})
+    f = an.gates(an.leer_registros(regs))["fase_3_rig"]["fluidez"]
+    assert f["segundos_con_movimiento"] == (len(perfs) + 1) // 2
+    assert f["renders_con_cambio_pct"] == round(100 * 31 / 144, 1)
+    assert f["cambios_por_frame_camara"] == 1.0
+    assert f["paso_max_deg_p95"] == 4.2
+
+
+def test_gates_sesion_android_con_perf_y_nivel():
+    regs = _sesion_gates(pasos=range(1, 10))
+    regs[0]["meta"]["platform"] = "android"
+    for r in regs:
+        if r.get("type") == "perf":
+            r["tier"] = "medio"
+            r["thermal"] = 0
+            r["infer_ms_p95"] = 28.0
+    g = an.gates(an.leer_registros(regs))
+    f1 = g["fase_1_rendimiento"]
+    assert f1["veredicto"] != "SIN_DATOS"
+    assert f1["tiers"] == ["medio"]
+    assert g["contexto"]["platform"] == "android"
+
+
+def test_gates_sin_nivel_reporta_lista_vacia():
+    g = an.gates(an.leer_registros(_sesion_gates(pasos=range(1, 10))))
+    assert g["fase_1_rendimiento"]["tiers"] == []
+
+
+def test_sin_pose_cuenta_igual_en_web_y_android():
+    # La web registra el modo crudo de la captura (fallback); las sesiones
+    # Android viejas traian pose_pending dentro de association.
+    web = dict(_frame(1), hands={"assignment": {"mode": "fallback"}})
+    android_viejo = dict(_frame(2), hands={
+        "association": {"hand_assignment_mode": "pose_pending"}})
+    android = dict(_frame(3), hands={"assignment": {"mode": "fallback"},
+                                     "association": {"hand_assignment_mode": "pose_pending"}})
+    r = an.resumir([{"kind": "session_start", "session_id": "m"},
+                    web, android_viejo, android])
+    assert r["assignment_modes"] == {"fallback": 3}
+
+
+def test_resumen_de_reconocimientos():
+    regs = [{"kind": "session_start", "session_id": "r"}, _frame(1),
+            {"kind": "event", "type": "reconocimiento", "modo": "auto",
+             "gloss": "HOLA", "aceptada": True, "distancia": 0.3, "frames": 20},
+            {"kind": "event", "type": "reconocimiento", "modo": "manual",
+             "motivo": "muy_corta", "aceptada": False, "frames": 4}]
+    r = an.resumir(regs)
+    assert r["reconocimiento"] == {
+        "total": 2, "aceptadas": 1, "por_modo": {"auto": 1, "manual": 1},
+        "motivos": {"muy_corta": 1}, "glosas": {"HOLA": 1},
+        "distancia_p50": 0.3, "frames_p50": 20}

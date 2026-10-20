@@ -128,6 +128,14 @@ Campos nuevos, opcionales:
 8. Físico (usuario): teléfono gama baja y media, protocolo `docs/09`,
    `analizar_sesion.py --gates`.
 
+## Ajuste tras la primera prueba física (2026-10-19)
+
+Galaxy S22+: Holistic con GPU tarda ~80 ms. Presupuestos p95 pasan a
+`bajo` 125 ms / `medio` 110 / `alto` 100 (antes 60/40/33); los 30 primeros
+resultados tras crear o cambiar el motor no cuentan; el nivel ya no se
+guarda entre sesiones (regla 5 retirada: un calentamiento dejaba el teléfono
+en bajo para siempre). Ver docs/14, H16.
+
 ## Fuera de alcance
 
 - Render nativo (Filament/SceneView).

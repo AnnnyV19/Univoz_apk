@@ -6,7 +6,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
+import 'avatar_bridge.dart';
+import 'avatar_vivo.dart';
 import 'backend_api.dart';
 import 'camera_bridge.dart';
 import 'controlador_captura.dart';
@@ -254,7 +257,19 @@ class SkeletonPainter extends CustomPainter {
       old.frame?.timestampMs != frame?.timestampMs;
 }
 
-/// Camara en vivo + reconocimiento contra el diccionario local.
+/// Camara en vivo + reconocimiento contra el diccionario local. El avatar
+/// muestra el movimiento con el mismo sistema del laboratorio web (visor en
+/// WebView) y su quieto/movimiento adaptativo corta las senas en modo
+/// automatico. El reconocimiento sigue sobre el vector crudo: las plantillas
+/// se grabaron crudas.
+/// Pre-roll de la grabacion automatica: el detector avisa el inicio cuando
+/// la sena ya arranco (primer frame con movimiento).
+const int kPreRollMs = 200;
+
+/// Cola que se conserva despues del ultimo movimiento: el detector necesita
+/// ~0.33 s quieto para declarar el fin y esa quietud no es parte de la sena.
+const int kColaMs = 100;
+
 class PantallaDeTranslacion extends StatefulWidget {
   const PantallaDeTranslacion({Key? key}) : super(key: key);
 
@@ -268,6 +283,13 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   final _almacen = AlmacenMuestras.instancia;
   final _voz = LectorVoz.instancia;
   final _backend = BackendApi();
+  final _bridge = AvatarBridge();
+  late final _alimentador = AlimentadorAvatar(
+    enviar: _bridge.mostrarFrame,
+    perfilMedidas: () => _almacen.ajustes.perfilCorporal?.measures,
+  );
+  StreamSubscription<LandmarkFrame>? _subAvatar;
+  StreamSubscription<LandmarkFrame>? _subSinMano;
   final _detector = DetectorAutomatico(
     // Menos frames quietos para cortar = reconoce mas rapido despues de
     // terminar la sena, a costa de ser un poco mas sensible a una micro
@@ -300,6 +322,13 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     };
     _detector.onInicioDetectado = _autoIniciar;
     _detector.onFinDetectado = _autoFinalizar;
+    _bridge.onPerf = (perf) => _ctrl.sesion?.evento('perf', perf);
+    _bridge.onMovimiento = (m) {
+      if (_modoAuto) {
+        _detector.alimentarMovimiento(
+            hayMovimiento: m.hayMovimiento, timestampMs: m.timestampMs);
+      }
+    };
     _arrancar();
   }
 
@@ -312,13 +341,16 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     );
     if (!mounted) return;
     if (_ctrl.lista) {
-      await activarSesionConConsentimiento(context, _ctrl, _almacen,
+      final sesionActiva = await activarSesionConConsentimiento(
+          context, _ctrl, _almacen,
           pantalla: 'traduccion');
+      if (!mounted) return;
+      await _iniciarAvatar(sesionActiva);
       if (!mounted) return;
     }
     // Si ya estábamos en modo auto antes de que la cámara terminara de iniciar,
     // arrancamos el detector ahora que el stream está disponible.
-    if (_modoAuto) _detector.iniciar(_ctrl.camara.framesPreview);
+    if (_modoAuto) _iniciarDetector();
     try {
       final d = await cargarDiccionario();
       if (!mounted) return;
@@ -379,14 +411,51 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
         _aviso = null;
       });
       // Solo arrancamos el detector si la cámara ya está lista.
-      if (_ctrl.lista) _detector.iniciar(_ctrl.camara.framesPreview);
+      if (_ctrl.lista) _iniciarDetector();
     }
+  }
+
+  /// Avatar en vista espejo (eres tú), con los frames fusionados como en
+  /// Espejo, sin modo diagnóstico.
+  Future<void> _iniciarAvatar(bool sesionActiva) async {
+    if (!_bridge.disponible) return;
+    try {
+      await _bridge.configurarSesion(sesionActiva);
+      await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
+      await _bridge.configurarVista(espejo: true);
+      await _bridge.configurarDiagnostico(false);
+      await _bridge.configurarMovimiento(true);
+    } catch (_) {
+      // El avatar es ayuda visual: si el visor no responde, reconocer sigue.
+    }
+    await _subAvatar?.cancel();
+    _subAvatar = _ctrl.camara.frames.listen(_alimentador.alFrame);
+    _alimentador.iniciar();
+    // Sin pose usable el visor no recibe frames y no manda motion: si la
+    // persona sale de cuadro grabando, el preview sin mano o sin pose cuenta
+    // como quieto para que la seña se corte como antes.
+    await _subSinMano?.cancel();
+    _subSinMano = _ctrl.camara.framesPreview.listen((f) {
+      if (!_modoAuto) return;
+      if (!f.tieneAlgunaMano || f.normalize() == null) {
+        _detector.alimentarMovimiento(
+            hayMovimiento: false, timestampMs: f.timestampMs);
+      }
+    });
+  }
+
+  /// Con el visor, el inicio y fin de la seña salen de su quieto/movimiento
+  /// adaptativo (llega por onMovimiento); sin visor, del detector propio
+  /// sobre el preview.
+  Future<void> _iniciarDetector() async {
+    await _detector.detener();
+    if (!_bridge.disponible) _detector.iniciar(_ctrl.camara.framesPreview);
   }
 
   /// Callback: el detector detectó inicio de movimiento.
   void _autoIniciar() {
     if (!mounted || !_ctrl.lista || _ctrl.grabando) return;
-    _ctrl.empezar();
+    _ctrl.empezar(preRollMs: kPreRollMs);
   }
 
   /// Callback: el detector detectó fin de movimiento → reconocer.
@@ -396,28 +465,45 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   }
 
   Future<void> _procesarFinAuto() async {
-    final nFrames = _ctrl.framesGrabados;
-    final seq = await _ctrl.terminar();
+    final ultimoMovimiento = _detector.ultimoMovimientoMs;
+    final seq = await _ctrl.terminar(
+        hastaMs: ultimoMovimiento == null ? null : ultimoMovimiento + kColaMs);
     if (!mounted) return;
+    final nFrames = _ctrl.framesGrabados;
 
-    // Secuencia demasiado corta o vacía: ignorar silenciosamente.
-    if (seq == null || nFrames < _detector.minFramesParaReconocer) {
+    // Secuencia demasiado corta, vacía o sin diccionario: ignorar en
+    // silencio (queda en la sesion).
+    final motivo = seq == null
+        ? 'vacia'
+        : nFrames < _detector.minFramesParaReconocer
+            ? 'muy_corta'
+            : _dicc == null
+                ? 'sin_diccionario'
+                : null;
+    if (motivo != null) {
+      _registrarReconocimiento('auto', nFrames, motivo: motivo);
       _detector.entrarPausa(const Duration(milliseconds: 300), () {
         if (mounted) setState(() {});
       });
       return;
     }
 
-    final dicc = _dicc;
-    if (dicc == null) {
-      _detector.entrarPausa(const Duration(milliseconds: 300), () {
-        if (mounted) setState(() {});
-      });
-      return;
-    }
+    _reconocer(seq!, modo: 'auto', frames: nFrames);
 
-    final ranking = dicc.clasificador.rank(seq);
-    final pred = dicc.clasificador.classify(seq);
+    // Pausa corta para encadenar senas seguidas en una conversacion, sin
+    // dejar de darle un instante al usuario para ver/escuchar el resultado.
+    _detector.entrarPausa(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// Un solo DTW por intento: el ranking da la decision y las candidatas
+  /// que se muestran.
+  void _reconocer(List<List<double>> seq,
+      {required String modo, required int frames}) {
+    final clasificador = _dicc!.clasificador;
+    final ranking = clasificador.rank(seq);
+    final pred = clasificador.classifyRanking(ranking);
 
     final vistas = <String>{};
     final unicas = <MapEntry<double, Template>>[];
@@ -432,16 +518,34 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       _candidatas = unicas;
       _aviso = null;
     });
+    _registrarReconocimiento(modo, frames, pred: pred, candidatas: unicas);
     _consultarBackend(seq);
 
     if (pred.aceptada && _almacen.ajustes.hablarResultado) {
       _hablar(pred.textoHablado);
     }
+  }
 
-    // Pausa corta para encadenar senas seguidas en una conversacion, sin
-    // dejar de darle un instante al usuario para ver/escuchar el resultado.
-    _detector.entrarPausa(const Duration(milliseconds: 900), () {
-      if (mounted) setState(() {});
+  /// Evento de sesion por intento (tools/analizar_sesion.py lo resume).
+  void _registrarReconocimiento(String modo, int frames,
+      {Prediction? pred,
+      List<MapEntry<double, Template>> candidatas = const [],
+      String? motivo}) {
+    double? finito(double v) => v.isFinite ? v : null;
+    _ctrl.sesion?.evento('reconocimiento', {
+      'modo': modo,
+      'frames': frames,
+      if (motivo != null) 'motivo': motivo,
+      'aceptada': pred?.aceptada ?? false,
+      if (pred != null) ...{
+        'gloss': pred.gloss,
+        'distancia': finito(pred.distance),
+        'margen': finito(pred.margin),
+      },
+      if (candidatas.isNotEmpty)
+        'top': [
+          for (final e in candidatas) {'gloss': e.value.gloss, 'd': finito(e.key)},
+        ],
     });
   }
 
@@ -449,6 +553,10 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ctrl.removeListener(_alCambiar);
+    _subAvatar?.cancel();
+    _subSinMano?.cancel();
+    _alimentador.detener();
+    _bridge.dispose();
     _detector.detener();
     _ctrl.dispose();
     _backend.cerrar();
@@ -479,39 +587,29 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
 
     final seq = await _ctrl.terminar();
     if (!mounted) return;
+    final nFrames = _ctrl.framesGrabados;
 
-    final dicc = _dicc;
-    if (dicc == null) {
+    if (_dicc == null) {
       setState(() => _aviso = 'El diccionario todavía no cargó.');
+      _registrarReconocimiento('manual', nFrames, motivo: 'sin_diccionario');
       return;
     }
     if (seq == null) {
       setState(() => _aviso =
           'No se capturó nada. Revisá que se vean los hombros y las manos en cámara.');
+      _registrarReconocimiento('manual', nFrames, motivo: 'vacia');
+      return;
+    }
+    // Mismo minimo que el modo automatico: con menos frames validos el DTW
+    // compara casi un solo instante y responde cualquier cosa.
+    if (nFrames < _detector.minFramesParaReconocer) {
+      setState(() => _aviso = 'Seña muy corta: mantené la seña un poco más '
+          'antes de soltar el botón.');
+      _registrarReconocimiento('manual', nFrames, motivo: 'muy_corta');
       return;
     }
 
-    final ranking = dicc.clasificador.rank(seq);
-    final pred = dicc.clasificador.classify(seq);
-
-    final vistas = <String>{};
-    final unicas = <MapEntry<double, Template>>[];
-    for (final e in ranking) {
-      if (vistas.add(e.value.gloss)) unicas.add(e);
-      if (unicas.length >= 4) break;
-    }
-
-    setState(() {
-      _prediccion = pred;
-      _prediccionBackend = null;
-      _candidatas = unicas;
-      _aviso = null;
-    });
-    _consultarBackend(seq);
-
-    if (pred.aceptada && _almacen.ajustes.hablarResultado) {
-      _hablar(pred.textoHablado);
-    }
+    _reconocer(seq, modo: 'manual', frames: nFrames);
   }
 
   void _hablar(String texto) {
@@ -632,7 +730,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       return const Center(child: CircularProgressIndicator());
     }
 
-    return Stack(
+    final camaraConEsqueleto = Stack(
       children: [
         Center(
           child: AspectRatio(
@@ -674,6 +772,16 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
             left: 8,
             child: _chipEstadoAuto(),
           ),
+      ],
+    );
+    if (!_bridge.disponible) return camaraConEsqueleto;
+    // El avatar y la camara van LADO A LADO, no superpuestos: en Android el
+    // WebView es una platform view y tapa un Texture que quede encima.
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(flex: 3, child: WebViewWidget(controller: _bridge.controller!)),
+        Expanded(flex: 2, child: camaraConEsqueleto),
       ],
     );
   }

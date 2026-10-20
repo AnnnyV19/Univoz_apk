@@ -9,8 +9,13 @@ Contrato crudo compartido por captura, preview y normalización:
 | `t` | entero ms | creciente por stream |
 | `pose` | 33 × `[x,y,z,visibility]` | imagen; preview |
 | `poseMundo` | 33 × `[x,y,z]` | metros aproximados; normalización |
-| `left` | 21 × `[x,y,z]` o `null` | mano anatómica izquierda |
-| `right` | 21 × `[x,y,z]` o `null` | mano anatómica derecha |
+| `left` | 21 × `[x,y,z]` o `null` | mano anatómica izquierda: evidencia cruda del detector aunque el seguimiento la retenga (reconocimiento) |
+| `right` | 21 × `[x,y,z]` o `null` | mano anatómica derecha (ídem) |
+| `renderLeft`/`renderRight` | 21 × `[x,y,z]` o `null` | mano estabilizada del seguimiento (avatar) |
+| `hands_in` | mapa, Android | entrada de la captura con el esquema web: `candidates` (`lm`, `label`, `conf`), `accepted`, `unanchored`, `rejected` (`[índice, código]`), `passed`, `assignment` (`mode`: `fallback`/`pose_arm_chain`/`ambiguous`, `sides`), `usable` |
+| `track` | mapa, Android | por lado: `state`, `surface` (`palm`/`dorsum`), `surface_changes`, `recovery_frames`, `rest_blend` |
+| `pose_ran` | bool, Android | la pose es del mismo instante (no del caché de 120 ms) |
+| `quality` | 0–1, en `toJson` | calidad web: 0.75 × visibilidad media de los 8 puntos del cuerpo + 0.25 × manos (2: 1, 1: .82, 0: .65); 0 si no hay vector |
 
 La Z de pose de imagen es profundidad relativa monocular y no debe gobernar
 reconstrucción corporal. `poseMundo` se usa cuando está disponible y supera
@@ -50,6 +55,23 @@ aproximadamente 9.5 KB.
 5. Ubicación de muñeca conservada porque es información fonológica.
 6. Orientación de palma no se elimina: distingue señas.
 7. Z de pose no se usa como profundidad confiable.
+
+8. Validaciones antes de entrar al vector, iguales en web
+   (`rig_motion_frame.mjs`), Dart, Python y Kotlin:
+   - Una mano se descarta si no tiene 21 puntos, si alguno no es finito, si
+     la muñeca está fuera de cuadro, si menos de 15 puntos caen dentro del
+     margen de .15, si la escala está fuera de .015–.65 o si un hueso mide
+     menos de .018 o más de 2.2 escalas.
+   - El frame se anula si un hombro está fuera de cuadro o con visibilidad
+     menor a .2, si un segmento del brazo o la cadera mide menos de .08 o más
+     de 2.5 anchos de hombro, o si el tronco no está entre .25 y 4.
+
+   Los motivos usan los mismos códigos en todas las plataformas
+   (`hand_segment_invalid`, `pose_segment_invalid`, …). Solo descartan:
+   los valores que se aceptan no cambian, así que no se sube `norm_version`.
+9. El vector de render (avatar) mueve la ubicación de cada mano hacia la
+   muñeca estabilizada del seguimiento, con un tope de ±0.75 anchos de
+   hombro. El de reconocimiento no lo hace.
 
 Cambiar esta fórmula exige subir versión, regenerar golden, recalcular datos y
 revisar modelos. No editar índices para “agregar” cabeza, confianza o
@@ -119,6 +141,16 @@ explícito; se guarda local (`univoz.bodyProfile.v1` en web), versionado y
 borrable. Nunca guarda video ni landmarks: los frames se descartan al
 terminar la estimación.
 
+## Nivel por dispositivo (`sourceMeta`, Android)
+
+- `tier` (opcional, Android): nivel por dispositivo, `"bajo" | "medio" | "alto"`
+  (`DeviceTier.kt`). El visor ajusta FPS de render y `pixelRatio`
+  (`rig_device_tier.mjs`); desconocido = `alto`.
+- `infer_ms` (opcional, Android): inferencia MediaPipe del último resultado, ms.
+- `thermal` (opcional, Android): `PowerManager.THERMAL_STATUS_*` (0–6) o
+  `null` en Android < 10.
+- `has_hand` (opcional, Android): el frame trae al menos una mano.
+
 ## Cara (`face_pts`)
 
 La captura Holistic de Android manda 17 puntos clave de la malla facial,
@@ -147,6 +179,38 @@ teleports, más `safety_codes`/`safety_joints` del segundo) y `session_end`. Sol
 nunca video ni imágenes. Web: `senas_core/sesiones/` vía
 `tools/servidor_visor.py`; Android: `<documentos>/sesiones/`. Se analiza con
 `tools/analizar_sesion.py`.
+
+- Desde 2026-10-20 el `frame` de Android usa el esquema web:
+  - `hands`: `candidates` (`lm` a 4 cifras, `conf` a 3), `accepted`,
+    `unanchored`, `rejected` (`{index, code}`), `passed`, `assignment` y
+    `usable`. Conserva `left`/`right`/`association`.
+  - `tracked`: `left`/`right` y, por lado, `_surface` y `_state`.
+  - `quality` web, `pose_ran`, `ms.infer`, `tier` y `thermal`.
+
+  `paridad/replay_sesion.mjs` reproduce la captura web sobre esas entradas
+  y compara campo por campo con lo que decidió Kotlin.
+- Evento `reconocimiento` (Traducir), uno por intento: `modo`
+  (`auto`/`manual`), `frames` válidos, `motivo` (`vacia`, `muy_corta`,
+  `sin_diccionario`), `aceptada`, `gloss`, `distancia`, `margen` y `top` (4
+  glosas con su distancia). `analizar_sesion.py` lo resume en
+  `reconocimiento`.
+- En Android el evento lo arma el visor embebido (`rig_embedded_perf.mjs`) y
+  Dart lo escribe en la sesión. Desde 2026-10-20 sus `counters` (swaps,
+  volteos, retenciones y recuperaciones) salen del seguimiento nativo:
+  `sourceMeta.hand_track` y `errors` pasan por `nativeTracking` y luego por
+  `countHandEvents`. Agrega `tier`, `thermal` e `infer_ms_p95`.
+  Su `latency_ms` = inferencia nativa + espera hasta el render (sin el cruce
+  Kotlin → Dart → WebView). `--gates` lista los niveles en
+  `fase_1_rendimiento.tiers`.
+- Desde 2026-10-19 el `perf` (web y Android) agrega `safety_adjustments`
+  (ajustes aceptados: `angular_velocity_clamped`, `palm_flip_confirmed`,
+  `bone_length_drift`), `safety_clamped_joints`, `render_motion`
+  (`renders`, `changed`, `total_deg`, `max_deg`, `max_bone` del segundo) y,
+  en Android, `avatar_state`. En web: evento `avatar_state` (`from`, `to`) al
+  cambiar, `capture_warmup` (`discarded`, `ms`), `meta.camera`,
+  `meta.tracking_profile`, `meta.pose_transitions`, `meta.output_smoothing`, y
+  por frame `skew_ms` y `avatar` (cuaterniones aplicados, ver
+  [04](04-rig-ik-y-avatar.md#pose-medida-del-avatar)).
 
 ## Backend y almacenamiento
 

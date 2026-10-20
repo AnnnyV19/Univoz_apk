@@ -1,0 +1,208 @@
+{
+ "schema": "GatesV1",
+ "session_id": "20261020T040119Z-dnrzh8",
+ "umbrales": {
+  "frames_min": 300,
+  "tracking_fps_min": 30,
+  "render_fps_min": 60,
+  "latency_p95_ms": 50,
+  "latency_p95_provisional_ms": 120,
+  "inversion_pct_max": 1.0,
+  "jitter_deg_max": 2.0
+ },
+ "contexto": {
+  "platform": "web",
+  "device": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "video": {
+   "width": 360,
+   "height": 270,
+   "fps": 30
+  },
+  "capture_worker": true,
+  "capture_worker_mode": "holistic",
+  "capture_mode": "holistic",
+  "tracking_profile": "sensible",
+  "pose_transitions": true,
+  "camera": {
+   "label": "ACER HD User Facing",
+   "frame_rate": {
+    "max": 30,
+    "min": 0
+   },
+   "exposure_mode": [
+    "manual",
+    "continuous"
+   ],
+   "exposure_time": {
+    "max": 10000,
+    "min": 39,
+    "step": 1
+   },
+   "exposure_mode_now": "continuous"
+  },
+  "calentamiento": {
+   "descartados": 3,
+   "ms": 190
+  },
+  "protocol": "manos",
+  "frames": 1816,
+  "maniobras": {
+   "cruce": 255,
+   "estatica": 198,
+   "giro": 261,
+   "pronacion": 180,
+   "pulgar": 245,
+   "puno": 152,
+   "salir": 31,
+   "tapar_200": 262,
+   "tapar_500": 21
+  }
+ },
+ "fase_0_baseline": {
+  "frames": 1816,
+  "vector_152": true,
+  "veredicto": "PASS"
+ },
+ "fase_1_rendimiento": {
+  "perf_events": 120,
+  "latency_ms": {
+   "n": 1801,
+   "p50": 36.2,
+   "p95": 43.3,
+   "p99": 58.8
+  },
+  "tracking_fps_p50": 16,
+  "segundos_con_manos": 97,
+  "pose_fps_p50": 16,
+  "render_fps_p50": 144,
+  "inference_fps_p50": 16,
+  "camara_fps_p50": 15,
+  "limitado_por_camara": true,
+  "veredicto": "FAIL"
+ },
+ "fase_2_orientacion": {
+  "pasos": [
+   "estatica",
+   "pulgar",
+   "puno"
+  ],
+  "cambios_en_giro": 13,
+  "inversion_pct": 0.59,
+  "veredicto": "PASS"
+ },
+ "fase_3_rig": {
+  "rechazos_compuerta": 18,
+  "rechazos_por_frame": 0.01,
+  "codigos_compuerta": {
+   "palm_flip": 18
+  },
+  "articulaciones_compuerta": {
+   "right:hand": 11,
+   "left:hand": 7
+  },
+  "ajustes_compuerta": {
+   "bone_length_drift": 589,
+   "angular_velocity_clamped": 157,
+   "palm_flip_confirmed": 12
+  },
+  "articulaciones_recortes": {
+   "right:Middle:Intermediate": 19,
+   "right:Index:Intermediate": 18,
+   "right:Little:Intermediate": 17,
+   "right:Ring:Intermediate": 15,
+   "left:Middle:Intermediate": 12,
+   "left:Index:Intermediate": 9,
+   "left:Ring:Intermediate": 9,
+   "right:hand": 8
+  },
+  "teleports": 0,
+  "jitter_deg": {
+   "left": 1.457,
+   "right": 1.503
+  },
+  "jitter_avatar_deg": {
+   "left": {
+    "UpperArm": 1.543,
+    "LowerArm": 2.588,
+    "Hand": 2.897
+   },
+   "right": {
+    "UpperArm": 1.232,
+    "LowerArm": 1.76,
+    "Hand": 2.084
+   }
+  },
+  "jitter_auto": {
+   "left": {
+    "bloques": 31,
+    "entrada": 1.404,
+    "avatar": {
+     "UpperArm": 1.425,
+     "LowerArm": 2.006,
+     "Hand": 3.14
+    }
+   },
+   "right": {
+    "bloques": 14,
+    "entrada": 1.476,
+    "avatar": {
+     "UpperArm": 1.179,
+     "LowerArm": 1.874,
+     "Hand": 2.39
+    }
+   }
+  },
+  "fluidez": {
+   "segundos_con_movimiento": 106,
+   "renders_con_cambio_pct": 10.5,
+   "cambios_por_segundo": 15,
+   "renders_por_segundo": 144,
+   "cambios_por_frame_camara": 0.94,
+   "paso_max_deg_p95": 106.1
+  },
+  "veredicto": "PASS"
+ },
+ "fase_4_identidad": {
+  "pasos": [
+   "cruce",
+   "salir",
+   "tapar_200",
+   "tapar_500"
+  ],
+  "swaps": 0,
+  "saltos_retenidos": 2,
+  "saltos_aplicados": 0,
+  "recuperaciones": 24,
+  "perdida": {
+   "cruce": {
+    "loss_pct": 30.6,
+    "causas": {
+     "modelo": 71,
+     "oclusion": 7
+    }
+   },
+   "tapar_200": {
+    "loss_pct": 41.2,
+    "causas": {
+     "modelo": 79,
+     "fuera_de_cuadro": 27,
+     "oclusion": 21,
+     "compuerta": 24
+    }
+   },
+   "tapar_500": {
+    "loss_pct": 100.0,
+    "causas": {
+     "modelo": 21
+    }
+   },
+   "salir": {
+    "loss_pct": 100.0,
+    "causas": {
+     "modelo": 31
+    }
+   }
+  },
+  "veredicto": "PASS"
+ }
+}

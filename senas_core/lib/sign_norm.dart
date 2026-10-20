@@ -56,6 +56,23 @@ const int kNHandPts = 20;
 const double kMinVisibility = 0.5;
 const double kEps = 1e-6;
 
+/// Validaciones de rig_motion_frame.mjs (handUsable / poseGeometry): una
+/// mano o un cuerpo geometricamente imposibles no entran al vector.
+const double kMargenMano = 0.15;
+const double kMargenCuerpo = 0.15;
+const List<List<int>> kConexionesMano = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17],
+];
+
+/// Las munecas estabilizadas del render mueven la ubicacion a lo sumo esto
+/// (en anchos de hombro).
+const double kTopeMunecaRender = 0.75;
+
 const int kOffBody = 0; // 24 = 8 puntos x (x, y, z)
 const int kOffLocL = 24; // 3
 const int kOffLocR = 27; // 3
@@ -158,31 +175,191 @@ _BaseCuerpo? _baseDe(List<Landmark> w) {
 /// Un landmark: [x, y, z] y opcionalmente visibility en la posicion 3.
 typedef Landmark = List<double>;
 
-/// Normaliza un frame. Devuelve null si el frame no sirve.
+/// Motivo de rechazo de una mano o de un frame, con los codigos de la web.
+class MotivoNorm {
+  final String stage;
+  final String code;
+  final String? side;
+  final int? landmark;
+  const MotivoNorm(this.code, {this.stage = 'capture', this.side, this.landmark});
+
+  Map<String, Object?> toMap() =>
+      {'stage': stage, 'code': code, 'side': side, 'landmark': landmark};
+
+  @override
+  String toString() => '$code${side == null ? '' : ' ($side)'}';
+}
+
+/// Resultado de una validacion: [code] y [landmark] dicen por que no.
+class ValidacionNorm {
+  final bool ok;
+  final String? code;
+  final int? landmark;
+  const ValidacionNorm.ok()
+      : ok = true,
+        code = null,
+        landmark = null;
+  const ValidacionNorm.falla(this.code, [this.landmark]) : ok = false;
+}
+
+/// Punto como coord() de la web: lo que falta es NaN y la visibility, 0.
+class _P {
+  final double x, y, z, vis;
+  _P(Landmark? p)
+      : x = _en(p, 0, double.nan),
+        y = _en(p, 1, double.nan),
+        z = _en(p, 2, double.nan),
+        vis = _en(p, 3, 0.0);
+  _P.de(this.x, this.y, this.z) : vis = 0.0;
+  bool get finito => x.isFinite && y.isFinite && z.isFinite;
+  static double _en(Landmark? p, int i, double defecto) =>
+      p != null && p.length > i ? p[i] : defecto;
+}
+
+double _dist(_P a, _P b) {
+  final dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/// No alimentar el normalizador con manos parcialmente corruptas: en una
+/// oclusion MediaPipe puede devolver un punto aislado fuera de cuadro que
+/// deforma angulo y orientacion de toda la mano. Espejo de handUsable.
+ValidacionNorm manoUtilizable(List<Landmark>? mano) {
+  if (mano == null || mano.length != 21) {
+    return const ValidacionNorm.falla('hand_landmarks_incomplete');
+  }
+  final pts = mano.map(_P.new).toList();
+  for (var i = 0; i < pts.length; i++) {
+    if (!pts[i].finito) return ValidacionNorm.falla('point_non_finite', i);
+  }
+  final w = pts[0];
+  // La muneca debe verse; las puntas pueden salirse un margen chico.
+  if (!(w.x >= 0 && w.x <= 1 && w.y >= 0 && w.y <= 1)) {
+    return const ValidacionNorm.falla('wrist_out_of_frame', 0);
+  }
+  bool dentro(_P p) =>
+      p.x >= -kMargenMano &&
+      p.x <= 1 + kMargenMano &&
+      p.y >= -kMargenMano &&
+      p.y <= 1 + kMargenMano;
+  if (pts.where(dentro).length < 15) {
+    final fuera = pts.indexWhere((p) => !dentro(p));
+    return ValidacionNorm.falla('hand_out_of_frame', fuera >= 0 ? fuera : null);
+  }
+  final ex = pts[9].x - w.x, ey = pts[9].y - w.y;
+  final escala = math.sqrt(ex * ex + ey * ey);
+  if (!escala.isFinite || escala < 0.015 || escala > 0.65) {
+    return const ValidacionNorm.falla('hand_scale_invalid', 9);
+  }
+  // Cada conexion plausible respecto de la escala del MCP medio: atrapa
+  // puntos intercambiados o picos sin rechazar manos abiertas o cerradas.
+  for (final c in kConexionesMano) {
+    final d = _dist(pts[c[0]], pts[c[1]]);
+    if (!d.isFinite || d < escala * 0.018 || d > escala * 2.2) {
+      return ValidacionNorm.falla('hand_segment_invalid', c[1]);
+    }
+  }
+  return const ValidacionNorm.ok();
+}
+
+/// Cuerpo con anclas visibles y segmentos del esqueleto metrico plausibles
+/// respecto del ancho de hombros. Espejo de poseGeometry.
+ValidacionNorm poseGeometriaValida(
+    List<Landmark>? pose, List<Landmark>? poseMundo) {
+  if (pose == null || pose.length < 33 || poseMundo == null ||
+      poseMundo.length < 33) {
+    return const ValidacionNorm.falla('pose-formato');
+  }
+  for (final i in [kLShoulder, kRShoulder, kLHip, kRHip]) {
+    final p = _P(pose[i]);
+    final hombro = i == kLShoulder || i == kRShoulder;
+    // Los hombros deben verse en la imagen; las caderas pueden quedar fuera
+    // del recorte: sus worldLandmarks siguen dando el eje del torso.
+    final enMargen = p.x >= -kMargenCuerpo &&
+        p.x <= 1 + kMargenCuerpo &&
+        p.y >= -kMargenCuerpo &&
+        p.y <= 1 + kMargenCuerpo;
+    if (hombro && (!p.finito || !enMargen)) {
+      return ValidacionNorm.falla('shoulder_out_of_frame', i);
+    }
+    if (!p.finito ||
+        (hombro && (!p.vis.isFinite || p.vis < 0.2)) ||
+        !_P(poseMundo[i]).finito) {
+      return ValidacionNorm.falla('pose_anchor_unsafe', i);
+    }
+  }
+  final w = poseMundo.map(_P.new).toList();
+  final hombros = _dist(w[kLShoulder], w[kRShoulder]);
+  if (!hombros.isFinite || hombros < 1e-3) {
+    return const ValidacionNorm.falla('hombros-degenerados');
+  }
+  for (final s in const [
+    [11, 13], [13, 15], [12, 14], [14, 16], [23, 24]
+  ]) {
+    final d = _dist(w[s[0]], w[s[1]]);
+    if (!d.isFinite || d < hombros * 0.08 || d > hombros * 2.5) {
+      return ValidacionNorm.falla('pose_segment_invalid', s[1]);
+    }
+  }
+  _P medio(_P a, _P b) =>
+      _P.de((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5);
+  final tronco = _dist(
+      medio(w[kLShoulder], w[kRShoulder]), medio(w[kLHip], w[kRHip]));
+  if (!tronco.isFinite || tronco <= hombros * 0.25 || tronco >= hombros * 4.0) {
+    return const ValidacionNorm.falla('tronco-invalido');
+  }
+  return const ValidacionNorm.ok();
+}
+
+/// Normaliza un frame. Devuelve null si el frame no sirve (hombros no
+/// visibles, cuerpo imposible o sin esqueleto metrico). Espejo de
+/// normalizeMotionFrame (rig_motion_frame.mjs) y de sign_norm.py.
 ///
 /// [pose] son las coordenadas de imagen (para el filtro de visibilidad y la
 /// rotacion de las manos) y [poseMundo] el esqueleto metrico (para todo el
 /// bloque de cuerpo).
+///
+/// [munecasRender] (`left`/`right` en imagen) desplaza solo la UBICACION de
+/// la mano hacia la muneca estabilizada del render (la de la pose puede ir
+/// uno o dos frames atrasada), acotado a +-0.75 anchos de hombro: solo para
+/// el vector del avatar. [motivos], si se pasa, recibe cada rechazo (de mano
+/// o de frame) con los codigos de la web.
 List<double>? normalizeFrame(
   List<Landmark>? pose,
   List<Landmark>? poseMundo, {
   List<Landmark>? left,
   List<Landmark>? right,
   double minVisibility = kMinVisibility,
+  Map<String, Landmark>? munecasRender,
+  List<MotivoNorm>? motivos,
 }) {
-  if (pose == null || pose.length < 33) return null;
-  if (poseMundo == null || poseMundo.length < 33) return null;
+  if (pose == null || pose.length < 33 || poseMundo == null ||
+      poseMundo.length < 33) {
+    motivos?.add(const MotivoNorm('pose_format'));
+    return null;
+  }
 
-  final ls = pose[kLShoulder];
-  final rs = pose[kRShoulder];
-  if (ls.length < 4 || rs.length < 4) return null;
-  if (ls[3] < minVisibility || rs[3] < minVisibility) {
+  final ls = _P(pose[kLShoulder]);
+  final rs = _P(pose[kRShoulder]);
+  if (!ls.finito ||
+      !rs.finito ||
+      !(ls.vis >= minVisibility) ||
+      !(rs.vis >= minVisibility)) {
+    motivos?.add(const MotivoNorm('shoulder_confidence_low'));
     return null;
   }
 
   for (final index in kPoseBodyIdx) {
-    if (poseMundo[index].length < 3 ||
-        poseMundo[index].any((value) => !value.isFinite)) return null;
+    if (!_P(poseMundo[index]).finito) {
+      motivos?.add(const MotivoNorm('pose_world_non_finite'));
+      return null;
+    }
+  }
+
+  final geometria = poseGeometriaValida(pose, poseMundo);
+  if (!geometria.ok) {
+    motivos?.add(MotivoNorm(geometria.code!, landmark: geometria.landmark));
+    return null;
   }
 
   final base = _baseDe(poseMundo);
@@ -191,8 +368,8 @@ List<double>? normalizeFrame(
   // Marco 2D de imagen: se sigue usando para la FORMA de las manos, que solo
   // existe en coordenadas de imagen. Alinea la linea de hombros con la
   // horizontal para que inclinar la cabeza no cambie la forma detectada.
-  final dx = rs[0] - ls[0];
-  final dy = rs[1] - ls[1];
+  final dx = rs.x - ls.x;
+  final dy = rs.y - ls.y;
   final escalaImg = math.sqrt(dx * dx + dy * dy);
   if (escalaImg < kEps) return null;
   final cosT = dx / escalaImg;
@@ -208,22 +385,41 @@ List<double>? normalizeFrame(
   }
 
   final hands = [
-    [left, kOffLocL, kOffPresL, kOffShapeL, kLWrist],
-    [right, kOffLocR, kOffPresR, kOffShapeR, kRWrist],
+    [left, 'left', kOffLocL, kOffPresL, kOffShapeL, kLWrist],
+    [right, 'right', kOffLocR, kOffPresR, kOffShapeR, kRWrist],
   ];
 
   for (final h in hands) {
     final hand = h[0] as List<Landmark>?;
-    if (hand == null || hand.length < 21) continue;
-    final offLoc = h[1] as int;
-    final offPres = h[2] as int;
-    final offShape = h[3] as int;
-    final idxMuneca = h[4] as int;
+    if (hand == null || hand.length != 21) continue;
+    final side = h[1] as String;
+    final offLoc = h[2] as int;
+    final offPres = h[3] as int;
+    final offShape = h[4] as int;
+    final idxMuneca = h[5] as int;
+    final valida = manoUtilizable(hand);
+    if (!valida.ok) {
+      motivos?.add(
+          MotivoNorm(valida.code!, side: side, landmark: valida.landmark));
+      continue;
+    }
 
     // Ubicacion de la mano: se toma la muneca del modelo de POSE, no la del
     // detector de manos, para que quede en el mismo espacio metrico que el
     // resto del cuerpo. Son practicamente el mismo punto anatomico.
     final q = base.proyectar(poseMundo[idxMuneca]);
+    // Muneca estabilizada del render: residuo de imagen llevado a los ejes
+    // del cuerpo y acotado. El vector de reconocimiento no la usa.
+    final estable = _P(munecasRender?[side]);
+    final munecaImg = _P(pose[idxMuneca]);
+    if (estable.finito && munecaImg.finito) {
+      final ix = (estable.x - munecaImg.x) / escalaImg;
+      final iy = (estable.y - munecaImg.y) / escalaImg;
+      q[0] += (ix * cosT + iy * sinT)
+          .clamp(-kTopeMunecaRender, kTopeMunecaRender);
+      q[1] += (-ix * sinT + iy * cosT)
+          .clamp(-kTopeMunecaRender, kTopeMunecaRender);
+    }
     out[offLoc] = q[0];
     out[offLoc + 1] = q[1];
     out[offLoc + 2] = q[2];
@@ -250,7 +446,31 @@ List<double>? normalizeFrame(
     }
   }
 
-  return out;
+  return out.every((v) => v.isFinite) ? out : null;
+}
+
+/// Calidad del frame en [0, 1], como calcularCalidadFrameWeb (frameQuality
+/// en rig_motion_frame.mjs): 0.75 x visibilidad media de los 8 puntos del
+/// cuerpo (el minimo era demasiado sensible: un codo tapado la hundia) +
+/// 0.25 x presencia de manos (una basta para una sena: 0.82; dos, 1; ninguna,
+/// 0.65).
+double calidadFrame(List<Landmark>? pose, List<Landmark>? poseMundo,
+    List<Landmark>? left, List<Landmark>? right) {
+  if (pose == null || pose.length < 33 || poseMundo == null ||
+      poseMundo.length < 33) {
+    return 0;
+  }
+  final cuerpo = kPoseBodyIdx.map((i) => _P(pose[i]).vis).toList();
+  if (cuerpo.any((v) => !v.isFinite)) return 0;
+  final visibilidad =
+      (cuerpo.fold<double>(0, (t, v) => t + v.clamp(0.0, 1.0)) / cuerpo.length)
+          .clamp(0.0, 1.0);
+  final manos = left != null && right != null
+      ? 1.0
+      : left != null || right != null
+          ? 0.82
+          : 0.65;
+  return (visibilidad * 0.75 + manos * 0.25).clamp(0.0, 1.0);
 }
 
 /// Sustituye frames nulos por el ultimo valido.

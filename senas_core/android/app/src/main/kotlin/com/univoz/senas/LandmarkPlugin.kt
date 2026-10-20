@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
 import androidx.camera.core.CameraSelector
@@ -47,10 +48,6 @@ class LandmarkPlugin(
         // Es el que usa la UI en vivo (esqueleto en pantalla).
         const val CANAL_EVENTOS_PREVIEW = "univoz/landmarks_preview"
 
-        // Resolucion que le pedimos a CameraX para el analisis (NO para el
-        // preview, que se queda a full resolucion para verse bien).
-        private val RESOLUCION_ANALISIS = Size(360, 480)
-
         // Manos intentan cada captura; Pose corre cada ~66 ms. El reparto
         // conserva cadena anatomica fresca y deja CPU para dedos a 30 FPS.
         // Render/preview continua independiente a 60 FPS.
@@ -60,10 +57,20 @@ class LandmarkPlugin(
     private val ejecutor = Executors.newSingleThreadExecutor()
     private var sink: EventChannel.EventSink? = null
     private var sinkPreview: EventChannel.EventSink? = null
-    private var engine: LandmarkEngine? = null
+    @Volatile private var engine: LandmarkEngine? = null
     private var entry: TextureRegistry.SurfaceTextureEntry? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var sessionToken = 0L
+    @Volatile private var sessionToken = 0L
+    private val probe = DeviceProbe(context)
+    // Solo se toca en el hilo principal.
+    private var tier: DeviceTier? = null
+    private var selectorActual: CameraSelector? = null
+    private var analysisActual: ImageAnalysis? = null
+    private var resolucionActual: Size? = null
+    private var ultimoChequeoTermicoMs = 0L
+    // Tope de FPS (hilo del ejecutor).
+    @Volatile private var fpsMax = 30
+    private var siguienteFrameMs = 0.0
     private var ultimoTimestamp = 0L
     private var ultimoPoseEnviadoNs = 0L
 
@@ -139,29 +146,25 @@ class LandmarkPlugin(
                     val surface = Surface(surfaceTexture)
                     request.provideSurface(surface, ejecutor) { surface.release() }
                 }
-                val analysis = ImageAnalysis.Builder()
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setResolutionSelector(
-                        ResolutionSelector.Builder()
-                            .setResolutionStrategy(
-                                ResolutionStrategy(
-                                    RESOLUCION_ANALISIS,
-                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
-                                )
-                            )
-                            .build()
-                    )
-                    .build()
-                engine = LandmarkEngine(
-                    context,
-                    onFrame = { emitir(it) },
-                    onPreview = { emitirPreview(it) },
-                    onError = { msg -> principal.post { sink?.error("mediapipe", msg, null) } },
-                )
-                analysis.setAnalyzer(ejecutor) { proxy -> procesar(proxy) }
+                // Cada sesion parte del techo del hardware: una bajada por
+                // inferencia o calor no se guarda (el S22+ quedo atascado en
+                // bajo + separado por el calentamiento de la GPU, 2026-10-19).
+                val motor = crearMotor(false)
+                val techo = DeviceTier.nivelInicial(probe.ramMb(), motor.gpuOk)
+                val nivelTier = DeviceTier(techo)
+                val cfg = nivelTier.config
+                motor.conCara = cfg.cara
+                fpsMax = cfg.fpsMax
+                siguienteFrameMs = 0.0
+                engine = motor
+                tier = nivelTier
+                val resolucion = Size(cfg.analisisAncho, cfg.analisisAlto)
+                val analysis = construirAnalisis(resolucion)
+                analysisActual = analysis
+                resolucionActual = resolucion
                 val selector = if (frontal) CameraSelector.DEFAULT_FRONT_CAMERA
                 else CameraSelector.DEFAULT_BACK_CAMERA
+                selectorActual = selector
                 if (requestedSession != sessionToken) {
                     limpiarRecursos()
                     result.error("camera_start_cancelled", null, null)
@@ -206,6 +209,83 @@ class LandmarkPlugin(
             }
         }, ContextCompat.getMainExecutor(context))
     }
+
+    private fun crearMotor(forzarSeparado: Boolean) = LandmarkEngine(
+        context,
+        onFrame = { emitir(it) },
+        onPreview = { emitirPreview(it) },
+        onError = { msg -> principal.post { sink?.error("mediapipe", msg, null) } },
+        onInferencia = { ms -> principal.post { alInferir(ms) } },
+        forzadoSeparado = forzarSeparado,
+    )
+
+    private fun construirAnalisis(resolucion: Size): ImageAnalysis =
+        ImageAnalysis.Builder()
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            resolucion,
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                        )
+                    )
+                    .build()
+            )
+            .build()
+            .also { it.setAnalyzer(ejecutor) { proxy -> procesar(proxy) } }
+
+    // Hilo principal: DeviceTier no es thread-safe.
+    private fun alInferir(ms: Double) {
+        val t = tier ?: return
+        val ahora = SystemClock.elapsedRealtime()
+        var cambio = t.registrarInferencia(ms, ahora)
+        if (ahora - ultimoChequeoTermicoMs >= 1000) {
+            ultimoChequeoTermicoMs = ahora
+            cambio = t.registrarTermico(probe.termico(), ahora) || cambio
+        }
+        if (cambio) aplicarNivel(t)
+    }
+
+    private fun aplicarNivel(t: DeviceTier) {
+        val cfg = t.config
+        val sesion = sessionToken
+        val separado = t.separado
+        fpsMax = cfg.fpsMax
+        engine?.conCara = cfg.cara
+        // Cambiar de modelo en el hilo del ejecutor: procesar() corre ahi,
+        // asi nunca usa un motor cerrado.
+        ejecutor.execute {
+            val motor = engine
+            if (sesion != sessionToken || motor == null ||
+                motor.forzadoSeparado == separado) return@execute
+            motor.cerrar()
+            engine = crearMotor(separado).also { it.conCara = cfg.cara }
+        }
+        val resolucion = Size(cfg.analisisAncho, cfg.analisisAlto)
+        if (resolucion != resolucionActual) reenlazarAnalisis(resolucion)
+    }
+
+    private fun reenlazarAnalisis(resolucion: Size) {
+        val provider = cameraProvider ?: return
+        val selector = selectorActual ?: return
+        val anterior = analysisActual ?: return
+        val nueva = construirAnalisis(resolucion)
+        try {
+            provider.unbind(anterior)
+            provider.bindToLifecycle(lifecycleOwner, selector, nueva)
+            analysisActual = nueva
+            resolucionActual = resolucion
+        } catch (e: Exception) {
+            // Si el tamano nuevo no enlaza, seguir con el anterior.
+            try {
+                provider.bindToLifecycle(lifecycleOwner, selector, anterior)
+            } catch (_: Exception) {
+            }
+            sink?.error("analisis", "tier_rebind_failed", null)
+        }
+    }
     private fun procesar(proxy: ImageProxy) {
         try {
             val motor = engine
@@ -213,6 +293,9 @@ class LandmarkPlugin(
                 // Holistic: un solo modelo para cuerpo, manos y cara; pose y
                 // manos salen del mismo frame (sin desfase entre fuentes).
                 if (motor.holisticOcupado()) return
+                val siguiente = DeviceTier.admitirFrame(
+                    siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax) ?: return
+                siguienteFrameMs = siguiente
                 val bitmap = rotar(proxy.toBitmap(), proxy.imageInfo.rotationDegrees)
                 imagenAncho = bitmap.width
                 imagenAlto = bitmap.height
@@ -230,6 +313,9 @@ class LandmarkPlugin(
             // Ninguno de los dos modelos quiere este frame: no gastes CPU
             // convirtiendolo a bitmap.
             if (!manosLibres && !tocaPose) return
+            val siguiente = DeviceTier.admitirFrame(
+                siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax) ?: return
+            siguienteFrameMs = siguiente
 
             val rotacion = proxy.imageInfo.rotationDegrees
             val bitmap = rotar(proxy.toBitmap(), rotacion)
@@ -274,7 +360,7 @@ class LandmarkPlugin(
     }
 
     private fun aMapa(f: LandmarkEngine.FrameResult): HashMap<String, Any?> {
-        val payload = HashMap<String, Any?>(17)
+        val payload = HashMap<String, Any?>(24)
         payload["t"] = f.timestampMs
         payload["pose"] = f.pose
         // Esqueleto metrico en 3D: es el unico con el que se puede
@@ -290,6 +376,11 @@ class LandmarkPlugin(
         payload["association"] = f.association
         payload["errors"] = f.errors
         payload["capture_mode"] = f.captureMode
+        // Esquema de sesion web: entrada de manos, seguimiento por lado y si
+        // la pose corrio en este frame (sesion_captura.dart los registra).
+        payload["hands_in"] = f.handsIn
+        payload["track"] = f.track
+        payload["pose_ran"] = f.poseRan
         // Tamano del bitmap ya rotado: los landmarks vienen normalizados por
         // ancho y alto, y el visor necesita la proporcion para la cabeza.
         if (imagenAncho > 0 && imagenAlto > 0) {
@@ -301,6 +392,10 @@ class LandmarkPlugin(
         payload["face"] = f.face
         payload["leftWorld"] = f.leftWorld
         payload["rightWorld"] = f.rightWorld
+        // Nivel por dispositivo: el visor ajusta su render y lo registra en perf.
+        payload["tier"] = tier?.nivel?.wire
+        payload["infer_ms"] = f.inferMs
+        payload["thermal"] = tier?.termicoActual
         return payload
     }
     private fun detener(requestedSession: Long? = null) {
@@ -317,6 +412,11 @@ class LandmarkPlugin(
         entry = null
         ultimoTimestamp = 0L
         ultimoPoseEnviadoNs = 0L
+        tier = null
+        analysisActual = null
+        selectorActual = null
+        resolucionActual = null
+        siguienteFrameMs = 0.0
     }
     fun destruir() {
         detener()

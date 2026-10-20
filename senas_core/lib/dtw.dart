@@ -234,8 +234,11 @@ class DtwClassifier {
     return out;
   }
 
-  Prediction classify(List<List<double>> seq) {
-    final r = rank(seq);
+  Prediction classify(List<List<double>> seq) => classifyRanking(rank(seq));
+
+  /// Decide sobre un ranking ya calculado con [rank]: quien necesita el
+  /// ranking (candidatas en pantalla) y la decision corre el DTW una vez.
+  Prediction classifyRanking(List<MapEntry<double, Template>> r) {
     if (r.isEmpty) {
       return const Prediction(null, null, null, double.infinity, 0.0, false);
     }

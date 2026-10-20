@@ -1,6 +1,7 @@
 import 'package:test/test.dart';
 
 import 'package:senas_core/camera_bridge.dart';
+import 'package:senas_core/sign_norm.dart';
 
 List<double> _validPose() {
   final pose = List<double>.filled(33 * 4, 0);
@@ -22,12 +23,79 @@ List<double> _validWorldPose() {
 
   point(11, -.2, .5, 0);
   point(12, .2, .5, 0);
+  // Brazos conectados: normalizeFrame descarta segmentos imposibles.
+  point(13, -.25, .25, 0);
+  point(14, .25, .25, 0);
+  point(15, -.25, .02, 0);
+  point(16, .25, .02, 0);
   point(23, -.15, 0, 0);
   point(24, .15, 0, 0);
   return world;
 }
 
+/// Mano abierta plausible con la muneca en (x, y), plana (21 x 3).
+List<double> _mano(double x, double y) {
+  const forma = [
+    [0.0, 0.0], [-.06, -.05], [-.11, -.10], [-.14, -.16], [-.16, -.22],
+    [-.04, -.08], [-.05, -.16], [-.06, -.24], [-.06, -.32], [0.0, -.10],
+    [0.0, -.20], [0.0, -.30], [0.0, -.40], [.04, -.09], [.06, -.18],
+    [.07, -.26], [.08, -.34], [.08, -.06], [.11, -.13], [.13, -.19],
+    [.14, -.24],
+  ];
+  return [
+    for (final p in forma) ...[x + p[0] * .6, y + p[1] * .6, 0.0],
+  ];
+}
+
 void main() {
+  test('LandmarkFrame lee la captura web de Android y su calidad', () {
+    final frame = LandmarkFrame.fromMap({
+      't': 50,
+      'pose': _validPose(),
+      'poseMundo': _validWorldPose(),
+      'left': _mano(.35, .8),
+      'right': null,
+      // Render estabilizado 0.05 a la derecha de la deteccion cruda.
+      'renderLeft': [
+        for (final (i, v) in _mano(.35, .8).indexed) i % 3 == 0 ? v + .05 : v,
+      ],
+      'pose_t': 50,
+      'hands_t': 50,
+      'hands_in': {
+        'candidates': [
+          {'lm': _mano(.35, .8), 'label': 'Left', 'conf': .9},
+        ],
+        'accepted': [0],
+        'unanchored': [],
+        'rejected': [],
+        'passed': [0],
+        'assignment': {'mode': 'pose_arm_chain', 'sides': ['left']},
+        'usable': [true],
+      },
+      'track': {
+        'left': {'state': 'TRACKING', 'surface': 'palm'},
+        'right': {'state': 'LOST', 'surface': null},
+      },
+      'pose_ran': true,
+    });
+    expect(frame.handsIn!['assignment']['mode'], 'pose_arm_chain');
+    expect(frame.track!['left']['surface'], 'palm');
+    expect(frame.poseRan, isTrue);
+    // Calidad web: 0.75 * visibilidad media del cuerpo + 0.25 * manos
+    // (una mano: 0.82).
+    expect(frame.calidad, closeTo(.8 * .75 + .82 * .25, 1e-12));
+    final reconocimiento = frame.normalize()!;
+    final render = frame.normalizeForRender()!;
+    // El render mueve solo la ubicacion de la mano hacia la muneca
+    // estabilizada; la forma y el vector de reconocimiento no cambian.
+    expect(render[kOffLocL], isNot(closeTo(reconocimiento[kOffLocL], 1e-6)));
+    expect(render.sublist(kOffShapeL), reconocimiento.sublist(kOffShapeL));
+    final json = frame.toJson();
+    expect(json['hands_in'], isNotNull);
+    expect(json['pose_ran'], isTrue);
+    expect(json['quality'], closeTo(frame.calidad, 1e-12));
+  });
+
   test('LandmarkFrameV1 conserva landmarks y metadata en JSON', () {
     final frame = LandmarkFrame.fromMap({
       't': 1234,
@@ -141,5 +209,24 @@ void main() {
     final json = frame.toJson();
     expect(json['capture_mode'], 'holistic');
     expect(json['face'], hasLength(17));
+  });
+
+  test('fromMap lee nivel, inferencia y estado térmico del nativo', () {
+    final f = LandmarkFrame.fromMap(
+        {'t': 1, 'tier': 'bajo', 'infer_ms': 41.5, 'thermal': 2});
+    expect(f.tier, 'bajo');
+    expect(f.inferMs, 41.5);
+    expect(f.thermal, 2);
+    final json = f.toJson();
+    expect(json['tier'], 'bajo');
+    expect(json['infer_ms'], 41.5);
+    expect(json['thermal'], 2);
+
+    // Plugin viejo o API < 29: campos ausentes o de tipo equivocado.
+    final viejo = LandmarkFrame.fromMap({'t': 1, 'tier': 3, 'thermal': null});
+    expect(viejo.tier, isNull);
+    expect(viejo.inferMs, isNull);
+    expect(viejo.thermal, isNull);
+    expect(viejo.toJson().containsKey('tier'), isFalse);
   });
 }

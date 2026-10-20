@@ -108,3 +108,114 @@ test('Safety Gate recovers gradually without teleport and treats duplicate frame
   assert.ok(second.value[0] < third.value[0]);
   assert.equal(third.state, 'VALID');
 });
+
+const handQ = (angle) => ({jointId: 'left:hand',
+  quaternion: [Math.sin(angle / 2), 0, 0, Math.cos(angle / 2)]});
+const at = (frameId, extra = {}) => valid({frameId,
+  timestampMs: 1000 + (frameId - 1) * 66, nowMs: 1000 + (frameId - 1) * 66,
+  ...extra});
+const angleOf = (q) => 2 * Math.acos(Math.min(1, Math.abs(q[3])));
+
+test('Safety Gate clamps fast real turns to max velocity instead of freezing', () => {
+  const gate = createRigSafetyGate({maxAngularVelocityRadS: 20,
+    maxStepRad: 100 * Math.PI / 180, palmFlipRad: 120 * Math.PI / 180});
+  gate.check(at(1, handQ(0)));
+  const fast = gate.check(at(2, handQ(1.6)));
+  assert.equal(fast.accepted, true);
+  assert.ok(fast.anomalies.includes('angular_velocity_clamped'));
+  const step = 20 * .066 + .02;
+  assert.ok(Math.abs(angleOf(fast.quaternion) - step) < 1e-6);
+  const next = gate.check(at(3, handQ(1.6)));
+  assert.ok(Math.abs(angleOf(next.quaternion) - 1.6) < 1e-6);
+});
+
+test('Safety Gate rejects one-frame palm flips and accepts a sustained flip gradually', () => {
+  const gate = createRigSafetyGate({maxAngularVelocityRadS: 20,
+    maxStepRad: 100 * Math.PI / 180, palmFlipRad: 120 * Math.PI / 180,
+    recoveryMs: 100});
+  gate.check(at(1, handQ(0)));
+  const flip = gate.check(at(2, handQ(Math.PI * .9)));
+  assert.equal(flip.accepted, false);
+  assert.equal(flip.code, 'palm_flip');
+  const back = gate.check(at(3, handQ(.05)));
+  assert.equal(back.accepted, true);
+
+  const held = createRigSafetyGate({maxAngularVelocityRadS: 20,
+    palmFlipRad: 120 * Math.PI / 180, recoveryMs: 100});
+  held.check(at(1, handQ(0)));
+  assert.equal(held.check(at(2, handQ(Math.PI * .9))).code, 'palm_flip');
+  const confirmed = held.check(at(3, handQ(Math.PI * .9)));
+  assert.equal(confirmed.accepted, true);
+  assert.ok(confirmed.anomalies.includes('palm_flip_confirmed'));
+  assert.equal(confirmed.state, 'RECOVERING');
+  assert.ok(angleOf(confirmed.quaternion) < Math.PI * .9);
+
+  const finger = createRigSafetyGate({maxAngularVelocityRadS: 20,
+    palmFlipRad: 120 * Math.PI / 180});
+  finger.check(at(1));
+  assert.equal(finger.check(at(2, {rotation: [2.5, 0, 0]})).code,
+    'angular_velocity_exceeded');
+});
+
+test('Safety Gate soft deadband damps sub-threshold jitter without steps', () => {
+  const deadband = 1.5 * Math.PI / 180;
+  const gate = createRigSafetyGate({angularDeadbandRad: deadband});
+  gate.check(at(1, handQ(0)));
+  const jitter = gate.check(at(2, handQ(deadband / 2)));
+  assert.ok(Math.abs(angleOf(jitter.quaternion) - deadband / 8) < 1e-6);
+  const big = gate.check(at(3, handQ(.2)));
+  assert.ok(Math.abs(angleOf(big.quaternion) - .2) < 1e-6);
+});
+
+test('Safety Gate audits bone length drift without freezing in audit mode', () => {
+  const gate = createRigSafetyGate({boneLengthTolerance: .1,
+    boneLengthMode: 'audit'});
+  gate.check(valid({referenceBoneLength: 1, boneLength: 1}));
+  const drift = gate.check(at(2, {referenceBoneLength: 1, boneLength: 1.3}));
+  assert.equal(drift.accepted, true);
+  assert.ok(drift.anomalies.includes('bone_length_drift'));
+});
+
+test('Safety Gate recovery by time lasts the same at 15 and 60 FPS', () => {
+  const run = (stepMs) => {
+    const gate = createRigSafetyGate({recoveryMs: 100,
+      maxAngularVelocityRadS: 100});
+    gate.check(valid());
+    gate.check(valid({frameId: 2, timestampMs: 1000 + stepMs,
+      nowMs: 1000 + stepMs, rotation: [NaN, 0, 0]}));
+    let frames = 0;
+    let result;
+    do {
+      frames += 1;
+      const t = 1000 + stepMs * (frames + 1);
+      result = gate.check(valid({frameId: frames + 2, timestampMs: t, nowMs: t,
+        rotation: [.6, 0, 0]}));
+    } while (result.state !== 'VALID' && frames < 50);
+    return frames * stepMs;
+  };
+  assert.ok(Math.abs(run(66) - run(16)) <= 66);
+});
+
+test('Safety Gate recovers a confirmed palm flip over its own longer time', () => {
+  const gate = createRigSafetyGate({maxAngularVelocityRadS: 20,
+    palmFlipRad: 120 * Math.PI / 180, recoveryMs: 100,
+    palmFlipRecoveryMs: 250});
+  gate.check(at(1, handQ(0)));
+  assert.equal(gate.check(at(2, handQ(Math.PI * .9))).code, 'palm_flip');
+  const states = [];
+  for (let frame = 3; frame < 10; frame++) {
+    const r = gate.check(at(frame, handQ(Math.PI * .9)));
+    states.push([r.state, angleOf(r.quaternion)]);
+  }
+  // 66 ms por frame: 250 ms = 4 frames de recuperacion, no 2.
+  assert.deepEqual(states.slice(0, 3).map(([s]) => s),
+    ['RECOVERING', 'RECOVERING', 'RECOVERING']);
+  assert.equal(states[3][0], 'VALID');
+  for (let i = 1; i < 4; i++) assert.ok(states[i][1] > states[i - 1][1]);
+  // La siguiente recuperacion normal vuelve a 100 ms.
+  gate.check(at(10, {jointId: 'left:hand', rotation: [NaN, 0, 0]}));
+  const r1 = gate.check(at(11, handQ(Math.PI * .9)));
+  const r2 = gate.check(at(12, handQ(Math.PI * .9)));
+  assert.equal(r1.state, 'RECOVERING');
+  assert.equal(r2.state, 'VALID');
+});

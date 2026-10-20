@@ -4,6 +4,7 @@ test_golden          -> la implementacion coincide con el archivo golden
 test_invariancia     -> mover, alejar o inclinar a la persona no cambia el vector
 test_espejo_doble    -> espejear dos veces devuelve el original
 test_empaquetado     -> el round trip float16 conserva precision suficiente
+test_validaciones    -> motivos de rechazo y munecas de render (golden)
 """
 
 import json
@@ -53,6 +54,26 @@ def test_golden():
         rs = sn.resample(got, 5)
         d = max(max_diff(g, e) for g, e in zip(rs, c["expected_resample_5"]))
         check(d < TOL, "%s: remuestreo (max diff %.2e)" % (c["name"], d))
+
+
+def test_validaciones():
+    """Cada motivo de rechazo y las munecas de render (bloque `validaciones`
+    del golden; Dart y la web lo comprueban con los mismos datos)."""
+    print("test_validaciones")
+    data = json.load(open(GOLDEN))
+    for c in data.get("validaciones", []):
+        f = c["frame"]
+        motivos = []
+        v = sn.normalize_frame(f["pose"], f["pose_mundo"], f["left"], f["right"],
+                               render_wrists=f.get("render_wrists"),
+                               motivos=motivos)
+        got = [[m["stage"], m["code"], m["side"], m["landmark"]] for m in motivos]
+        check(got == c["motivos"], "%s: motivos %s" % (c["name"], got))
+        if c["expected"] is None:
+            check(v is None, "%s: frame descartado" % c["name"])
+        else:
+            d = max_diff(v, c["expected"]) if v else float("inf")
+            check(d < TOL, "%s: vector (max diff %.2e)" % (c["name"], d))
 
 
 def _transformar(pts, dx, dy, s, ang, cx=0.5, cy=0.5):
@@ -149,6 +170,7 @@ if __name__ == "__main__":
     test_invariancia()
     test_espejo_doble()
     test_empaquetado()
+    test_validaciones()
     print()
     if fallos:
         print("FALLARON %d comprobaciones" % len(fallos))

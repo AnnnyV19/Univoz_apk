@@ -374,6 +374,24 @@ run_web() {
     wait "$WEB_PID"
 }
 
+# Pruebas JUnit del lado nativo (CapturaManos y paridad de manos con la web,
+# ParidadManosTest). Necesitan Android SDK y JDK; sin ellos solo avisa.
+run_gradle_tests() {
+    local android_dir="$SENAS_DIR/android"
+    local sdk=""
+    if [[ -f "$android_dir/local.properties" ]]; then
+        sdk="$(sed -n 's/^sdk\.dir=//p' "$android_dir/local.properties" | head -n1)"
+    fi
+    sdk="${sdk:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}}"
+    if [[ ! -x "$android_dir/gradlew" || -z "$sdk" || ! -d "$sdk" ]] ||
+        { ! command -v java >/dev/null 2>&1 && [[ -z "${JAVA_HOME:-}" ]]; }; then
+        log_warn 'Sin Android SDK/JDK: se omiten las pruebas JUnit de Kotlin (paridad de manos).'
+        return 0
+    fi
+    log_info 'Pruebas JUnit Kotlin (paridad de manos con la web)...'
+    (cd "$android_dir" && ./gradlew -q :app:testDebugUnitTest)
+}
+
 run_tests() {
     resolve_python
     resolve_flutter
@@ -394,6 +412,7 @@ run_tests() {
     "$PYTHON_BIN" -m pytest -q "$SENAS_DIR"
     "$PYTHON_BIN" "$SENAS_DIR/tools/test_norm.py"
     "$PYTHON_BIN" "$SENAS_DIR/tools/test_dtw.py"
+    run_gradle_tests
     log_info 'AI Engine tests...'
     PYTHONPATH="$AI_DIR" "$PYTHON_BIN" -m pytest -q "$AI_DIR/tests"
     PYTHONPATH="$AI_DIR" "$PYTHON_BIN" -m compileall -q "$AI_DIR/ai_engine"

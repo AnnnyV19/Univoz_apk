@@ -29,8 +29,9 @@ void main() {
     final visor = File('assets/avatar_viewer/index.html').readAsStringSync();
 
     expect(visor, contains('avDerecha.subVectors(pR, pL).normalize()'));
-    expect(visor, contains('leftShoulder: hombroI'));
-    expect(visor, contains('rightShoulder: hombroD'));
+    // Cadena de brazo con el hombro anatomico (rig_hand_capture.mjs).
+    expect(visor, contains('const leftShoulder = coord(pose?.[11]);'));
+    expect(visor, contains('const rightShoulder = coord(pose?.[12]);'));
     expect(visor, contains("resolverBrazo('left'"));
     expect(visor, contains("resolverBrazo('right'"));
   });

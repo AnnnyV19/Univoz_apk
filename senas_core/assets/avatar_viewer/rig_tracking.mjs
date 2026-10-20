@@ -702,10 +702,10 @@ export function createHandTrackCoordinator() {
         const neutralCosts = candidates.map((candidate) => ({
           left: handCandidateCost(tracks.left,
             {...candidate, side: null, sideLocked: false, sideAmbiguous: true},
-            pose, t, contactBefore, true),
+            pose, t, contactBefore.active, true),
           right: handCandidateCost(tracks.right,
             {...candidate, side: null, sideLocked: false, sideAmbiguous: true},
-            pose, t, contactBefore, true),
+            pose, t, contactBefore.active, true),
         }));
         const temporalNormal = neutralCosts[0].left + neutralCosts[1].right;
         const temporalCrossed = neutralCosts[0].right + neutralCosts[1].left;

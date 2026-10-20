@@ -103,7 +103,8 @@ class _TraducirSenasScreenState extends State<TraducirSenasScreen> {
                       titulo: 'Espejo',
                       detalle: 'Movéte frente a la cámara y el avatar te '
                           'copia en vivo.',
-                      onTap: () => _abrirConCamara(const PantallaEspejo()),
+                      onTap: () => _abrirConCamara(
+                          const PantallaEspejo(modoProducto: true)),
                     ),
                     _tarjeta(
                       icono: Icons.tune,

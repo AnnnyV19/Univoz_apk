@@ -102,6 +102,68 @@ void main() {
     expect(jsonEncode(r), isNotEmpty);
   });
 
+  test('frameDeSesion de Android usa el esquema de sesion web', () {
+    final lm = List<double>.generate(63, (i) => .4 + i * 1e-5 + 1.23456e-7);
+    final f = LandmarkFrame.fromMap({
+      't': 70,
+      'pose': null,
+      'poseMundo': null,
+      'left': lm,
+      'right': null,
+      'pose_t': 40,
+      'hands_t': 70,
+      'infer_ms': 81.25,
+      'tier': 'alto',
+      'capture_mode': 'holistic',
+      'hands_in': {
+        'candidates': [
+          {'lm': lm, 'label': 'Left', 'conf': .912345},
+        ],
+        'accepted': [0],
+        'unanchored': [],
+        'rejected': [
+          [1, 'hand_duplicate'],
+        ],
+        'passed': [0],
+        'assignment': {'mode': 'fallback', 'sides': [null]},
+        'usable': [true],
+      },
+      'track': {
+        'left': {'state': 'TRACKING', 'surface': 'palm'},
+        'right': {'state': 'LOST', 'surface': null},
+      },
+      'pose_ran': false,
+    });
+    final r = frameDeSesion(f, id: 3);
+    final hands = r['hands'] as Map<String, dynamic>;
+    final cand = (hands['candidates'] as List).single as Map<String, dynamic>;
+    // Mismo formato que index.html (compactLandmarks a 4 cifras, conf a 3)
+    // para que replay_sesion.mjs reproduzca la captura del telefono.
+    expect((cand['lm'] as List).first, [.4, .4, .4]);
+    expect(cand['label'], 'Left');
+    expect(cand['conf'], .912);
+    expect(hands['accepted'], [0]);
+    expect(hands['rejected'], [
+      {'index': 1, 'code': 'hand_duplicate'}
+    ]);
+    expect(hands['passed'], [0]);
+    expect(hands['assignment'], {'mode': 'fallback', 'sides': [null]});
+    expect(r['tracked'], {
+      'left': true,
+      'right': false,
+      'left_surface': 'palm',
+      'right_surface': null,
+      'left_state': 'TRACKING',
+      'right_state': 'LOST',
+    });
+    expect(r['pose_ran'], isFalse);
+    expect(r['skew_ms'], 30);
+    expect(r['ms'], {'infer': 81.25});
+    expect(r['tier'], 'alto');
+    expect(r['quality'], 0.0);
+    expect(jsonEncode(r), isNotEmpty);
+  });
+
   test('Ajustes persiste consentimiento y perfil corporal', () {
     final perfil = estimateBodyProfile(const []);
     final a = Ajustes(consentimientoSesion: true, perfilCorporal: perfil);

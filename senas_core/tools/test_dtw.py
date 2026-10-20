@@ -32,9 +32,13 @@ def hacer_sena(semilla, n_frames, ruido=0.0, manos=2):
     amp = rng.uniform(0.05, 0.12)
     dx = rng.uniform(-0.12, 0.12)
     dy = rng.uniform(-0.10, 0.10)
+    # Forma propia de cada sena: la mano abierta de gen_golden deformada
+    # punto a punto, sin salirse de lo anatomicamente plausible (si no,
+    # sign_norm.hand_usable la descarta).
     forma = random.Random(semilla + 1000)
-    dedos = [(forma.uniform(-0.07, 0.07), forma.uniform(-0.07, 0.07))
-             for _ in range(21)]
+    dedos = [(0.0, 0.0)] + [
+        (ox * 0.7 + forma.uniform(-0.015, 0.015),
+         oy * 0.7 + forma.uniform(-0.015, 0.015)) for ox, oy in G.MANO[1:]]
 
     jitter = random.Random(semilla * 31 + int(ruido * 1e6))
     raw = []
@@ -55,7 +59,6 @@ def hacer_sena(semilla, n_frames, ruido=0.0, manos=2):
                     jitter.gauss(0, ruido),
                 ])
             h[sn.HAND_WRIST] = [cx, cy, 0.0]
-            h[sn.HAND_MIDDLE_MCP] = [cx + 0.01, cy - 0.06, 0.0]
             return h
 
         izq = mano(0.38, 0.60, -1) if manos == 2 else None

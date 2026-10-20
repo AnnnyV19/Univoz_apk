@@ -61,7 +61,15 @@ class CapturaMovimiento {
 }
 
 class ControladorCaptura extends ChangeNotifier {
-  final CameraBridge camara = CameraBridge();
+  /// [camara] se inyecta en pruebas; por defecto, la camara nativa.
+  ControladorCaptura({CameraBridge? camara}) : camara = camara ?? CameraBridge();
+
+  final CameraBridge camara;
+
+  /// Frames fusionados que se guardan aunque no se este grabando: el
+  /// detector automatico declara el inicio cuando la sena ya arranco, y
+  /// [empezar] recupera ese comienzo desde aca (pre-roll).
+  static const int kAnilloMs = 400;
 
   /// Ultimo frame para pintar el esqueleto. Va aparte del ChangeNotifier
   /// para que el preview se repinte a 30 fps sin reconstruir la pantalla
@@ -79,14 +87,15 @@ class ControladorCaptura extends ChangeNotifier {
 
   Timer? _watchdogPreview;
   StreamSubscription<LandmarkFrame>? _subPreview;
-  StreamSubscription<LandmarkFrame>? _subGrabacion;
-  final List<List<double>> _buffer = [];
-  final List<List<double>?> _bufferConHuecos = [];
+  StreamSubscription<LandmarkFrame>? _subFusion;
+  final List<LandmarkFrame> _anillo = [];
+  // Paralelos: cada frame crudo y su vector (null si no se pudo normalizar).
   final List<LandmarkFrame> _framesCrudos = [];
+  final List<List<double>?> _vectores = [];
   int _framesInvalidos = 0;
 
-  /// Cuantos frames utilizables lleva la grabacion en curso.
-  int get framesGrabados => _buffer.length;
+  /// Cuantos frames utilizables lleva (o dejo, tras recortar) la grabacion.
+  int get framesGrabados => _vectores.where((v) => v != null).length;
 
   // ---- Sesion automatica (docs/13) ----------------------------------------
   SesionCaptura? _sesion;
@@ -179,6 +188,10 @@ class ControladorCaptura extends ChangeNotifier {
         _marcarError(e);
       },
     );
+    await _subFusion?.cancel();
+    _subFusion = null;
+    _anillo.clear();
+    _escucharFusion();
     try {
       final c = await camara.iniciar(frontal: frontal);
       if (_apagado || inicio != _inicioActual) {
@@ -215,36 +228,68 @@ class ControladorCaptura extends ChangeNotifier {
     _notificar();
   }
 
-  void empezar() {
-    _buffer.clear();
-    _bufferConHuecos.clear();
-    _framesCrudos.clear();
-    _framesInvalidos = 0;
-    grabando = true;
-    _notificar();
-    _subGrabacion = camara.frames.listen((f) {
-      if (_apagado) return;
-      _framesCrudos.add(f);
-      final vec = f.normalize();
-      _bufferConHuecos.add(vec);
-      if (vec == null) {
-        _framesInvalidos++;
-      } else {
-        _buffer.add(vec);
-      }
-      if (_framesCrudos.length % 5 == 0) _notificar();
-    });
+  /// Una sola suscripcion a los frames fusionados: llena el anillo y, si se
+  /// esta grabando, la grabacion.
+  void _escucharFusion() {
+    _subFusion ??= camara.frames.listen(_alFrameFusionado);
   }
 
-  /// Finaliza y devuelve secuencia, landmarks crudos y métricas.
-  Future<CapturaMovimiento?> terminarCaptura() async {
-    await _subGrabacion?.cancel();
-    _subGrabacion = null;
+  void _alFrameFusionado(LandmarkFrame f) {
+    if (_apagado) return;
+    if (grabando) {
+      _agregar(f);
+      if (_framesCrudos.length % 5 == 0) _notificar();
+      return;
+    }
+    _anillo.add(f);
+    final desde = f.timestampMs - kAnilloMs;
+    while (_anillo.isNotEmpty && _anillo.first.timestampMs < desde) {
+      _anillo.removeAt(0);
+    }
+  }
+
+  void _agregar(LandmarkFrame f) {
+    _framesCrudos.add(f);
+    final vec = f.normalize();
+    _vectores.add(vec);
+    if (vec == null) _framesInvalidos++;
+  }
+
+  /// Empieza a grabar. [preRollMs] suma los frames de ese tramo anterior
+  /// (del anillo): el detector automatico avisa cuando la sena ya empezo.
+  void empezar({int preRollMs = 0}) {
+    _framesCrudos.clear();
+    _vectores.clear();
+    _framesInvalidos = 0;
+    if (preRollMs > 0 && _anillo.isNotEmpty) {
+      final desde = _anillo.last.timestampMs - preRollMs;
+      for (final f in _anillo) {
+        if (f.timestampMs >= desde) _agregar(f);
+      }
+    }
+    _anillo.clear();
+    grabando = true;
+    _escucharFusion();
+    _notificar();
+  }
+
+  /// Finaliza y devuelve secuencia, landmarks crudos y métricas. Con
+  /// [hastaMs] descarta los frames posteriores (la cola quieta que el
+  /// detector esperó para declarar el fin).
+  Future<CapturaMovimiento?> terminarCaptura({int? hastaMs}) async {
     grabando = false;
     _notificar();
-    if (_buffer.isEmpty) return null;
+    if (hastaMs != null) {
+      while (_framesCrudos.isNotEmpty &&
+          _framesCrudos.last.timestampMs > hastaMs) {
+        _framesCrudos.removeLast();
+        if (_vectores.removeLast() == null) _framesInvalidos--;
+      }
+    }
+    final validos = framesGrabados;
+    if (validos == 0) return null;
 
-    final rellenada = fillGaps(List.of(_bufferConHuecos));
+    final rellenada = fillGaps(List.of(_vectores));
     final remuestreada =
         rellenada == null ? null : resample(rellenada, kTFrames);
     if (remuestreada == null) return null;
@@ -266,7 +311,7 @@ class ControladorCaptura extends ChangeNotifier {
         ? null
         : visibilidades.reduce((a, b) => a < b ? a : b);
     final qualityScore =
-        _framesCrudos.isEmpty ? 0.0 : _buffer.length / _framesCrudos.length;
+        _framesCrudos.isEmpty ? 0.0 : validos / _framesCrudos.length;
     final secuencia = MotionSequenceV2.fromFrames(
       remuestreada,
       fps: fps?.round().clamp(1, 120) ?? 30,
@@ -291,8 +336,8 @@ class ControladorCaptura extends ChangeNotifier {
   }
 
   /// Compatibilidad para reconocimiento: devuelve solo secuencia.
-  Future<List<List<double>>?> terminar() async {
-    return (await terminarCaptura())
+  Future<List<List<double>>?> terminar({int? hastaMs}) async {
+    return (await terminarCaptura(hastaMs: hastaMs))
         ?.secuencia
         .frames
         .map((frame) => List<double>.from(frame))
@@ -301,8 +346,8 @@ class ControladorCaptura extends ChangeNotifier {
 
   Future<void> reiniciar(
       {required bool frontal, required bool cruzarManos}) async {
-    await _subGrabacion?.cancel();
-    _subGrabacion = null;
+    await _subFusion?.cancel();
+    _subFusion = null;
     grabando = false;
     _inicioActual++;
     _watchdogPreview?.cancel();
@@ -320,22 +365,26 @@ class ControladorCaptura extends ChangeNotifier {
     _watchdogPreview?.cancel();
     _watchdogPreview = null;
     await _subPreview?.cancel();
-    await _subGrabacion?.cancel();
+    await _subFusion?.cancel();
     _subPreview = null;
-    _subGrabacion = null;
+    _subFusion = null;
     await camara.detener();
     iniciada = null;
     estado = EstadoCamara.detenida;
-    frame.value = null;
+    // dispose() no espera a apagar(): para entonces frame ya se libero.
+    if (!_liberado) frame.value = null;
   }
 
   void _notificar() {
     if (!_apagado) notifyListeners();
   }
 
+  bool _liberado = false;
+
   @override
   void dispose() {
     unawaited(apagar());
+    _liberado = true;
     frame.dispose();
     super.dispose();
   }
@@ -360,6 +409,12 @@ class DetectorAutomatico {
   /// A ~30 fps: 20 aprox 0.67 segundos.
   final int framesQuietosParaCortar;
 
+  /// Los umbrales se expresan en frames de ~30 FPS, pero el detector mide
+  /// por tiempo (timestampMs): con el nivel por dispositivo la camara da
+  /// 15/24/30 FPS (DeviceTier.kt) y el corte y la sensibilidad no deben
+  /// cambiar con el telefono.
+  static const double _msPorFrameReferencia = 1000 / 30;
+
   /// Frames minimos grabados para que valga la pena reconocer.
   final int minFramesParaReconocer;
 
@@ -373,7 +428,14 @@ class DetectorAutomatico {
   EstadoAuto get estado => _estado;
 
   LandmarkFrame? _frameAnterior;
-  int _framesQuietos = 0;
+  int? _ultimoAlimentadoMs;
+  double _msQuietos = 0;
+
+  /// Instante del ultimo frame con movimiento de la sena en curso (o de la
+  /// ultima, hasta la proxima). Sirve para recortar la cola quieta que el
+  /// detector necesita ver antes de declarar el fin.
+  int? get ultimoMovimientoMs => _ultimoMovimientoMs;
+  int? _ultimoMovimientoMs;
   StreamSubscription<LandmarkFrame>? _sub;
 
   void Function()? onInicioDetectado;
@@ -415,25 +477,61 @@ class DetectorAutomatico {
     _frameAnterior = frame;
     if (anterior == null) return;
 
+    // Timestamp repetido o hacia atras (preview de dos modelos del mismo
+    // frame): tratarlo como un frame de referencia, sin escalar.
+    final crudoMs = frame.timestampMs - anterior.timestampMs;
+    final dtMs = crudoMs > 0
+        ? crudoMs.clamp(10, 200).toDouble()
+        : _msPorFrameReferencia;
     final tieneManos = frame.left != null || frame.right != null;
-    final mov = tieneManos ? _calcularMovimiento(anterior, frame) : 0.0;
-    final hayMovimiento = mov > umbralMovimiento;
+    // Movimiento llevado a "por frame de 30 FPS".
+    final mov = tieneManos
+        ? _calcularMovimiento(anterior, frame) * _msPorFrameReferencia / dtMs
+        : 0.0;
+    _avanzar(mov > umbralMovimiento, dtMs, frame.timestampMs);
+  }
 
+  /// Movimiento ya decidido por otra fuente: el visor (rig_math.mjs, el
+  /// mismo filtro adaptativo del laboratorio web) en Traducir. Misma maquina
+  /// de estados y corte por tiempo que [iniciar].
+  void alimentarMovimiento(
+      {required bool hayMovimiento, required int timestampMs}) {
+    if (_estado == EstadoAuto.reconociendo || _estado == EstadoAuto.pausa) {
+      _ultimoAlimentadoMs = null;
+      return;
+    }
+    final anterior = _ultimoAlimentadoMs;
+    _ultimoAlimentadoMs = timestampMs;
+    if (anterior == null) return;
+    final crudoMs = timestampMs - anterior;
+    final dtMs = crudoMs > 0
+        ? crudoMs.clamp(10, 200).toDouble()
+        : _msPorFrameReferencia;
+    _avanzar(hayMovimiento, dtMs, timestampMs);
+  }
+
+  void _avanzar(bool hayMovimiento, double dtMs, int timestampMs) {
+    if (hayMovimiento && _estado != EstadoAuto.reconociendo &&
+        _estado != EstadoAuto.pausa) {
+      _ultimoMovimientoMs = timestampMs;
+    }
     if (_estado == EstadoAuto.quieto) {
       if (hayMovimiento) {
-        _framesQuietos = 0;
+        _msQuietos = 0;
         _cambiarEstado(EstadoAuto.grabando);
         onInicioDetectado?.call();
       }
     } else if (_estado == EstadoAuto.grabando) {
       if (!hayMovimiento) {
-        _framesQuietos++;
-        if (_framesQuietos >= framesQuietosParaCortar) {
+        _msQuietos += dtMs;
+        // Medio frame de holgura: a 30 FPS los timestamps alternan 33/34 ms.
+        if (_msQuietos >=
+            (framesQuietosParaCortar - .5) * _msPorFrameReferencia) {
           _cambiarEstado(EstadoAuto.reconociendo);
           onFinDetectado?.call();
         }
       } else {
-        _framesQuietos = 0;
+        _msQuietos = 0;
       }
     }
   }
@@ -462,6 +560,7 @@ class DetectorAutomatico {
 
   void _resetContadores() {
     _frameAnterior = null;
-    _framesQuietos = 0;
+    _ultimoAlimentadoMs = null;
+    _msQuietos = 0;
   }
 }

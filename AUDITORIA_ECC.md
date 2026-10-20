@@ -47,3 +47,9 @@ QA CUA sobre build web release: bienvenida, propósito, configuración, cámara,
 - APK usa clave publishable; no se detectó `service_role` ni `sb_secret` en configuración de runtime.
 - Storage raw permanece privado y solo tiene política de inserción con ruta restringida; no hay lectura/borrado desde cliente.
 
+
+## Auditoría de movimiento (2026-10-14)
+
+Coherencia web ↔ Android del pipeline de movimiento y calibración de
+umbrales: ver [docs/14-auditoria-movimiento.md](docs/14-auditoria-movimiento.md).
+Solo informe; sin cambios de código. Tests Kotlin 20/20; sesión Android pendiente.

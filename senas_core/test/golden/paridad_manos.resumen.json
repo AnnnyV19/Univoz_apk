@@ -1,0 +1,533 @@
+{
+ "generado_con": "captura_actual.mjs",
+ "fuentes": [
+  {
+   "id": "dnrzh8",
+   "archivo": "20261020T040119Z-dnrzh8.jsonl",
+   "sha256": "09bd88ce23c1c2632a207e253303d1219e30c9ad406c20d96db5f7e5d4f01d51",
+   "frames_sesion": 1816,
+   "tramos": [
+    {
+     "nombre": "dnrzh8-0",
+     "desde": 0,
+     "hasta": 110,
+     "frames": 111,
+     "motivos": [
+      "mode:fallback",
+      "state:LOST",
+      "hand_recovered",
+      "mode:pose_arm_chain",
+      "state:TENTATIVE",
+      "hand_far_from_arm",
+      "state:TRACKING",
+      "hand_occluded",
+      "state:OCCLUDED"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_far_from_arm",
+      "hand_occluded",
+      "hand_recovered",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-183",
+     "desde": 183,
+     "hasta": 248,
+     "frames": 66,
+     "motivos": [
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_surface_ambiguous",
+      "maniobra:estatica"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_far_from_arm",
+      "hand_occluded",
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_recovered",
+      "hand_surface_ambiguous",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-389",
+     "desde": 389,
+     "hasta": 460,
+     "frames": 72,
+     "motivos": [
+      "maniobra:pulgar",
+      "hand_surface_flip"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_occluded",
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_recovered",
+      "hand_surface_flip",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-591",
+     "desde": 591,
+     "hasta": 684,
+     "frames": 94,
+     "motivos": [
+      "hand_landmarks_invalid",
+      "hand_segment_invalid",
+      "maniobra:giro"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_landmarks_invalid",
+      "hand_occluded",
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_recovered",
+      "hand_segment_invalid",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-729",
+     "desde": 729,
+     "hasta": 841,
+     "frames": 113,
+     "motivos": [
+      "hand_far_from_arm",
+      "hand_scale_implausible",
+      "wrist_disagreement",
+      "state:TRACKING",
+      "mode:pose_arm_chain"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_far_from_arm",
+      "hand_occluded",
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_recovered",
+      "hand_scale_implausible",
+      "hand_surface_flip",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING",
+      "wrist_disagreement"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-895",
+     "desde": 895,
+     "hasta": 974,
+     "frames": 80,
+     "motivos": [
+      "maniobra:puno",
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_recovered",
+      "hand_surface_flip"
+     ],
+     "faltan": [
+      "hand_position_held",
+      "hand_position_jump"
+     ],
+     "codigos": [
+      "hand_far_from_arm",
+      "hand_occluded",
+      "hand_recovered",
+      "hand_surface_flip",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-1047",
+     "desde": 1047,
+     "hasta": 1129,
+     "frames": 83,
+     "motivos": [
+      "maniobra:pronacion",
+      "state:LOST",
+      "hand_occluded",
+      "state:OCCLUDED"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_far_from_arm",
+      "hand_occluded",
+      "hand_recovered",
+      "hand_surface_ambiguous",
+      "hand_surface_flip",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING",
+      "wrist_disagreement"
+     ]
+    },
+    {
+     "nombre": "dnrzh8-1185",
+     "desde": 1185,
+     "hasta": 1205,
+     "frames": 21,
+     "motivos": [
+      "mode:fallback",
+      "maniobra:cruce",
+      "wrist_disagreement"
+     ],
+     "faltan": [
+      "mode:fallback",
+      "wrist_disagreement"
+     ],
+     "codigos": [
+      "hand_occluded",
+      "hand_surface_ambiguous",
+      "hand_surface_flip",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wddae4",
+   "archivo": "20261004T093623Z-wddae4.jsonl",
+   "sha256": "cbd3ee8250867392c2fda674f3cebfab2c480eb93cd81436d8b1957b861b9e6b",
+   "frames_sesion": 3625,
+   "tramos": [
+    {
+     "nombre": "wddae4-1977",
+     "desde": 1977,
+     "hasta": 2027,
+     "frames": 51,
+     "motivos": [
+      "maniobra:giro"
+     ],
+     "faltan": [],
+     "codigos": [
+      "mode:fallback",
+      "state:LOST"
+     ]
+    },
+    {
+     "nombre": "wddae4-2638",
+     "desde": 2638,
+     "hasta": 2688,
+     "frames": 51,
+     "motivos": [
+      "maniobra:pronacion"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_occluded",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    },
+    {
+     "nombre": "wddae4-2918",
+     "desde": 2918,
+     "hasta": 2965,
+     "frames": 48,
+     "motivos": [
+      "maniobra:tapar_200"
+     ],
+     "faltan": [],
+     "codigos": [
+      "mode:fallback",
+      "state:LOST"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "9qwtjc",
+   "archivo": "20261004T075412Z-9qwtjc.jsonl",
+   "sha256": "4d103abb98f3c6c1a24e9cce5ac34008601ba5a80c22c89552fcec4ae1cfa2a2",
+   "frames_sesion": 6027,
+   "tramos": [
+    {
+     "nombre": "9qwtjc-2239",
+     "desde": 2239,
+     "hasta": 2332,
+     "frames": 94,
+     "motivos": [
+      "track_ambiguous",
+      "hand_assignment_hysteresis"
+     ],
+     "faltan": [],
+     "codigos": [
+      "hand_assignment_hysteresis",
+      "hand_duplicate",
+      "hand_landmarks_invalid",
+      "hand_occluded",
+      "hand_position_held",
+      "hand_position_jump",
+      "hand_recovered",
+      "hand_segment_invalid",
+      "hand_side_ambiguous",
+      "hand_surface_ambiguous",
+      "hand_surface_flip",
+      "mode:ambiguous",
+      "mode:fallback",
+      "mode:pose_arm_chain",
+      "state:LOST",
+      "state:OCCLUDED",
+      "state:TENTATIVE",
+      "state:TRACKING",
+      "track_ambiguous",
+      "wrist_disagreement"
+     ]
+    },
+    {
+     "nombre": "9qwtjc-3876",
+     "desde": 3876,
+     "hasta": 3936,
+     "frames": 61,
+     "motivos": [
+      "hand_assignment_hysteresis"
+     ],
+     "faltan": [
+      "hand_assignment_hysteresis"
+     ],
+     "codigos": [
+      "mode:pose_arm_chain",
+      "state:TENTATIVE",
+      "state:TRACKING"
+     ]
+    }
+   ]
+  }
+ ],
+ "sinteticos": [
+  {
+   "nombre": "sint-oclusion-200",
+   "frames": 33,
+   "codigos": [
+    "hand_occluded",
+    "mode:pose_arm_chain",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-oclusion-300",
+   "frames": 36,
+   "codigos": [
+    "hand_occluded",
+    "mode:pose_arm_chain",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-oclusion-500",
+   "frames": 42,
+   "codigos": [
+    "hand_occluded",
+    "hand_recovered",
+    "mode:pose_arm_chain",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-oclusion-700",
+   "frames": 48,
+   "codigos": [
+    "hand_occluded",
+    "hand_recovered",
+    "mode:pose_arm_chain",
+    "state:LOST",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-salto",
+   "frames": 26,
+   "codigos": [
+    "hand_landmarks_invalid",
+    "hand_occluded",
+    "mode:pose_arm_chain",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING",
+    "wrist_out_of_frame"
+   ]
+  },
+  {
+   "nombre": "sint-volteo",
+   "frames": 26,
+   "codigos": [
+    "mode:pose_arm_chain",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-cruce",
+   "frames": 40,
+   "codigos": [
+    "hand_assignment_hysteresis",
+    "hand_side_ambiguous",
+    "mode:ambiguous",
+    "mode:pose_arm_chain",
+    "state:TENTATIVE",
+    "state:TRACKING",
+    "wrist_disagreement"
+   ]
+  },
+  {
+   "nombre": "sint-sin-anclar",
+   "frames": 12,
+   "codigos": [
+    "hand_recovered",
+    "mode:fallback",
+    "mode:pose_arm_chain",
+    "state:LOST",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-t-repetido",
+   "frames": 14,
+   "codigos": [
+    "hand_occluded",
+    "mode:pose_arm_chain",
+    "stale_frame",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-palma-degenerada",
+   "frames": 10,
+   "codigos": [
+    "hand_geometry_degenerate",
+    "hand_occluded",
+    "mode:pose_arm_chain",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-separado-confianzas",
+   "frames": 12,
+   "codigos": [
+    "hand_duplicate",
+    "mode:pose_arm_chain",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  },
+  {
+   "nombre": "sint-fuera-de-cuadro",
+   "frames": 14,
+   "codigos": [
+    "hand_landmarks_invalid",
+    "hand_occluded",
+    "hand_position_held",
+    "hand_position_jump",
+    "hand_side_ambiguous",
+    "mode:ambiguous",
+    "mode:pose_arm_chain",
+    "state:OCCLUDED",
+    "state:TENTATIVE",
+    "state:TRACKING",
+    "wrist_disagreement",
+    "wrist_out_of_frame"
+   ]
+  },
+  {
+   "nombre": "sint-pose-ausente",
+   "frames": 12,
+   "codigos": [
+    "hand_side_ambiguous",
+    "mode:fallback",
+    "mode:pose_arm_chain",
+    "pose_format",
+    "state:TENTATIVE",
+    "state:TRACKING"
+   ]
+  }
+ ],
+ "total_frames": 1270,
+ "codigos": {
+  "hand_assignment_hysteresis": 34,
+  "hand_duplicate": 23,
+  "hand_far_from_arm": 17,
+  "hand_geometry_degenerate": 7,
+  "hand_landmarks_invalid": 19,
+  "hand_occluded": 222,
+  "hand_position_held": 8,
+  "hand_position_jump": 8,
+  "hand_recovered": 57,
+  "hand_scale_implausible": 8,
+  "hand_segment_invalid": 2,
+  "hand_side_ambiguous": 21,
+  "hand_surface_ambiguous": 27,
+  "hand_surface_flip": 16,
+  "mode:ambiguous": 8,
+  "mode:fallback": 386,
+  "mode:pose_arm_chain": 876,
+  "pose_format": 5,
+  "stale_frame": 4,
+  "state:LOST": 875,
+  "state:OCCLUDED": 222,
+  "state:TENTATIVE": 47,
+  "state:TRACKING": 1396,
+  "track_ambiguous": 1,
+  "wrist_disagreement": 7,
+  "wrist_out_of_frame": 17
+ },
+ "requeridos_faltantes": []
+}

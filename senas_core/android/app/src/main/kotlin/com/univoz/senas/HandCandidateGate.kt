@@ -1,6 +1,5 @@
 package com.univoz.senas
 
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -16,6 +15,8 @@ import kotlin.math.min
  * `unanchored` y [BirthGate] le exige varios frames seguidos.
  */
 object HandCandidateGate {
+    private fun hypot(a: Double, b: Double) = JsMath.hypot(a, b)
+
     private const val MIN_VIS = .5
 
     /** [points]: 21 x (x, y, z) en coordenadas de imagen. */
@@ -56,13 +57,17 @@ object HandCandidateGate {
         duplicateOverlap: Double = .5,
     ): Result {
         val rejected = mutableListOf<Pair<Int, String>>()
+        // Igual que la web: 21 puntos con x/y finitos (la z la valida
+        // CapturaManos.handUsable despues de asignar el lado).
         val valid = candidates.withIndex().filter { (index, c) ->
-            val ok = c.points.size >= 63 && c.points.all { it.isFinite() }
+            val ok = c.points.size == 63 &&
+                (0 until 21).all { c.points[it * 3].isFinite() && c.points[it * 3 + 1].isFinite() }
             if (!ok) rejected += index to "hand_landmarks_invalid"
             ok
         }
         fun vis(i: Int) = pose!![i * 4 + 3]
-        val shouldersOk = pose != null && pose.size >= 33 * 4 &&
+        fun ok(i: Int) = pose!![i * 4].isFinite() && pose[i * 4 + 1].isFinite()
+        val shouldersOk = pose != null && pose.size >= 33 * 4 && ok(11) && ok(12) &&
             vis(11) >= MIN_VIS && vis(12) >= MIN_VIS &&
             hypot(pose[44] - pose[48], pose[45] - pose[49]) > 1e-3
         if (!shouldersOk) {
@@ -70,7 +75,7 @@ object HandCandidateGate {
         }
         val p = pose!!
         val sw = hypot(p[44] - p[48], p[45] - p[49])
-        val wrists = listOf(15, 16).filter { vis(it) >= MIN_VIS }
+        val wrists = listOf(15, 16).filter { ok(it) && vis(it) >= MIN_VIS }
             .map { p[it * 4] to p[it * 4 + 1] }
 
         val accepted = mutableListOf<Int>()

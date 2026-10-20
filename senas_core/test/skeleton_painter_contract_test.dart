@@ -29,4 +29,42 @@ void main() {
     expect(captura, isNot(contains('camara.espejo')));
     expect(traduccion, isNot(contains('camara.espejo')));
   });
+
+  test('Traducir usa el avatar y el movimiento adaptativo del visor web', () {
+    final source = File('lib/skeleton_painter.dart').readAsStringSync();
+    final traducir =
+        source.substring(source.indexOf('class _PantallaDeTranslacionState'));
+    // Avatar con los frames fusionados, igual que Espejo.
+    expect(traducir, contains('AlimentadorAvatar('));
+    expect(traducir, contains('_ctrl.camara.frames.listen(_alimentador.alFrame)'));
+    // Inicio y fin de la seña con el quieto/movimiento del visor.
+    expect(traducir, contains('configurarMovimiento(true)'));
+    expect(traducir, contains('onMovimiento'));
+    expect(traducir, contains('_detector.alimentarMovimiento('));
+    // WebView y Texture lado a lado: encima, el WebView tapa la cámara.
+    expect(traducir, contains('WebViewWidget('));
+    final vista = traducir.substring(traducir.indexOf('Widget _preview()'));
+    expect(vista.indexOf('Row('), lessThan(vista.indexOf('WebViewWidget(')));
+    // Rendimiento y fluidez de Android a la sesión.
+    expect(traducir, contains("_ctrl.sesion?.evento('perf', perf)"));
+    // Sin pose usable el visor no recibe frames ni manda motion: el preview
+    // sin mano o sin pose cuenta como quieto para no colgar la grabación.
+    expect(traducir, contains('!f.tieneAlgunaMano || f.normalize() == null'));
+  });
+
+  test('Traducir reconoce con un solo DTW y corta la sena con pre-roll y cola',
+      () {
+    final source = File('lib/skeleton_painter.dart').readAsStringSync();
+    final traducir =
+        source.substring(source.indexOf('class _PantallaDeTranslacionState'));
+    expect('.rank('.allMatches(traducir).length, 1,
+        reason: 'un solo ranking DTW por intento');
+    expect(traducir, contains('classifyRanking(ranking)'));
+    expect(traducir, isNot(contains('.classify(seq)')));
+    expect(traducir, contains('_ctrl.empezar(preRollMs: kPreRollMs)'));
+    expect(traducir, contains('hastaMs:'));
+    expect(traducir, contains('_detector.ultimoMovimientoMs'));
+    expect(traducir, contains("evento('reconocimiento'"));
+    expect(traducir, contains('Seña muy corta'));
+  });
 }

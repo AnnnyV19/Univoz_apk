@@ -52,7 +52,7 @@ void main() {
     expect(html, contains('kHandLossGraceMs = 250'));
     expect(html, contains('actualizarEstadoPerdidaMano'));
     expect(html, contains('camaraReposoMano'));
-    expect(html, contains('const centroHombros ='));
+    expect(html, contains('mid(world[11], world[12])'));
     expect(html, contains('H-I'));
     expect(html, contains('H-D'));
     expect(html, contains('I:'));
@@ -73,10 +73,10 @@ void main() {
     expect(html, contains('processP95Ms'));
     expect(tracking, contains('hand_surface_flip'));
     expect(tracking, contains('handSurfaceTransition'));
-    expect(html, contains('wristDisagreementState'));
+    expect(html, contains('wristState[side]'));
     expect(html, contains('state.frames >= 3'));
     expect(html, contains('droppedVideoFrames'));
-    expect(html, contains('if (vrm) posarReposo();'));
+    expect(html, contains("transicionReposo('camara',"));
     expect(html, contains('suavizarFrameWeb'));
     expect(html, contains('Suavizar movimiento'));
     expect(html, contains('webGrabacion.push(vector.slice())'));

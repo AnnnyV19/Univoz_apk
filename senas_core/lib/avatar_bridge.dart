@@ -40,6 +40,56 @@ import 'avatar_web_bridge.dart';
 // parpadeo y vocales, que es lo minimo que pide LSM.
 const String _kRutaAvatar = 'assets/avatar/univozM.vrm';
 
+/// Evento `perf` del visor embebido ('perf:<json>', ver rig_embedded_perf).
+/// null si el mensaje no es un objeto JSON: un perf roto no debe tirar nada.
+Map<String, dynamic>? decodificarPerf(String mensaje) {
+  if (!mensaje.startsWith('perf:')) return null;
+  try {
+    final valor = jsonDecode(mensaje.substring(5));
+    return valor is Map<String, dynamic> ? valor : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Quieto/movimiento que calcula el visor por frame en vivo (filtro
+/// adaptativo de rig_math.mjs, el mismo del laboratorio web).
+class MovimientoVisor {
+  final int timestampMs;
+  final bool hayMovimiento;
+
+  /// motionScore (cuerpo/muneca) y fingerMotionScore, 0-1.
+  final double puntaje;
+  final double dedos;
+  final bool conMano;
+
+  const MovimientoVisor({
+    required this.timestampMs,
+    required this.hayMovimiento,
+    this.puntaje = 0,
+    this.dedos = 0,
+    this.conMano = false,
+  });
+}
+
+/// 'motion:{"t":..,"m":0|1,"s":..,"f":..,"h":bool}'; null si no se entiende.
+MovimientoVisor? decodificarMovimiento(String mensaje) {
+  if (!mensaje.startsWith('motion:')) return null;
+  try {
+    final valor = jsonDecode(mensaje.substring(7));
+    if (valor is! Map<String, dynamic> || valor['t'] is! num) return null;
+    return MovimientoVisor(
+      timestampMs: (valor['t'] as num).toInt(),
+      hayMovimiento: valor['m'] == 1 || valor['m'] == true,
+      puntaje: (valor['s'] as num?)?.toDouble() ?? 0,
+      dedos: (valor['f'] as num?)?.toDouble() ?? 0,
+      conMano: valor['h'] == true,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
 class AvatarBridge {
   late final WebViewController? controller;
 
@@ -56,6 +106,14 @@ class AvatarBridge {
   void Function(String)? onPoseCapturada;
   void Function(String)? onDiagnosticReport;
   void Function(RigCalibration)? onCalibrationChanged;
+
+  /// Un evento perf por segundo mientras haya sesion (configurarSesion).
+  void Function(Map<String, dynamic>)? onPerf;
+  bool _sesion = false;
+
+  /// Quieto/movimiento por frame mientras este activo (configurarMovimiento).
+  void Function(MovimientoVisor)? onMovimiento;
+  bool _movimiento = false;
   RigCalibration _calibracion = const RigCalibration();
   bool _jsListo = false;
   bool _diagnostico = false;
@@ -96,6 +154,12 @@ class AvatarBridge {
             } catch (_) {
               // Mensaje de diagnóstico corrupto no debe detener avatar.
             }
+          } else if (msg.message.startsWith('motion:')) {
+            final m = decodificarMovimiento(msg.message);
+            if (m != null) onMovimiento?.call(m);
+          } else if (msg.message.startsWith('perf:')) {
+            final perf = decodificarPerf(msg.message);
+            if (perf != null) onPerf?.call(perf);
           } else if (msg.message == 'js_listo') {
             // La pagina ya importo three.js/three-vrm y esta lista para
             // recibir el modelo. Se lo mandamos nosotros en vez de que lo
@@ -119,6 +183,8 @@ class AvatarBridge {
     await webView.runJavaScript(
         "window.configurarRig('${_escapar(jsonEncode(_calibracion.toJson()))}')");
     await webView.runJavaScript('window.configurarDiagnostico($_diagnostico)');
+    await webView.runJavaScript('window.configurarSesion($_sesion)');
+    await webView.runJavaScript('window.configurarMovimiento($_movimiento)');
     if (_calibracionPendiente) {
       _calibracionPendiente = false;
       await webView.runJavaScript('window.iniciarCalibracionPulgares()');
@@ -140,6 +206,20 @@ class AvatarBridge {
     if (webView == null) return;
     await webView.runJavaScript(
         "window.configurarRig('${_escapar(jsonEncode(calibracion.toJson()))}')");
+  }
+
+  /// Con movimiento activo el visor manda quieto/movimiento por frame.
+  Future<void> configurarMovimiento(bool activo) async {
+    _movimiento = activo;
+    if (kIsWeb || !_jsListo) return;
+    await controller?.runJavaScript('window.configurarMovimiento($activo)');
+  }
+
+  /// Con sesion activa el visor manda perf cada segundo (onPerf).
+  Future<void> configurarSesion(bool activa) async {
+    _sesion = activa;
+    if (kIsWeb || !_jsListo) return;
+    await controller?.runJavaScript('window.configurarSesion($activa)');
   }
 
   Future<void> configurarDiagnostico(bool activo) async {
@@ -268,5 +348,7 @@ class AvatarBridge {
     onPoseCapturada = null;
     onDiagnosticReport = null;
     onCalibrationChanged = null;
+    onPerf = null;
+    onMovimiento = null;
   }
 }

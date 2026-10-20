@@ -51,7 +51,7 @@ void main() {
     final html = File('assets/avatar_viewer/index.html').readAsStringSync();
     expect(html, contains('webGrabacionSignSpace.push(signSpaceVivo)'));
     expect(html, contains('sign_space: webUltimaSignSpace'));
-    expect(html, contains('signSpace: colaSignSpace?.[frameActual] ?? null'));
+    expect(html, contains('colaSignSpace?.[i] ?? null, colaSignSpace?.[i + 1] ?? null, f)'));
     expect(html, contains("typeof seqJson === 'string'"));
     final bridge = File('lib/avatar_bridge.dart').readAsStringSync();
     expect(bridge, contains("'signSpace': pista"));
@@ -73,7 +73,7 @@ void main() {
     expect(html, contains('window.configurarVista'));
     expect(html, contains('espejo ? mirrorMotionFrame(frameVivo) : frameVivo'));
     // la reproduccion de biblioteca no se espeja
-    expect(html, contains('RigBodyEngine.aplicarFrame(colaFrames[frameActual], {'));
+    expect(html, contains('interpolarFramePlantilla(colaFrames[i], colaFrames[i + 1], f), {'));
   });
 
   test('captura unificada Holistic y cara al avatar tras flag', () {
@@ -97,10 +97,12 @@ void main() {
   test('compuerta anti-alucinacion de manos antes de asignar lados', () {
     final html = File('assets/avatar_viewer/index.html').readAsStringSync();
     expect(html, contains('// ---- inicio rig_hand_gate.mjs'));
-    expect(html, contains('gateHandCandidates(candidatosPuerta, pose)'));
-    expect(html, contains('webHandBirthGate.filter('));
-    final gate = html.indexOf('gateHandCandidates(candidatosPuerta, pose)');
-    final assign = html.indexOf('assignHandsByArmChain(candidatosCrudos');
+    // La captura vive en rig_hand_capture.mjs (inlineado en el visor).
+    expect(html, contains('// ---- inicio rig_hand_capture.mjs'));
+    expect(html, contains('gateHandCandidates(gateCandidates, pose)'));
+    expect(html, contains('birthGate.filter('));
+    final gate = html.indexOf('gateHandCandidates(gateCandidates, pose)');
+    final assign = html.indexOf('assignHandsByArmChain(raw,');
     expect(gate, lessThan(assign), reason: 'la compuerta va antes');
   });
 

@@ -1,0 +1,91 @@
+{
+ "schema": "GatesV1",
+ "session_id": "20261020T031410Z-8ttkmb",
+ "umbrales": {
+  "frames_min": 300,
+  "tracking_fps_min": 30,
+  "render_fps_min": 60,
+  "latency_p95_ms": 50,
+  "latency_p95_provisional_ms": 120,
+  "inversion_pct_max": 1.0,
+  "jitter_deg_max": 2.0
+ },
+ "contexto": {
+  "platform": "web",
+  "device": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "video": {
+   "width": 360,
+   "height": 270,
+   "fps": 30
+  },
+  "capture_worker": true,
+  "capture_worker_mode": "holistic",
+  "capture_mode": "holistic",
+  "tracking_profile": "sensible",
+  "pose_transitions": true,
+  "protocol": "manos",
+  "frames": 1146,
+  "maniobras": {}
+ },
+ "fase_0_baseline": {
+  "frames": 1146,
+  "vector_152": true,
+  "veredicto": "PASS"
+ },
+ "fase_1_rendimiento": {
+  "perf_events": 78,
+  "latency_ms": {
+   "n": 1144,
+   "p50": 36.4,
+   "p95": 43.3,
+   "p99": 61
+  },
+  "tracking_fps_p50": 16,
+  "segundos_con_manos": 59,
+  "pose_fps_p50": 16,
+  "render_fps_p50": 144,
+  "inference_fps_p50": 16,
+  "camara_fps_p50": 15,
+  "limitado_por_camara": true,
+  "veredicto": "FAIL"
+ },
+ "fase_2_orientacion": {
+  "pasos": [],
+  "cambios_en_giro": 0,
+  "veredicto": "SIN_DATOS"
+ },
+ "fase_3_rig": {
+  "rechazos_compuerta": 10,
+  "rechazos_por_frame": 0.009,
+  "codigos_compuerta": {
+   "stale_frame": 8,
+   "palm_flip": 2
+  },
+  "articulaciones_compuerta": {
+   "right:hand": 2,
+   "torso:Hips": 1,
+   "torso:Spine": 1,
+   "torso:Chest": 1,
+   "torso:UpperChest": 1,
+   "torso:LeftShoulder": 1,
+   "torso:RightShoulder": 1,
+   "cabeza:Neck": 1
+  },
+  "ajustes_compuerta": {
+   "bone_length_drift": 293,
+   "angular_velocity_clamped": 94
+  },
+  "teleports": 0,
+  "jitter_deg": null,
+  "veredicto": "PASS"
+ },
+ "fase_4_identidad": {
+  "pasos": [],
+  "swaps": 0,
+  "saltos_retenidos": 0,
+  "saltos_aplicados": 0,
+  "recuperaciones": 0,
+  "perdida": {},
+  "veredicto": "SIN_DATOS"
+ }
+}

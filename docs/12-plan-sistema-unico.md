@@ -89,6 +89,10 @@ Fase 0 pendiente):
   en sesiones reales 11–24 % de frames iban al lado de la muñeca más lejana.
 - [x] Worker de captura lee la cámara directo (stream) y modo separado
   (Pose + Hand + Face) medido: más lento que Holistic con video real.
+- [x] Niveles por dispositivo en Android (`DeviceTier.kt`: resolución,
+  modelo, FPS, cara y render según RAM, GPU, inferencia y calor) y evento
+  `perf` desde Android (`rig_embedded_perf.mjs` → Dart). Falta validarlo en
+  teléfonos de gama baja y media.
 - [ ] Baselines físicos reales (requieren sesiones del usuario) (Fase 0).
 - [ ] Retarget `anchors` por defecto tras validación visual (Fase 3).
 - [ ] Un solo `palmFrameV2` y `jointLimits` anatómicos (Fase 3; requieren
@@ -96,7 +100,95 @@ Fase 0 pendiente):
 - [ ] Audit en vivo en el visor, Kalman por track, métricas del clasificador
   (Fase 6).
 
-### Próxima sesión (estado al 2026-10-04, `b07188e`)
+### Próxima sesión (estado al 2026-10-20, sin commit)
+
+Android ya corre la captura web de manos verificada frame a frame (ver
+"Paridad Android (2026-10-20)" en [14](14-auditoria-movimiento.md)):
+`CapturaManos.kt` más `HandTrackCoordinator.kt` como espejo de
+`rig_tracking.mjs`, y el banco `test/golden/paridad_manos.jsonl.gz`, que leen
+JS, Kotlin, Dart y Python. Las validaciones de mano y de pose existen en
+todas las plataformas, y Traducir reconoce con pre-roll y con la cola
+recortada. `univoz.sh test` incluye Gradle.
+
+Plan ejecutado y su registro (decisiones incluidas):
+[2026-10-20-android-paridad.md](superpowers/plans/2026-10-20-android-paridad.md).
+
+Siguiente:
+
+1. Sesión de Traducir en el S22+ (auto y manual, cruce, tapar 200/500 ms,
+   palma/dorso, salir y volver, seña muy corta). Instalar con
+   `adb install -r`.
+2. Pasar esa sesión por `analizar_sesion.py --gates` y por
+   `paridad/replay_sesion.mjs`.
+3. Afinar `kColaMs`/`kPreRollMs` con los eventos `reconocimiento`.
+4. H1 (aspecto) con la distribución de escala de mano del teléfono.
+
+### Próxima sesión anterior (estado al 2026-10-19, sin commit)
+
+Mejoras de movimiento hechas en web/JS: ver "Cambios 2026-10-19" en
+[14](14-auditoria-movimiento.md) (H2, H8, H9, H13, H14, estados de avatar,
+reposo suave, perfil de tracking). `univoz.sh test` verde. Grafo del pipeline
+con graphify (`graphifyy` 0.9.92 en `~/.local/share/graphify-venv`, sin
+extras LLM): `graphify update <carpeta>` sobre una copia de los `.mjs`, `.kt`
+y el script inline de `index.html`; no se guarda en el repo.
+
+Sesiones del 2026-10-19 (`8ttkmb` sensible, `gq000m` estable) analizadas:
+ver "Validación con sesiones web 2026-10-19" en
+[14](14-auditoria-movimiento.md). Decidido: `bone_length_drift` se queda en
+`audit` (z monocular demasiado ruidoso), default `sensible`, gracia 250 ms
+sin cambio. Sin marcas: fases 2 y 4 y jitter siguen sin medir.
+
+1. Fijar la webcam a 30 FPS: instalar `v4l-utils` y quitar la prioridad de
+   exposición (`v4l2-ctl -d /dev/video0 --list-ctrls` para ver el nombre:
+   `exposure_dynamic_framerate` o `exposure_auto_priority` = 0), o más luz.
+2. Sesión web con `&protocolo=manos` y teclas 1–9 **en orden** (2–3 min con
+   manos en cuadro) para fases 2, 3 y 4. Deadband 1.5° se decide con el
+   jitter del avatar (punto 3), no con el de entrada.
+3. ~~Registrar la pose aplicada al avatar y medir jitter sobre ella.~~ Hecho
+   2026-10-19 (`jitter_avatar_deg`, `jitter_auto`): con la sesión del punto 2
+   comparar entrada contra avatar para decidir zona muerta y One Euro.
+4. Fluidez web resuelta con suavizado de salida (ver 14, "Fluidez"). Probarlo
+   en vivo: sensación de retraso en la muñeca (~65 ms añadidos).
+5. Android (primera prueba en Galaxy S22+ hecha, ver 14 "Primera prueba en
+   teléfono": crash de protobuf, niveles recalibrados, Traducir con el
+   visor). Siguiente: probar Traducir y Espejo en el S22+ con el APK nuevo y
+   luego en un teléfono de gama baja y uno
+   de gama media, correr el protocolo de `docs/09` y
+   `analizar_sesion.py --gates`; ajustar umbrales de `DeviceTier.kt` con lo
+   medido. El plan de niveles ya está implementado (2026-10-19) con suavizado
+   de salida, `render_motion`/`avatar_state` en el `perf` embebido y render en
+   reposo a 15 FPS; nivel bajo verificado reproduciendo `dnrzh8` (render 31,
+   100 % de renders con movimiento, jitter de mano 1.3–1.7°).
+6. Sigue pendiente todo lo de la lista del 2026-10-14 (abajo): sesión
+   Android, H1, H3, H4–H7.
+
+### Próxima sesión anterior (estado al 2026-10-14, `51caf00`)
+
+Auditoría de movimiento web ↔ Android hecha: ver
+[14-auditoria-movimiento.md](14-auditoria-movimiento.md) (hallazgos H1–H12,
+umbrales propuestos PROVISIONALES, backlog Android primero). No se cambió
+código. `univoz.sh test` verde; tests Kotlin 20/20.
+
+1. **Mapear el trabajo con graphify** antes de tocar código: grafo del
+   pipeline (captura → compuerta → asociación → seguridad → rig) en web y
+   Kotlin, para ubicar las piezas duplicadas de H6/H12. No está instalado
+   aún: buscar con `npx skills find graphify` / revisar el paquete y
+   confirmar con el usuario antes de instalar.
+2. Sesión Android real (teléfono USB, `adb` en
+   `~/Android/Sdk/platform-tools/adb`): pasos en la sección "Sesión Android"
+   de [14](14-auditoria-movimiento.md). Paquete `com.example.univoz`,
+   sesiones en `app_flutter/sesiones/`.
+3. Tests Kotlin: `./gradlew :app:testDebugUnitTest` verde 20/20 (el
+   `testDebugUnitTest` de todos los módulos falla por minSdk de
+   `path_provider_android`, ajeno; ver 14).
+4. Confirmar o ajustar umbrales de [14](14-auditoria-movimiento.md) con la
+   sesión Android + una web con buena luz; luego ejecutar el backlog de 14.
+5. Los puntos 2–5 de la lista del 2026-10-04 (abajo) quedan explicados en
+   14: `stage_desync` = caché de pose viejo cuando falta pose, contado por articulación (H9); muñecas
+   congeladas = volteos palma/dorso (H2); `hand_scale_implausible` = mano
+   cerca de cámara + aspecto sin corregir (H1); `perf` Android (H3).
+
+### Próxima sesión anterior (estado al 2026-10-04, `b07188e`)
 
 Gates de la última sesión física (`20261004T093623Z-wddae4`, manos): fases
 0, 2, 3 y 4 PASS; fase 1 FAIL **limitada por la cámara** (webcam ACER HD a
@@ -112,7 +204,8 @@ Gates de la última sesión física (`20261004T093623Z-wddae4`, manos): fases
    `right:hand` 33): revisar el límite contra giros reales de seña.
 4. Pérdida de mano al tapar 200 ms (37 %): causas `modelo` y `compuerta`
    (`hand_scale_implausible` 83, `hand_duplicate` 78).
-5. Android: emitir evento `perf` para que la fase 1 deje de ser SIN_DATOS.
+5. ~~Android: emitir evento `perf` para que la fase 1 deje de ser SIN_DATOS.~~
+   Hecho 2026-10-19 (`rig_embedded_perf.mjs` → Dart).
 6. Pendientes de antes: anchors por defecto, `palmFrameV2`/`jointLimits`,
    pasos 5–6 del plan `docs/superpowers/plans/2026-09-14-tracking-fases.md`.
 

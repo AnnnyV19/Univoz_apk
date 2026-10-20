@@ -136,10 +136,14 @@ def resumir(registros):
             if any(r.get("code") == "hand_duplicate" for r in h.get("rejected", [])):
                 dup_frames += 1
             if h.get("assignment"):
-                asign[h["assignment"].get("mode")] += 1
-            elif (h.get("association") or {}).get("hand_assignment_mode"):
-                # sesiones Android: el modo viene del motor Kotlin
-                asign[h["association"]["hand_assignment_mode"]] += 1
+                modo = h["assignment"].get("mode")
+            else:
+                # sesiones Android viejas: el modo venia en association
+                modo = (h.get("association") or {}).get("hand_assignment_mode")
+            if modo:
+                # Sin pose: la web registra el modo crudo (fallback) y la UI
+                # de Android lo llamaba pose_pending. Es lo mismo.
+                asign["fallback" if modo == "pose_pending" else modo] += 1
         out["hand_rejects"] = dict(rech)
         out["assignment_modes"] = dict(asign)
         errs = collections.Counter(c for f in frames for c in f.get("errors", []))
@@ -150,6 +154,13 @@ def resumir(registros):
                 rech[codigo] = errs[codigo]
         out["hand_rejects"] = dict(rech)
         out["top_errors"] = errs.most_common(10)
+        # Skew pose/manos por frame (web desde 2026-10-19; Android ya lo
+        # mandaba dentro de hands). Sin pose el frame trae null.
+        skews = [f["skew_ms"] for f in frames
+                 if isinstance(f.get("skew_ms"), (int, float))]
+        if skews:
+            out["skew_ms"] = {"p50": pct(skews, .5), "p95": pct(skews, .95),
+                              "max": max(skews)}
         ms = [f.get("ms", {}) for f in frames]
         out["timing_ms"] = {k: {"p50": round(pct([m.get(k) for m in ms], .5), 1),
                                 "p95": round(pct([m.get(k) for m in ms], .95), 1)}
@@ -182,6 +193,25 @@ def resumir(registros):
                                          for q in (.05, .95)]
                                      for k in ("yaw", "pitch", "roll")}
     out["events"] = dict(collections.Counter(e.get("type") for e in eventos))
+    # Intentos de reconocimiento de Traducir (skeleton_painter.dart).
+    recon = [e for e in eventos if e.get("type") == "reconocimiento"]
+    if recon:
+        out["reconocimiento"] = {
+            "total": len(recon),
+            "aceptadas": sum(1 for e in recon if e.get("aceptada")),
+            "por_modo": dict(collections.Counter(e.get("modo") for e in recon)),
+            "motivos": dict(collections.Counter(
+                e["motivo"] for e in recon if e.get("motivo"))),
+            "glosas": dict(collections.Counter(
+                e["gloss"] for e in recon if e.get("aceptada") and e.get("gloss"))),
+            "distancia_p50": round(pct([e.get("distancia") for e in recon], .5), 3),
+            "frames_p50": pct([e.get("frames") for e in recon], .5),
+        }
+    # Veces que el avatar entro a cada estado (REST, TRACKING, HOLD, ...).
+    estados = collections.Counter(e.get("to") for e in eventos
+                                  if e.get("type") == "avatar_state")
+    if estados:
+        out["avatar_states"] = dict(estados)
     out["by_step"] = por_paso(frames, eventos)
     out["by_retarget"] = por_modo(frames, "retarget")
     perfil = next((e.get("profile") for e in eventos
@@ -281,36 +311,157 @@ def _inversiones(frames):
     return cambios, conocidos
 
 
-def _jitter_deg(frames, codo, muneca, ventana=None, bloque=None):
-    """Jitter (grados) del antebrazo: residuo contra su media movil centrada
-    de ~0.5 s, RMS por bloques de ~1 s y mediana de los bloques. La mediana
-    descarta los segundos en que el brazo se movio de verdad. Ventana y
-    bloque salen de los FPS reales (una camara a 15 FPS no es 30)."""
+def _fps(frames):
     ts = [f["t"] for f in frames if isinstance(f.get("t"), (int, float))]
     dts = sorted(b - a for a, b in zip(ts, ts[1:]) if b > a)
-    fps = 1000.0 / dts[len(dts) // 2] if dts else 30.0
+    return 1000.0 / dts[len(dts) // 2] if dts else 30.0
+
+
+def _jitter_unitarios(frames, extraer, cuaternion=False, ventana=None,
+                      bloque=None, fps=None):
+    """Jitter (grados) de una serie unitaria por frame: residuo contra su
+    media movil centrada de ~0.5 s, RMS por bloques de ~1 s y mediana de los
+    bloques. `extraer(frame)` da un vector unitario (direccion) o un
+    cuaternion [x, y, z, w] (`cuaternion=True`), o None si falta."""
+    fps = fps or _fps(frames)
     ventana = ventana or max(5, int(round(fps * .5)) | 1)
     bloque = bloque or max(ventana, int(round(fps)))
-    dirs = []
+    serie = []
     for f in frames:
-        v = f.get("vec")
-        if not v:
+        u = extraer(f)
+        if not u:
             continue
-        d = [v[muneca * 3 + k] - v[codo * 3 + k] for k in range(3)]
-        n = math.sqrt(sum(x * x for x in d))
-        if n > 1e-6:
-            dirs.append([x / n for x in d])
-    if len(dirs) < ventana:
+        n = math.sqrt(sum(x * x for x in u))
+        if n <= 1e-6:
+            continue
+        u = [x / n for x in u]
+        # q y -q son la misma rotacion: alinear con el anterior para promediar.
+        if cuaternion and serie and sum(a * b for a, b in zip(u, serie[-1])) < 0:
+            u = [-x for x in u]
+        serie.append(u)
+    if len(serie) < ventana:
         return None
     errs, h = [], ventana // 2
-    for i in range(h, len(dirs) - h):
-        m = [sum(d[k] for d in dirs[i - h:i + h + 1]) for k in range(3)]
+    for i in range(h, len(serie) - h):
+        m = [sum(d[k] for d in serie[i - h:i + h + 1]) for k in range(len(serie[i]))]
         nm = math.sqrt(sum(x * x for x in m)) or 1
-        cos = sum(dirs[i][k] * m[k] / nm for k in range(3))
-        errs.append(math.degrees(math.acos(max(-1.0, min(1.0, cos)))))
+        cos = sum(serie[i][k] * m[k] / nm for k in range(len(m)))
+        if cuaternion:
+            errs.append(math.degrees(2 * math.acos(min(1.0, abs(cos)))))
+        else:
+            errs.append(math.degrees(math.acos(max(-1.0, min(1.0, cos)))))
     rms = [math.sqrt(sum(e * e for e in errs[i:i + bloque]) / len(errs[i:i + bloque]))
            for i in range(0, len(errs), bloque) if len(errs[i:i + bloque]) >= bloque // 2]
     return round(pct(rms, .5), 3) if rms else None
+
+
+def _antebrazo(codo, muneca):
+    def extraer(f):
+        v = f.get("vec")
+        if not v:
+            return None
+        return [v[muneca * 3 + k] - v[codo * 3 + k] for k in range(3)]
+    return extraer
+
+
+def _hueso_avatar(nombre):
+    return lambda f: ((f.get("avatar") or {}).get("q") or {}).get(nombre)
+
+
+def _jitter_deg(frames, codo, muneca, ventana=None, bloque=None):
+    """Jitter del antebrazo de entrada (`vec` crudo, docs/10 fase 3)."""
+    return _jitter_unitarios(frames, _antebrazo(codo, muneca),
+                             ventana=ventana, bloque=bloque)
+
+
+# Brazos para jitter: (codo, muneca) en el bloque de cuerpo del 152D y
+# huesos del avatar registrados por el visor (desde 2026-10-19).
+LADOS_JITTER = {"left": (2, 4, "Left"), "right": (3, 5, "Right")}
+HUESOS_JITTER = ("UpperArm", "LowerArm", "Hand")
+
+
+def _jitter_avatar(frames):
+    """Jitter de la pose aplicada al avatar, por lado y hueso."""
+    if not any(f.get("avatar") for f in frames):
+        return None
+    out = {}
+    for lado, (_, _, pref) in LADOS_JITTER.items():
+        out[lado] = {h: _jitter_unitarios(frames, _hueso_avatar(pref + h),
+                                          cuaternion=True)
+                     for h in HUESOS_JITTER}
+    return out
+
+
+def _jitter_auto(frames, quieto_deg=6.0):
+    """Jitter sin marcas: bloques de ~1 s con la mano seguida, el avatar en
+    TRACKING y el antebrazo de entrada quieto (dispersion < quieto_deg).
+    Mide entrada y avatar en los mismos bloques: la diferencia es lo que
+    quitan filtro, zona muerta y compuerta."""
+    fps = _fps(frames)
+    bloque = max(5, int(round(fps)))
+    ventana = max(5, int(round(fps * .5)) | 1)
+    out = {}
+    for lado, (codo, muneca, pref) in LADOS_JITTER.items():
+        extraer = _antebrazo(codo, muneca)
+        entrada, avatar = [], collections.defaultdict(list)
+        for i in range(0, len(frames) - bloque + 1, bloque):
+            blk = frames[i:i + bloque]
+            if not all((f.get("tracked") or {}).get(lado) for f in blk):
+                continue
+            if any(f.get("avatar") and f["avatar"].get("state") != "TRACKING"
+                   for f in blk):
+                continue
+            dirs = [extraer(f) for f in blk]
+            if any(not d or math.sqrt(sum(x * x for x in d)) < 1e-6 for d in dirs):
+                continue
+            dirs = [[x / math.sqrt(sum(y * y for y in d)) for x in d] for d in dirs]
+            m = [sum(d[k] for d in dirs) for k in range(3)]
+            nm = math.sqrt(sum(x * x for x in m)) or 1
+            dispersion = max(math.degrees(math.acos(max(-1.0, min(1.0,
+                sum(d[k] * m[k] / nm for k in range(3)))))) for d in dirs)
+            if dispersion >= quieto_deg:
+                continue
+            j = _jitter_unitarios(blk, extraer, ventana=ventana, bloque=bloque,
+                                  fps=fps)
+            if j is not None:
+                entrada.append(j)
+            for h in HUESOS_JITTER:
+                ja = _jitter_unitarios(blk, _hueso_avatar(pref + h), cuaternion=True,
+                                       ventana=ventana, bloque=bloque, fps=fps)
+                if ja is not None:
+                    avatar[h].append(ja)
+        out[lado] = {"bloques": len(entrada),
+                     "entrada": round(pct(entrada, .5), 3) if entrada else None,
+                     "avatar": {h: round(pct(v, .5), 3) for h, v in avatar.items()}
+                     or None}
+    return out
+
+
+def _fluidez(perfs, movimiento_deg=10.0):
+    """Fluidez del render (evento perf `render_motion`, web desde
+    2026-10-19). En segundos con movimiento visible (giro acumulado del
+    hueso que mas se mueve > movimiento_deg): que fraccion de renders cambia
+    la pose y cuantos cambios hay por frame de camara. ~1 cambio por frame de
+    camara = el avatar avanza a saltos al ritmo de la camara."""
+    seg = []
+    for p in perfs:
+        m = p.get("render_motion") or {}
+        if not m.get("renders") or (m.get("total_deg") or 0) <= movimiento_deg:
+            continue
+        cam = (p.get("fps") or {}).get("inference") or 0
+        seg.append({"ratio": m["changed"] / m["renders"],
+                    "cambios": m["changed"], "renders": m["renders"],
+                    "por_frame": m["changed"] / cam if cam else None,
+                    "max": m.get("max_deg") or 0})
+    if not seg:
+        return None
+    por_frame = [x["por_frame"] for x in seg if x["por_frame"] is not None]
+    return {"segundos_con_movimiento": len(seg),
+            "renders_con_cambio_pct": round(100 * pct([x["ratio"] for x in seg], .5), 1),
+            "cambios_por_segundo": pct([x["cambios"] for x in seg], .5),
+            "renders_por_segundo": pct([x["renders"] for x in seg], .5),
+            "cambios_por_frame_camara": round(pct(por_frame, .5), 2) if por_frame else None,
+            "paso_max_deg_p95": round(pct([x["max"] for x in seg], .95), 2)}
 
 
 def _perdida(frames):
@@ -342,6 +493,14 @@ def gates(registros):
                         "capture_worker": _worker(meta)[0],
                         "capture_worker_mode": _worker(meta)[1],
                         "capture_mode": meta.get("capture_mode"),
+                        "tracking_profile": meta.get("tracking_profile") or "sensible",
+                        "pose_transitions": meta.get("pose_transitions"),
+                        "camera": meta.get("camera"),
+                        "calentamiento": next(({"descartados": r.get("discarded"),
+                                                "ms": r.get("ms")}
+                                               for r in registros
+                                               if r.get("type") == "capture_warmup"),
+                                              None),
                         "protocol": meta.get("protocol") or "cuerpo",
                         "frames": len(frames),
                         "maniobras": {k: len(solo(k)) for k in sorted(mans)}}}
@@ -357,7 +516,9 @@ def gates(registros):
     # tracking = 0 por diseno, no por lentitud.
     con_manos = [(p.get("fps") or {}).get("tracking") for p in perfs]
     con_manos = [x for x in con_manos if isinstance(x, (int, float)) and x > 0]
-    f1 = {"perf_events": len(perfs)}
+    # Niveles por dispositivo vistos (Android, DeviceTier.kt); web no manda.
+    f1 = {"perf_events": len(perfs),
+          "tiers": sorted({p["tier"] for p in perfs if isinstance(p.get("tier"), str)})}
     if not perfs or not lat:
         f1["veredicto"] = "SIN_DATOS"
     else:
@@ -407,13 +568,21 @@ def gates(registros):
                 _deltas(perfs, "invalid_transforms"))
     codigos_seg = collections.Counter()
     articulaciones = collections.Counter()
+    # Ajustes aceptados (no congelan): recorte angular, volteo confirmado,
+    # deriva de longitud auditada.
+    ajustes = collections.Counter()
+    recortes = collections.Counter()
     for p in perfs:
         codigos_seg.update(p.get("safety_codes") or {})
         articulaciones.update(p.get("safety_joints") or {})
+        ajustes.update(p.get("safety_adjustments") or {})
+        recortes.update(p.get("safety_clamped_joints") or {})
     f3 = {"rechazos_compuerta": rechazos,
           "rechazos_por_frame": round(rechazos / len(frames), 3) if frames else None,
           "codigos_compuerta": dict(codigos_seg.most_common()),
           "articulaciones_compuerta": dict(articulaciones.most_common(8)),
+          "ajustes_compuerta": dict(ajustes.most_common()),
+          "articulaciones_recortes": dict(recortes.most_common(8)),
           "teleports": _deltas(perfs, "teleports")}
     if not any("safety_rejections" in (p.get("counters") or {}) for p in perfs):
         f3["nota"] = ("sesion anterior al 2026-10-04: rechazos contados por "
@@ -421,6 +590,11 @@ def gates(registros):
     estatica = solo("estatica") or solo("quieto")
     f3["jitter_deg"] = {"left": _jitter_deg(estatica, 2, 4),
                         "right": _jitter_deg(estatica, 3, 5)} if estatica else None
+    # Informativos (no deciden el veredicto): jitter de la pose aplicada al
+    # avatar en el paso estatico y jitter automatico en bloques quietos.
+    f3["jitter_avatar_deg"] = _jitter_avatar(estatica) if estatica else None
+    f3["jitter_auto"] = _jitter_auto(frames) if frames else None
+    f3["fluidez"] = _fluidez(perfs)
     jit = [v for v in (f3["jitter_deg"] or {}).values() if v is not None]
     if not perfs:
         f3["veredicto"] = "SIN_DATOS"
@@ -481,6 +655,7 @@ def baseline(res):
         "platform": meta.get("platform"),
         "screen": meta.get("screen"),
         "capture_mode": meta.get("capture_mode"),
+        "tracking_profile": meta.get("tracking_profile") or "sensible",
         "capture_worker": _worker(meta)[0],
         "capture_worker_mode": _worker(meta)[1],
         "device": meta.get("user_agent") or meta.get("device"),

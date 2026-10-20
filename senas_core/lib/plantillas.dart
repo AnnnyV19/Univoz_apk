@@ -109,6 +109,68 @@ class _Plantilla {
   const _Plantilla(this.signId, this.gloss, this.espanol, this.seq);
 }
 
+/// Una plantilla de cualquier fuente, lista para el clasificador.
+class PlantillaFuente {
+  final String signId;
+  final String gloss;
+  final String espanol;
+  final List<List<double>> seq;
+  const PlantillaFuente(this.signId, this.gloss, this.espanol, this.seq);
+}
+
+/// De donde vienen las plantillas base (excluyentes: ver [cargarDiccionario]).
+enum OrigenPlantillas { paquete, sincronizadas }
+
+bool _esEspejo(String signId) => signId.contains('espejo');
+
+/// Arma el clasificador con las plantillas base (paquete o sincronizadas) y
+/// las muestras locales. Con [espejar], cada plantilla suma su espejo
+/// (persona zurda): medido en el paquete por leave-one-out, sin espejos una
+/// sena hecha con la otra mano acierta 11 % y con espejos 65.8 %, a costa de
+/// 0.6 puntos para la mano habitual (66.4 -> 65.8). No se espeja un espejo
+/// ni una plantilla que ya trae el suyo (`<id>#espejo`).
+Diccionario armarClasificador({
+  required List<PlantillaFuente> base,
+  required OrigenPlantillas origenBase,
+  required List<PlantillaFuente> locales,
+  required bool espejar,
+  double maxDistance = 0.55,
+  double minMargin = 0.12,
+}) {
+  final clasificador =
+      DtwClassifier(maxDistance: maxDistance, minMargin: minMargin);
+  final glosas = <String>{};
+  var espejadas = 0;
+  void agregar(List<PlantillaFuente> fuente, String Function(PlantillaFuente) idEspejo) {
+    final ids = fuente.map((p) => p.signId).toSet();
+    for (final p in fuente) {
+      clasificador.add(p.signId, p.gloss, p.seq, espanol: p.espanol);
+      glosas.add(p.gloss);
+      final id = idEspejo(p);
+      if (!espejar || _esEspejo(p.signId) || ids.contains(id)) continue;
+      // El espejo se calcula al vuelo en vez de guardarse: es barato y evita
+      // duplicar plantillas en disco.
+      clasificador.add(id, p.gloss, p.seq.map(mirrorFrame).toList(),
+          espanol: p.espanol);
+      espejadas++;
+    }
+  }
+
+  agregar(base, (p) => '${p.signId}#espejo');
+  agregar(locales, (p) => 'local-espejo:${p.gloss}');
+  return Diccionario(
+    clasificador,
+    ResumenDiccionario(
+      delPaquete: origenBase == OrigenPlantillas.paquete ? base.length : 0,
+      sincronizadas:
+          origenBase == OrigenPlantillas.sincronizadas ? base.length : 0,
+      locales: locales.length,
+      espejadas: espejadas,
+      senasDistintas: glosas.length,
+    ),
+  );
+}
+
 /// Construye el clasificador con todo lo disponible. Llamalo de nuevo
 /// despues de grabar muestras nuevas para que entren al reconocimiento.
 Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
@@ -116,56 +178,29 @@ Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
   await almacen.cargar();
   final ajustes = almacen.ajustes;
 
-  final clasificador = DtwClassifier(
-    maxDistance: ajustes.maxDistance,
-    minMargin: ajustes.minMargin,
-  );
-
-  final glosas = <String>{};
-  var delPaquete = 0;
-  var sincronizadas = 0;
-  var locales = 0;
-  var espejadas = 0;
-
   // El paquete del APK solo se usa si todavia no se sincronizo nunca: una
   // vez que hay diccionario bajado de la base, ese es el bueno, y sumar los
   // dos duplicaria cada plantilla.
-  if (almacen.sincronizadas.isEmpty) {
-    for (final p in await _leerPaquete(ruta)) {
-      clasificador.add(p.signId, p.gloss, p.seq, espanol: p.espanol);
-      glosas.add(p.gloss);
-      delPaquete++;
-    }
-  } else {
-    for (final p in almacen.sincronizadas) {
-      clasificador.add(p.signId, p.gloss, p.seq, espanol: p.espanol);
-      glosas.add(p.gloss);
-      sincronizadas++;
-    }
-  }
-
-  for (final m in almacen.muestras) {
-    clasificador.add('local:${m.gloss}', m.gloss, m.seq, espanol: m.espanol);
-    glosas.add(m.gloss);
-    locales++;
-    if (ajustes.espejoAutomatico) {
-      // El espejo se calcula al vuelo en vez de guardarse: es barato y evita
-      // duplicar el archivo de muestras en disco.
-      clasificador.add(
-          'local-espejo:${m.gloss}', m.gloss, m.seq.map(mirrorFrame).toList(),
-          espanol: m.espanol);
-      espejadas++;
-    }
-  }
-
-  return Diccionario(
-    clasificador,
-    ResumenDiccionario(
-      delPaquete: delPaquete,
-      sincronizadas: sincronizadas,
-      locales: locales,
-      espejadas: espejadas,
-      senasDistintas: glosas.length,
-    ),
+  final sincronizado = almacen.sincronizadas.isNotEmpty;
+  final base = sincronizado
+      ? [
+          for (final p in almacen.sincronizadas)
+            PlantillaFuente(p.signId, p.gloss, p.espanol, p.seq),
+        ]
+      : [
+          for (final p in await _leerPaquete(ruta))
+            PlantillaFuente(p.signId, p.gloss, p.espanol, p.seq),
+        ];
+  return armarClasificador(
+    base: base,
+    origenBase:
+        sincronizado ? OrigenPlantillas.sincronizadas : OrigenPlantillas.paquete,
+    locales: [
+      for (final m in almacen.muestras)
+        PlantillaFuente('local:${m.gloss}', m.gloss, m.espanol, m.seq),
+    ],
+    espejar: ajustes.espejoAutomatico,
+    maxDistance: ajustes.maxDistance,
+    minMargin: ajustes.minMargin,
   );
 }

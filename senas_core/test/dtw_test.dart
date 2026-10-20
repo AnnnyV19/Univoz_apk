@@ -99,6 +99,22 @@ void main() {
     expect(q.gloss, 'AGUA');
   });
 
+  test('classifyRanking decide igual que classify con un solo DTW', () {
+    final clf = DtwClassifier(prefilter: 0);
+    clf.add('1', 'CASA', a);
+    clf.add('2', 'AGUA', b);
+    for (final q in [a, b]) {
+      final ranking = clf.rank(q);
+      final p = clf.classifyRanking(ranking);
+      final r = clf.classify(q);
+      expect(p.gloss, r.gloss);
+      expect(p.distance, r.distance);
+      expect(p.margin, r.margin);
+      expect(p.aceptada, r.aceptada);
+    }
+    expect(clf.classifyRanking(const []).aceptada, isFalse);
+  });
+
   test('rechaza cuando nada se parece', () {
     final clf = DtwClassifier(prefilter: 0);
     clf.add('1', 'CASA', a);

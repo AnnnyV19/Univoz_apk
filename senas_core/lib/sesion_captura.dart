@@ -13,6 +13,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'camera_bridge.dart';
+import 'sign_norm.dart' show calidadFrame;
 
 const String kSessionSchema = 'SessionLogV1';
 
@@ -146,25 +147,82 @@ SumideroSesion sumideroArchivo(Directory dir) => (id, lineas) async {
       return true;
     };
 
-/// Registro de un frame de camara nativa para la sesion.
+double? _r3(Object? v) =>
+    v is num && v.isFinite ? (v * 1e3).round() / 1e3 : null;
+
+/// Puntos que llegan del canal: plano (Float64List, [ancho] por punto) o ya
+/// anidados.
+List<List<double>>? _puntosCanal(Object? raw, int ancho) {
+  if (raw is! List) return null;
+  if (raw.isNotEmpty && raw.first is List) {
+    return [
+      for (final p in raw) [for (final v in p as List) (v as num).toDouble()]
+    ];
+  }
+  final plano = [for (final v in raw) (v as num).toDouble()];
+  return [
+    for (var i = 0; i + ancho <= plano.length; i += ancho)
+      plano.sublist(i, i + ancho)
+  ];
+}
+
+/// Registro de un frame de camara nativa para la sesion, con el esquema de
+/// las sesiones web (index.html, sesionActual.frame): `hands` lleva la
+/// entrada de la captura (candidatas, compuerta, nacimiento, lados) para
+/// que tools/rig-tests/paridad/replay_sesion.mjs reproduzca la captura del
+/// telefono y la compare con la web.
 Map<String, dynamic> frameDeSesion(LandmarkFrame f, {int? id}) {
   final vec = f.normalize();
   final ss = f.signSpace();
+  final entrada = f.handsIn;
+  final track = f.track;
   return {
     't': f.timestampMs,
     if (id != null) 'id': id,
     'mode': f.captureMode,
     if (f.imageAspect != null) 'aspect': f.imageAspect,
+    if (f.inferMs != null) 'ms': {'infer': f.inferMs},
+    if (f.poseRan != null) 'pose_ran': f.poseRan,
+    if (f.tier != null) 'tier': f.tier,
+    if (f.thermal != null) 'thermal': f.thermal,
     'pose': compactarPuntos(f.pose),
     'world': compactarPuntos(f.poseMundo),
     'hands': {
+      if (entrada != null) ...{
+        'candidates': [
+          for (final c in (entrada['candidates'] as List? ?? const []))
+            {
+              'lm': compactarPuntos(_puntosCanal((c as Map)['lm'], 3)),
+              'label': c['label'] ?? '',
+              'conf': _r3(c['conf'] ?? .5),
+            },
+        ],
+        'accepted': entrada['accepted'],
+        'unanchored': entrada['unanchored'],
+        'rejected': [
+          for (final r in (entrada['rejected'] as List? ?? const []))
+            {'index': (r as List)[0], 'code': r[1]},
+        ],
+        'passed': entrada['passed'],
+        'assignment': entrada['assignment'],
+        'usable': entrada['usable'],
+      },
       'left': compactarPuntos(f.left),
       'right': compactarPuntos(f.right),
       'left_world': compactarPuntos(f.leftWorld),
       'right_world': compactarPuntos(f.rightWorld),
       'association': f.association,
     },
-    'tracked': {'left': f.left != null, 'right': f.right != null},
+    'tracked': {
+      'left': f.left != null,
+      'right': f.right != null,
+      if (track != null) ...{
+        'left_surface': (track['left'] as Map?)?['surface'],
+        'right_surface': (track['right'] as Map?)?['surface'],
+        'left_state': (track['left'] as Map?)?['state'],
+        'right_state': (track['right'] as Map?)?['state'],
+      },
+    },
     'face': f.face == null ? null : {'pts': compactarPuntos(f.face)},
     'skew_ms': f.sourceSkewMs,
     'vec': vec?.map(_r4).toList(growable: false),
@@ -175,7 +233,9 @@ Map<String, dynamic> frameDeSesion(LandmarkFrame f, {int? id}) {
             'mask': ss.mask,
             'mode': ss.mode,
           },
-    'quality': f.visibilidadMin,
+    // Calidad web (calcularCalidadFrameWeb): 0 si el frame no da vector.
+    'quality':
+        vec == null ? 0.0 : calidadFrame(f.pose, f.poseMundo, f.left, f.right),
     'errors': [for (final e in f.errors) e['code']],
   };
 }

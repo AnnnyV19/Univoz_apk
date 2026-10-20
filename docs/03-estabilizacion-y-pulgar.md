@@ -26,6 +26,24 @@ El visor actual ya:
 - usa nomenclatura de pulgar VRM distinta de dedos largos;
 - aplica límites de flexión;
 - mantiene continuidad mediante cuaterniones para brazo y muñeca.
+- recorta giros más rápidos que el límite, separa volteos palma/dorso y
+  aplica zona muerta angular suave en la compuerta (ver
+  [04](04-rig-ik-y-avatar.md#safety-gate));
+- vuelve a reposo y entra a la pose viva con mezcla por tiempo, no de golpe
+  ([04](04-rig-ik-y-avatar.md#estados-del-avatar-y-transiciones)).
+
+### Perfil de confianza de MediaPipe (web)
+
+| Perfil | Detección | Presencia | Seguimiento | Uso |
+|---|---:|---:|---:|---|
+| `sensible` (default) | .40 | .40 | .30 | sesión: ver también detecciones difíciles |
+| `estable` (`?perfil=estable`) | .65 | .55 | .55 | espejo con menos manos fantasma |
+
+Holistic no tiene confianza de seguimiento: usa detección y presencia (también
+`minHandLandmarksConfidence`). La cara queda fija en .4/.3. El perfil va en
+`meta.tracking_profile` y en el contexto de `analizar_sesion.py --gates`.
+Android conserva sus valores (`LandmarkEngine.kt`). Cambiar el default solo
+tras comparar sesiones de ambos perfiles con `--comparar`.
 
 El filtro actual recibe calidad global del frame; todavía no usa confianza
 individual por landmark. Usa una ventana MAD de hasta cinco muestras, umbral

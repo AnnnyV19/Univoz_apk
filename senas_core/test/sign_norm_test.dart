@@ -98,6 +98,41 @@ void main() {
     });
   }
 
+  // Motivos de rechazo y munecas de render: mismos datos que comprueban
+  // tools/test_norm.py y rig_motion_frame.test.mjs (web).
+  for (final rawCase in (data['validaciones'] as List? ?? const [])) {
+    final c = rawCase as Map<String, dynamic>;
+    final name = c['name'] as String;
+    test('validacion $name', () {
+      final f = c['frame'] as Map<String, dynamic>;
+      final render = f['render_wrists'] as Map<String, dynamic>?;
+      final motivos = <MotivoNorm>[];
+      final v = normalizeFrame(
+        _parseLandmarks(f['pose']),
+        _parseLandmarks(f['pose_mundo']),
+        left: f['left'] == null ? null : _parseLandmarks(f['left']),
+        right: f['right'] == null ? null : _parseLandmarks(f['right']),
+        munecasRender: render == null
+            ? null
+            : {
+                for (final e in render.entries)
+                  if (e.value != null)
+                    e.key: _parseVector(e.value),
+              },
+        motivos: motivos,
+      );
+      expect(
+          motivos.map((m) => [m.stage, m.code, m.side, m.landmark]).toList(),
+          c['motivos']);
+      if (c['expected'] == null) {
+        expect(v, isNull);
+      } else {
+        expect(v, isNotNull);
+        expect(_maxDiff(v!, _parseVector(c['expected'])), lessThan(tol));
+      }
+    });
+  }
+
   test('doble espejo devuelve el original', () {
     final f = (data['cases'] as List).first as Map<String, dynamic>;
     final v = _parseVector((f['expected_frames'] as List).first);

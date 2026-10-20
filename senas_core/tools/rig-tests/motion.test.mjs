@@ -286,13 +286,6 @@ test('web pipeline wires adaptive calibration and pose stride without changing v
   assert.match(html, /function normalizarFrameWeb\(pose, poseMundo, left, right,\s+renderWrists/);
 });
 
-test('web keeps raw semantic hands separate from stabilized render hands', () => {
-  const block = sourceBlock('manosDesdeResultado');
-  assert.match(block, /left:\s*ultimoTrackingWeb\.left\.raw/);
-  assert.match(block, /right:\s*ultimoTrackingWeb\.right\.raw/);
-  assert.match(block, /renderLeft:\s*ultimoTrackingWeb\.left\.renderLandmarks/);
-  assert.match(block, /renderRight:\s*ultimoTrackingWeb\.right\.renderLandmarks/);
-});
 
 test('overlay rejects non-finite and out-of-frame landmarks', () => {
   const c = runtime(['webCoord','webFinito','puntoEnCuadroWeb']);
@@ -302,37 +295,7 @@ test('overlay rejects non-finite and out-of-frame landmarks', () => {
   assert.equal(c.puntoEnCuadroWeb({x:NaN,y:.5,z:0}), false);
 });
 
-function validHand() {
-  const p = Array.from({length:21}, () => coord(.5,.6));
-  p[0] = coord(.50,.70);
-  p[1] = coord(.44,.65); p[2] = coord(.39,.60);
-  p[3] = coord(.36,.54); p[4] = coord(.34,.48);
-  p[5] = coord(.46,.62); p[6] = coord(.45,.54);
-  p[7] = coord(.44,.46); p[8] = coord(.44,.38);
-  p[9] = coord(.50,.60); p[10] = coord(.50,.50);
-  p[11] = coord(.50,.40); p[12] = coord(.50,.30);
-  p[13] = coord(.54,.61); p[14] = coord(.56,.52);
-  p[15] = coord(.57,.44); p[16] = coord(.58,.36);
-  p[17] = coord(.58,.64); p[18] = coord(.61,.57);
-  p[19] = coord(.63,.51); p[20] = coord(.64,.46);
-  return p;
-}
 
-test('hand geometry rejects broken connections before normalization', () => {
-  const c = runtime(['webCoord','webFinito','puntoEnCuadroWeb','webDistancia','webManoUtilizable'], {
-    kMargenManoWeb: .15,
-    kConexionesManoWeb: [
-      [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
-      [0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],
-      [0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17],
-    ],
-  });
-  assert.equal(c.webManoUtilizable(validHand()), true);
-  const outside = validHand(); outside[12] = coord(1.4,.3);
-  assert.equal(c.webManoUtilizable(outside), false);
-  const jump = validHand(); jump[12] = coord(.5,.02);
-  assert.equal(c.webManoUtilizable(jump), false);
-});
 
 test('production rotation writer never applies invalid transform', () => {
   const gate = createRigSafetyGate();
@@ -340,6 +303,7 @@ test('production rotation writer never applies invalid transform', () => {
   const c = runtime(['metaRigFrame', 'aplicarRotacionSegura'], {
     safetyGateFor: () => gate,
     reportSafetyAnomaly: () => {},
+    reportSafetyAdjustments: () => {},
     performance: {now: () => 1000},
   });
   c.aplicarRotacionSegura(h, 'left:Index:Proximal', [0.2, 0, 0], {
@@ -354,33 +318,8 @@ test('production rotation writer never applies invalid transform', () => {
   assert.equal(h.rotation.x, before);
 });
 
-function validPoseWorld() {
-  const p = Array.from({length:33}, () => coord(0,0,0));
-  p[11] = coord(-.2,1,0); p[12] = coord(.2,1,0);
-  p[13] = coord(-.42,.7,0); p[14] = coord(.42,.7,0);
-  p[15] = coord(-.55,.4,0); p[16] = coord(.55,.4,0);
-  p[23] = coord(-.15,0,0); p[24] = coord(.15,0,0);
-  return p;
-}
 
-function validPoseImage() {
-  const p = Array.from({length:33}, () => coord(.5,.5,0));
-  p[11] = coord(.4,.35); p[12] = coord(.6,.35);
-  p[13] = coord(.3,.5); p[14] = coord(.7,.5);
-  p[15] = coord(.25,.65); p[16] = coord(.75,.65);
-  p[23] = coord(.43,1.20); p[24] = coord(.57,1.20);
-  return p;
-}
 
-test('pose geometry rejects disconnected body landmarks', () => {
-  const c = runtime(['webCoord','webFinito','puntoEnCuadroWeb','webDistancia','webPoseGeometriaValida'], {
-    kMargenCuerpoWeb: .15,
-  });
-  const image = validPoseImage();
-  assert.equal(c.webPoseGeometriaValida(image, validPoseWorld()), true);
-  const broken = validPoseWorld(); broken[15] = coord(8,8,8);
-  assert.equal(c.webPoseGeometriaValida(image, broken), false);
-});
 
 function fingerRuntime(side) {
   const hand = new THREE.Object3D();
@@ -535,4 +474,69 @@ test('production default keeps hand shape chirality (finger toward camera)', () 
   // imagen (negativa = mas cerca de la camara = al frente de la persona).
   const haciaCamara = ctx.vectorManoAAvatar([0, 0, -1], base);
   assert.ok(haciaCamara.z > 0.99, `dedo hacia la camara invertido: z=${haciaCamara.z}`);
+});
+
+test('capture warm-up keeps late first frames off the avatar and ends once', () => {
+  const eventos = [];
+  const ctx = runtime(['reiniciarCalentamientoWeb', 'enCalentamientoWeb'], {
+    kCalentamientoMaxMs: 200, kCalentamientoFrames: 3, kCalentamientoTopeMs: 3000,
+    calentamientoWeb: {activo: true, inicio: 0, buenos: 0, descartados: 0},
+    eventoSesion: (type, data) => eventos.push([type, data]),
+  });
+  // Worker recien creado: 2.5 s, 1.3 s, luego normal.
+  assert.equal(ctx.enCalentamientoWeb(2500, 1000), true);
+  assert.equal(ctx.enCalentamientoWeb(1300, 1066), true);
+  assert.equal(ctx.enCalentamientoWeb(40, 1133), true);
+  assert.equal(ctx.enCalentamientoWeb(250, 1200), true); // racha cortada
+  assert.equal(ctx.enCalentamientoWeb(40, 1266), true);
+  assert.equal(ctx.enCalentamientoWeb(38, 1333), true);
+  assert.equal(ctx.enCalentamientoWeb(41, 1400), false);
+  // Objetos del contexto vm: comparar por valor serializado.
+  assert.equal(JSON.stringify(eventos),
+    JSON.stringify([['capture_warmup', {discarded: 6, ms: 400}]]));
+  // Despues del calentamiento un frame lento sigue moviendo el avatar.
+  assert.equal(ctx.enCalentamientoWeb(900, 1466), false);
+  assert.equal(eventos.length, 1);
+
+  // Equipo lento: nunca baja de 200 ms, el tope de 3 s termina igual.
+  ctx.reiniciarCalentamientoWeb();
+  assert.equal(ctx.enCalentamientoWeb(400, 0 + 1), true);
+  assert.equal(ctx.enCalentamientoWeb(400, 3002), false);
+});
+
+test('embedded perf carries smoothness and avatar state like the web perf', () => {
+  const start = html.indexOf('window.configurarSesion = function');
+  assert.ok(start > 0, 'configurarSesion exists');
+  const block = html.slice(start, html.indexOf('\n    };', start));
+  for (const field of ['render_motion: drenarFluidezRender()',
+    'avatar_state: webCameraState.avatarState',
+    'safety_adjustments: safetyAjustes',
+    'safety_clamped_joints: safetyAjustesArticulaciones']) {
+    assert.ok(block.includes(field), `perf embebido sin ${field}`);
+  }
+  // animar() usa el presupuesto de reposo solo en el telefono.
+  assert.match(html, /idleBudgetFor\(presupuestoRender\)/);
+});
+
+test('live frames tell Dart quiet/motion with the same adaptive filter as web', () => {
+  assert.match(html, /window\.configurarMovimiento = function/);
+  const start = html.indexOf('window.aplicarFrameVivo = function');
+  const block = html.slice(start, html.indexOf('\n    };', start));
+  // Despues del filtro adaptativo, no antes: usa sus diagnosticos del frame.
+  const filtro = block.indexOf('frameVivo = suavizarFrameWeb(');
+  const aviso = block.indexOf("'motion:'");
+  assert.ok(filtro > 0 && aviso > filtro, 'motion: sale despues de suavizarFrameWeb');
+  assert.ok(block.includes('intentionalMotion'), 'usa el umbral intencional del filtro');
+  assert.ok(block.includes('fingerMotionScore'), 'cuenta los dedos');
+});
+
+test('page capture delegates to the shared modules (rig_hand_capture, rig_motion_frame)', () => {
+  // La logica vive en los modulos y la fija el banco de paridad
+  // (paridad_manos.test.mjs); la pagina solo registra diagnostico y sesion.
+  assert.match(sourceBlock('manosDesdeResultado'), /webHandCapture\.process\(/);
+  assert.match(sourceBlock('normalizarFrameWeb'), /normalizeMotionFrame\(/);
+  assert.match(sourceBlock('webManoUtilizable'), /handUsable\(/);
+  assert.match(sourceBlock('webPoseGeometriaValida'), /poseGeometry\(/);
+  assert.match(sourceBlock('calcularCalidadFrameWeb'), /frameQuality\(/);
+  assert.match(html, /webHandCapture\.reset\(\)/);
 });

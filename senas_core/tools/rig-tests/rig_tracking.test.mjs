@@ -466,3 +466,14 @@ test('single hand prefers the arm whose pose wrist is actually visible', () => {
   });
   assert.equal(result.sideByIndex[0], 'right');
 });
+
+test('neutral (temporal) costs weigh side by real contact, not by the contact object', async () => {
+  // docs/14 H10: se pasaba el objeto contactBefore (siempre verdadero), asi
+  // el peso de lado neutral quedaba en .02 aunque no hubiera contacto.
+  const {readFileSync} = await import('node:fs');
+  const fuente = readFileSync(new URL('../../assets/avatar_viewer/rig_tracking.mjs',
+    import.meta.url), 'utf8');
+  const llamadas = fuente.match(/pose, t, contactBefore[^,]*, true\)/g) ?? [];
+  assert.equal(llamadas.length, 2);
+  for (const llamada of llamadas) assert.match(llamada, /contactBefore\.active/);
+});

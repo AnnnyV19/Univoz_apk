@@ -302,9 +302,10 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
           _titulo('Diccionario'),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Agregar versión espejada de cada muestra'),
+            title: const Text('Agregar versión espejada de cada plantilla'),
             subtitle: const Text(
-                'Cubre a quien seña con la otra mano sin grabar de nuevo. '
+                'Cubre a quien seña con la otra mano sin grabar de nuevo '
+                '(muestras, paquete y diccionario sincronizado). '
                 'Desactivalo solo si alguna seña usa izquierda/derecha como parte del significado.'),
             value: _a.espejoAutomatico,
             onChanged: (v) => setState(() => _a.espejoAutomatico = v),

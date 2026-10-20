@@ -52,7 +52,15 @@ dependencies {
     // MediaPipe: motor de reconocimiento de manos/cuerpo (ver
     // senas_core/INTEGRACION.md y
     // android/app/src/main/kotlin/LandmarkEngine.kt).
-    implementation("com.google.mediapipe:tasks-vision:1.0.0")
+    // tasks 1.0.0 declara protobuf-javalite pero llama Any.Builder.build()
+    // con la firma de protobuf-java: con javalite, crear Holistic tira
+    // NoSuchMethodError y la app se cierra al abrir la camara
+    // (senas_core MediaPipeProtobufTest). protobuf-java trae tambien el
+    // runtime lite de sus protos.
+    implementation("com.google.mediapipe:tasks-vision:1.0.0") {
+        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
+    }
+    implementation("com.google.protobuf:protobuf-java:4.26.1")
 
     // CameraX: captura de video para el reconocedor de señas.
     implementation("androidx.camera:camera-core:1.3.0")
