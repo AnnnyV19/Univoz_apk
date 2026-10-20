@@ -1,0 +1,30 @@
+# Dependencias para la ingesta de videos y el reconocimiento por DTW.
+# Instalar con: pip install -r tools/requirements.txt
+#
+# (Las de test/golden -- dart/pytest -- no estan aca porque no usan nada
+# de esto; sign_norm.py y dtw.py son Python puro sin dependencias.)
+
+mediapipe>=0.10.9
+opencv-python>=4.9
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+requests>=2.31
+
+# Para subir senas por link (tools/descargar.py, tools/ingest_enlaces.py, y
+# --video con una URL en tools/ingest_video.py). Conviene actualizarlo seguido
+# (pip install -U yt-dlp): cuando los sitios cambian, yt-dlp se arregla rapido
+# pero la version vieja deja de funcionar.
+yt-dlp>=2026.1.1
+
+# Opcional: solo hace falta si usas --excel en tools/ingest_carpeta.py para
+# sacar el texto en español/categoria de un Excel en vez del nombre de archivo.
+openpyxl>=3.1
+
+# OPCIONALES para identificar las senas dentro del video (pagina de ingesta):
+#   voz.py          escucha el audio (corre en tu computadora, sin internet
+#                   despues de bajar el modelo la primera vez)
+#   ocr_rotulos.py  lee el texto escrito dentro de la imagen
+# Sin ellas la pagina sigue funcionando (subtitulos y deteccion por imagen).
+faster-whisper>=1.0
+rapidocr>=2.0
+onnxruntime>=1.17
