@@ -380,12 +380,18 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
             child: Stack(
               children: [
                 Positioned.fill(
-                  child: Texture(textureId: camara.textureId),
+                  // Camara frontal = vista de espejo: se voltea la imagen y,
+                  // con ella, los puntos del esqueleto.
+                  child: Transform.flip(
+                    flipX: camara.frontal,
+                    child: Texture(textureId: camara.textureId),
+                  ),
                 ),
                 ValueListenableBuilder<LandmarkFrame?>(
                   valueListenable: _ctrl.frame,
                   builder: (_, frame, __) => CustomPaint(
-                    painter: SkeletonPainter(frame: frame),
+                    painter:
+                        SkeletonPainter(frame: frame, espejo: camara.frontal),
                     size: Size.infinite,
                   ),
                 ),

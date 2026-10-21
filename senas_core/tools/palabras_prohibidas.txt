@@ -1,0 +1,187 @@
+# =====================================================================
+#  Palabras que UNIVOZ no ensena ni reconoce
+# =====================================================================
+#  La leen  tools/moderar_senas.py  y  tools/aprobar_dataset.py.
+#  Es tuya: abrela con el Bloc de notas, agrega o quita lineas y guardala
+#  (UTF-8). No hace falta tocar ningun codigo.
+#
+#  TRES SECCIONES
+#    [bloquear]  la sena queda 'rechazada' (no se borra nada: se puede
+#                revertir) y nunca llega a plantillas.json ni a la app.
+#    [revisar]   palabras que dependen del contexto (salud, religion,
+#                sexualidad...). NO se aprueban solas: aprobar_dataset.py
+#                las salta y moderar_senas.py solo las lista. Si decides:
+#                  - que si, pasala a [permitir]
+#                  - que no, pasala a [bloquear]
+#    [permitir]  glosas EXACTAS que nunca se marcan (gana sobre las otras
+#                dos secciones). Util para resolver lo de [revisar].
+#
+#  COMO SE COMPARA
+#    - sin importar mayusculas ni acentos: "Hitler" = HITLER = hítler
+#    - por PALABRA COMPLETA, no por pedazo: "pedo" marca PEDO y ME_DIO_PEDO
+#      pero NO marca PEDRO ni ESPEDO. "casa" no marca CASACA.
+#    - mira la glosa (ADOLF_HITLER) y tambien el texto en espanol
+#    - varias palabras = esa frase seguida: "hijo de puta" marca HIJO_DE_PUTA
+#    - un * al final marca todas las que empiezan asi: "nazi*" marca
+#      NAZI, NAZIS, NAZISMO
+#    - un = al inicio exige que la glosa sea EXACTAMENTE esa:
+#      "=sexual" marca SEXUAL pero no BI_SEXUAL ni HETEROSEXUAL
+#    - la enne se respeta: "ano" (anatomia) y "año" (ANNO) son distintas
+#
+#  Para probar una palabra sin tocar la base:
+#      python tools/moderar_senas.py --probar "Adolf Hitler" casa pedo
+# =====================================================================
+
+
+[bloquear]
+
+# --- Odio y extremismo ---------------------------------------------------
+hitler*
+nazi*
+neonazi*
+esvastica*
+ku klux klan
+kkk
+supremacista*
+
+# --- Insultos y groserias ------------------------------------------------
+idiota*
+idiotez
+imbecil*
+estupido*
+estupida*
+baboso*
+babosa*
+tarado*
+tarada*
+mongolico*
+subnormal*
+pendejo*
+pendeja*
+cabron
+cabrona
+cabrones
+culero*
+culera*
+verga
+vergas
+mierda*
+joder
+jodido*
+jodida*
+chingar*
+chingad*
+chingaz*
+chingue*
+chingo
+puta
+putas
+putada*
+putazo*
+putear*
+puto
+putos
+pedo
+pedos
+maricon*
+marica
+joto*
+hdp
+
+# --- Clasista / despectivo ----------------------------------------------
+naco*
+naca
+nacas
+
+# --- Sexual explicito ----------------------------------------------------
+porno*
+pornografia*
+orgia*
+masturbar*
+
+# --- Terminos que ofenden a las personas sordas --------------------------
+# (lo correcto es "persona sorda"; "sordo" y "sorda" NO se bloquean)
+sordomudo*
+sordomuda*
+sordo mudo
+sorda muda
+mudito*
+mudita*
+
+
+[revisar]
+
+# --- Cuerpo y sexualidad (utiles en salud, tu decides) --------------------
+=sexo
+=sexual
+pene
+vagina
+vulva
+testiculo*
+perder la virginidad
+virginidad
+prostituta*
+prostitucion
+violacion*
+violar
+violador*
+pederasta*
+pedofil*
+aborto*
+
+# --- Palabras de bano (infantiles / salud) --------------------------------
+caca
+popo
+pipi
+cagar
+
+# --- Religion, narco, politica ---------------------------------------------
+santa muerte
+santisima muerte
+narco*
+narcotraficante*
+terrorista*
+terrorismo
+genocidio
+holocausto
+
+# --- Pueden ser insulto o estigma segun como se usen ---------------------
+morboso*
+sin verguenza
+sinverguenza*
+asno
+asna
+necio
+necia
+chafa
+loco
+loca
+locura
+retrasado*
+retrasada*
+minusvalido*
+lisiado*
+indio
+indios
+prieto*
+prieta*
+negrito*
+negrita*
+gringo*
+gringa*
+sirvienta*
+criada*
+chacha
+suicid*
+chingon*
+zorra
+zorras
+
+# --- No son palabras (entradas sueltas de la fuente) ---------------------
+=0pl
+=mmm
+
+
+[permitir]
+# Glosas exactas que quieres dejar pasar. Ejemplo (quita el #):
+# pene

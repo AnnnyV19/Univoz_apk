@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:senas_core/pantalla_avatar.dart';
+import 'aprender_screen.dart';
 import 'comunicarse_screen.dart';
 import '../services/conversation_profile.dart';
 
-/// Contenedor principal de la app: muestra la sección "Aprender" (el avatar
-/// 3D real de senas_core, [PantallaAvatar] — se le escribe, se elige una
-/// seña de una lista, o se le habla, y el avatar hace la seña) o la sección
+/// Contenedor principal de la app: muestra la sección "Aprender" (el camino
+/// tipo Duolingo de [AprenderScreen]; el avatar 3D libre de senas_core,
+/// [PantallaAvatar], queda en su botón "Diccionario") o la sección
 /// "Comunicarse" ([ComunicarseScreen]), según [initialIndex] — lo decide
 /// [PurposeScreen] antes de llegar acá.
 ///
@@ -38,6 +38,6 @@ class MainShellScreen extends StatelessWidget {
     // El avatar 3D real de senas_core (escribís, elegís de una lista, o
     // hablás una palabra, y el avatar hace la seña) es la sección
     // "Aprender".
-    return const PantallaAvatar();
+    return const AprenderScreen();
   }
 }

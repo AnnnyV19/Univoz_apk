@@ -58,6 +58,13 @@ class LandmarkFrame {
   final Map<String, dynamic> association;
   final List<Map<String, dynamic>> errors;
 
+  /// Relacion ancho / alto de la imagen que analizaron los modelos. Los
+  /// landmarks de imagen vienen divididos por el ancho y el alto POR SEPARADO,
+  /// asi que sin este dato no se sabe cuanto estiraron la mano (ver
+  /// isotropizarSecuencia en sign_norm.dart). Null si el lado nativo es una
+  /// version vieja que no lo manda: se asume [kAspectoAnalisisApp].
+  final double? aspecto;
+
   const LandmarkFrame({
     required this.timestampMs,
     this.pose,
@@ -71,7 +78,11 @@ class LandmarkFrame {
     this.sourceSkewMs,
     this.association = const {},
     this.errors = const [],
+    this.aspecto,
   });
+
+  /// El aspecto a usar para corregir la forma de la mano.
+  double get aspectoEfectivo => aspecto ?? kAspectoAnalisisApp;
 
   /// Decodifica desde el mapa que llega por el canal del lado nativo.
   /// [swapHands] cruza izquierda y derecha -- ver CameraBridge.cruzarManos.
@@ -105,7 +116,13 @@ class LandmarkFrame {
                 error.map((key, value) => MapEntry(key.toString(), value)))
             .toList(growable: false)
         : const <Map<String, dynamic>>[];
+    final iw = (map['iw'] as num?)?.toDouble();
+    final ih = (map['ih'] as num?)?.toDouble();
+    final aspecto = (iw != null && ih != null && iw > 0 && ih > 0)
+        ? iw / ih
+        : (map['aspecto'] as num?)?.toDouble();
     return LandmarkFrame(
+      aspecto: aspecto,
       timestampMs: (map['t'] as num).toInt(),
       pose: pose,
       poseMundo: poseMundo,
@@ -200,6 +217,7 @@ class LandmarkFrame {
         if (sourceSkewMs != null) 'source_skew_ms': sourceSkewMs,
         if (association.isNotEmpty) 'association': association,
         if (errors.isNotEmpty) 'errors': errors,
+        if (aspecto != null) 'aspecto': aspecto,
         if (visibilidadMin != null) 'visibilidad_min': visibilidadMin,
         'valido': esValido,
       };
@@ -218,6 +236,12 @@ class CamaraIniciada {
   /// vivo ya no se espeja y el valor nuevo siempre es false.
   final bool espejo;
 
+  /// Si la camara que arranco es la frontal. Las pantallas lo usan para
+  /// mostrar la vista como un espejo (imagen y landmarks volteados de
+  /// izquierda a derecha): solo es presentacion, los datos que van al
+  /// reconocimiento y al avatar nunca se voltean.
+  final bool frontal;
+
   /// Resolucion real del preview, ya corregida por rotacion. 0 si el lado
   /// nativo todavia no la informa (versiones viejas de LandmarkPlugin.kt).
   final int ancho;
@@ -228,6 +252,7 @@ class CamaraIniciada {
     this.espejo, {
     this.ancho = 0,
     this.alto = 0,
+    this.frontal = false,
   });
 
   /// Relacion de aspecto (ancho/alto) para usar en un widget AspectRatio.
@@ -263,6 +288,7 @@ class CameraBridge {
       r['espejo'] == true,
       ancho: (r['ancho'] as num?)?.toInt() ?? 0,
       alto: (r['alto'] as num?)?.toInt() ?? 0,
+      frontal: frontal,
     );
   }
 

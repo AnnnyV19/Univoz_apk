@@ -51,8 +51,9 @@ def main():
         sys.exit(
             "no hay ninguna muestra 'aprobada' todavia (norm_version="
             f"{sn.NORM_VERSION}). Aproba muestras primero -- ver INGESTA.md "
-            "paso 7, o corre: UPDATE sign_samples SET estado='aprobada' "
-            "WHERE estado='pendiente'; en el SQL Editor de Supabase."
+            "paso 7: importar_muestras.py --aprobar, o tools/aprobar_dataset.py para un dataset. "
+            "NO uses UPDATE ... WHERE estado='pendiente' a secas: hay miles de muestras "
+            "pendientes de datasets y se aprobarian todas de golpe."
         )
 
     plantillas = []
@@ -80,6 +81,13 @@ def main():
         "n_senas": len(glosas),
         "plantillas": plantillas,
     }
+
+    if len(plantillas) > 1500:
+        print(
+            f"AVISO: son {len(plantillas):,} plantillas (el plantillas.json que probaste en el telefono tiene ~1,300). "
+            "Este exportador NO cura (ni ejemplar del avatar ni letras v4): para la app usa "
+            "tools/moderar_senas.py --exportar, y prueba el tamano en el telefono antes."
+        )
 
     salida = os.path.abspath(args.salida)
     os.makedirs(os.path.dirname(salida), exist_ok=True)

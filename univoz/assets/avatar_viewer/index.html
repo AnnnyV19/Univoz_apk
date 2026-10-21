@@ -1205,7 +1205,7 @@
             schema: 'RigDiagnosticReportV1',
             created_at_ms: Date.now(),
             platform: this.metadata.platform ?? 'unknown',
-            avatar: this.metadata.avatar ?? 'univozM',
+            avatar: this.metadata.avatar ?? 'MODELO_UNIVOZ_v0',
             norm_version: '2.0.0',
             frame_dim: FRAME_DIM,
             calibration: calibration ? JSON.parse(JSON.stringify(calibration)) : null,
@@ -1305,7 +1305,7 @@
         const maxAgeMs = Math.max(0, Number(options.maxAgeMs ?? DEFAULT_MAX_AGE_MS));
         const maxSourceSkewMs = Math.max(
           0, Number(options.maxSourceSkewMs ?? DEFAULT_MAX_SKEW_MS));
-        const maxAngularVelocityRadS = Math.max(
+        let maxAngularVelocityRadS = Math.max(
           0, Number(options.maxAngularVelocityRadS ?? DEFAULT_MAX_ANGULAR_VELOCITY));
         const boneLengthTolerance = Math.max(
           0, Number(options.boneLengthTolerance ?? .15));
@@ -1524,6 +1524,12 @@
           check,
           reset() {
             states.clear();
+          },
+          // Para que la reproduccion de una seña grabada (datos limpios, sin
+          // sensor) pueda usar un limite mas holgado que el modo en vivo.
+          setMaxAngularVelocity(valor) {
+            const v = Number(valor);
+            if (Number.isFinite(v) && v >= 0) maxAngularVelocityRadS = v;
           },
           state(jointId) {
             const value = states.get(String(jointId));
@@ -2483,7 +2489,7 @@
     window.webCameraState = webCameraState;
 
     const rigDiagnostics = new RigDiagnosticBuffer({
-      platform: standaloneWeb ? 'web' : 'android', avatar: 'univozM',
+      platform: standaloneWeb ? 'web' : 'android', avatar: 'MODELO_UNIVOZ_v0',
     });
     rigDiagnostics.setEnabled(false);
     // Telemetría numérica efímera. Nunca guarda video ni imágenes y funciona
@@ -2551,12 +2557,35 @@
       });
     }
 
+    // Limite de velocidad angular de la compuerta: 24 rad/s en vivo (frena los
+    // saltos del detector); 40 rad/s al reproducir una seña grabada, ya sin
+    // huecos ni ruido, para que un gesto rapido legitimo no se congele.
+    const kVelGateVivo = 24;
+    const kVelGateReplay = 40;
+    let velocidadMaxGate = kVelGateVivo;
+    // Con direccion 3D cada falange tambien gira de lado y el pulgar tiene dos
+    // grados mas por hueso: un gesto legitimo de dedos (cerrar la R, juntar la
+    // pinza de la O) recorre mas angulo por cuadro que una sola flexion. Medido
+    // con las plantillas reales, con el limite original la compuerta congelaba
+    // ~3 veces mas dedos que con el metodo anterior; con x1.6 congela lo mismo
+    // o menos que el metodo anterior con su limite original.
+    const kFactorGateDedos = 1.6;
+    const velocidadGateDe = (jointId, base) =>
+      /:(Thumb|Index|Middle|Ring|Little):/.test(String(jointId))
+        ? base * kFactorGateDedos : base;
+    function fijarVelocidadGates(valor) {
+      velocidadMaxGate = valor;
+      for (const [jointId, gate] of rigSafetyGates.entries()) {
+        gate.setMaxAngularVelocity(velocidadGateDe(jointId, valor));
+      }
+    }
+
     function safetyGateFor(jointId) {
       if (!rigSafetyGates.has(jointId)) {
         rigSafetyGates.set(jointId, createRigSafetyGate({
           maxAgeMs: 500,
           maxSourceSkewMs: 120,
-          maxAngularVelocityRadS: 24,
+          maxAngularVelocityRadS: velocidadGateDe(jointId, velocidadMaxGate),
           recoveryFrames: 3,
           jointLimits: {
             min: [-Math.PI, -Math.PI, -Math.PI],
@@ -2779,6 +2808,112 @@
       orbita.update();
     }
 
+    // ---------------------------------------------------------------------
+    // Encuadres de la camara.
+    //
+    //   'cintura' (por defecto): el de siempre -- espejo y pantalla del
+    //             avatar, donde interesa ver los brazos completos.
+    //   'codos':  de los codos hacia arriba, mas cerca. Es el de Aprender:
+    //             las lecciones muestran al avatar en una tarjeta bajita y
+    //             ancha, y con el encuadre de cintura quedaba chico y lejos.
+    //
+    // 'codos' se calcula con las medidas del modelo (no con numeros fijos)
+    // para que siga bien si se cambia el avatar. Dart lo elige con
+    // AvatarBridge.encuadrar().
+    // ---------------------------------------------------------------------
+    let encuadreModo = 'cintura';
+    // Cuanto se baja (mundo) el borde de abajo del encuadre 'codos' para que
+    // quepa la mano de la seña en curso, y a cuanto va (se suaviza en animar).
+    let encuadreExtra = 0;
+    let encuadreExtraObjetivo = 0;
+    // Medidas del modelo a escala 1 (se multiplican por la escala actual):
+    // alto del hombro, largo del brazo y tope de la cabeza.
+    let medidasEncuadre = null;
+
+    // Pura (sin three ni DOM): se puede probar con numeros sueltos.
+    //   m      = { hombroY, brazo, topeY } a escala 1
+    //   escala = escala actual del avatar
+    //   reposo = cuanto bajan los brazos desde la T-pose (rad)
+    function calcularEncuadreCodos(m, escala, reposo, fovGrados, aspecto,
+        extraAbajo = 0) {
+      // Con el brazo en reposo el codo queda a brazo*sin(reposo) bajo el hombro.
+      const codoY = (m.hombroY - m.brazo * Math.sin(reposo)) * escala;
+      // el codo se ve entero; extraAbajo (mundo) baja el borde si la seña lo pide
+      const abajo = codoY - 0.03 * escala - Math.max(0, extraAbajo);
+      const arriba = m.topeY * escala + 0.05 * escala; // aire sobre la cabeza
+      const alto = arriba - abajo;
+      const tanMedio = Math.tan((fovGrados * Math.PI) / 360);
+      const distAlto = alto / (2 * tanMedio);
+      // A lo ancho tienen que caber los dos brazos abiertos. En una tarjeta
+      // ancha manda el alto; en una angosta, esto evita cortar las manos.
+      const ancho = 3.6 * m.brazo * escala;
+      const distAncho = ancho / (2 * tanMedio * aspecto);
+      return {
+        y: (arriba + abajo) / 2,
+        dist: Math.min(Math.max(distAlto, distAncho, 0.55), 1.8),
+        alto,
+      };
+    }
+
+    // Se llama una vez al cargar el modelo (T-pose, antes de posarlo).
+    function medirEncuadre() {
+      medidasEncuadre = null;
+      if (!vrm) return;
+      vrm.scene.updateMatrixWorld(true);
+      const esc = vrm.scene.scale.y || 1;
+      const posDe = (nombre) => {
+        const nodo = vrm.humanoid.getNormalizedBoneNode(nombre);
+        return nodo ? nodo.getWorldPosition(new THREE.Vector3()) : null;
+      };
+      const hombro = posDe(VRMHumanBoneName.LeftUpperArm);
+      const codo = posDe(VRMHumanBoneName.LeftLowerArm);
+      const cabeza = posDe(VRMHumanBoneName.Head);
+      if (!hombro || !codo || !cabeza) return;
+      const brazo = hombro.distanceTo(codo);
+      if (!(brazo > 0.05 * esc)) return;
+      // Tope de la cabeza (pelo incluido) con la caja del modelo; si sale
+      // algo absurdo, la cabeza mide ~0.2 sobre el hueso de la cabeza.
+      let tope = new THREE.Box3().setFromObject(vrm.scene).max.y;
+      if (!Number.isFinite(tope) || tope < cabeza.y ||
+          tope > cabeza.y + 0.6 * esc) {
+        tope = cabeza.y + 0.2 * esc;
+      }
+      medidasEncuadre = {
+        hombroY: hombro.y / esc,
+        brazo: brazo / esc,
+        topeY: tope / esc,
+      };
+    }
+
+    function aplicarEncuadre() {
+      let y = 1.22;
+      let yCamara = 1.25;
+      let dist = 1.3;
+      if (encuadreModo === 'codos') {
+        const aspecto = Number.isFinite(camera.aspect) && camera.aspect > 0.2
+          ? camera.aspect : 1.6;
+        const reposo = Number.isFinite(cal.reposo) ? cal.reposo : 1.4;
+        // Mientras el modelo carga: medidas tipicas de un VRoid de 1.55 m.
+        const m = medidasEncuadre || { hombroY: 1.25, brazo: 0.25, topeY: 1.56 };
+        const escala = medidasEncuadre && vrm ? (vrm.scene.scale.y || 1) : 1;
+        const e = calcularEncuadreCodos(m, escala, reposo, camera.fov, aspecto,
+          encuadreExtra);
+        y = e.y;
+        yCamara = e.y + 0.02;
+        dist = e.dist;
+      }
+      camera.position.set(0, yCamara, dist);
+      orbita.target.set(0, y, 0);
+      orbita.update();
+      camaraInicial.pos.copy(camera.position);
+      camaraInicial.target.copy(orbita.target);
+    }
+
+    window.encuadrarCamara = function (modo) {
+      encuadreModo = modo === 'codos' ? 'codos' : 'cintura';
+      aplicarEncuadre();
+    };
+
     scene.add(new THREE.AmbientLight(0xffffff, 1.1));
     const luzDirigida = new THREE.DirectionalLight(0xffffff, 0.9);
     luzDirigida.position.set(1, 2, 1.5);
@@ -2788,6 +2923,7 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
+      if (encuadreModo !== 'cintura') aplicarEncuadre();
     });
 
     // ---------------------------------------------------------------------
@@ -2797,10 +2933,42 @@
     let anchoHombrosAvatar = 0.34; // fallback tipico si no se puede medir
 
     const loader = new GLTFLoader();
+    // VRM 1.0 -> mismo marco que VRM 0.0.
+    //
+    // Todo el rig de este visor (signos de los brazos, giro de los dedos, IK)
+    // se escribio y se verifico en el telefono con VRM 0.0: el personaje mira
+    // a -Z y su izquierda es -X, y se gira media vuelta al cargarlo (ver
+    // onAvatarCargado). Un VRM 1.0 viene al reves (mira a +Z, izquierda en
+    // +X): cargado tal cual, el rig queda espejado y los brazos suben en vez
+    // de bajar. Para no tocar el rig, un 1.0 se cuelga de un nodo girado
+    // media vuelta sobre Y ANTES de que three-vrm arme los huesos
+    // normalizados; asi queda en el mismo marco que un 0.0 y el resto del
+    // codigo no se entera. Los 0.0 pasan sin ningun cambio.
+    loader.register((parser) => ({
+      name: 'UNIVOZ_marco_vrm0',
+      beforeRoot() {
+        const json = parser.json || {};
+        const ext = json.extensions || {};
+        if (!ext.VRMC_vrm || ext.VRM) return null;
+        const escena = json.scenes && json.scenes[json.scene || 0];
+        if (!escena || !Array.isArray(escena.nodes) || !Array.isArray(json.nodes)) {
+          return null;
+        }
+        json.nodes.push({
+          name: 'UNIVOZ_giro_vrm1',
+          rotation: [0, 1, 0, 0], // media vuelta sobre Y
+          children: escena.nodes.slice(),
+        });
+        escena.nodes = [json.nodes.length - 1];
+        return null;
+      },
+    }));
     loader.register((parser) => new VRMLoaderPlugin(parser));
 
     function onAvatarCargado(gltf) {
       vrm = gltf.userData.vrm;
+      suavizador.items = null;
+      suavizador.activo = false;
       VRMUtils.removeUnnecessaryVertices(gltf.scene);
       VRMUtils.removeUnnecessaryJoints(gltf.scene);
       vrm.scene.rotation.y = Math.PI; // three-vrm mira a +Z, la camara esta en -Z
@@ -2820,6 +2988,10 @@
         const d = pL.distanceTo(pR);
         if (d > 0.05) anchoHombrosAvatar = d;
       }
+
+      // Medidas para el encuadre de Aprender (ver 'Encuadres de la camara').
+      medirEncuadre();
+      if (encuadreModo !== 'cintura') aplicarEncuadre();
 
       // Postura de reposo: brazos un poco separados del cuerpo para que
       // el 2-bone IK de abajo tenga margen para moverlos sin chocar con
@@ -2855,7 +3027,7 @@
     // WebView. Este modo carga el mismo VRM desde el servidor estatico y
     // habilita MediaPipe web al pulsar "Iniciar cámara".
     if (standaloneWeb) {
-      fetch('../avatar/univozM.vrm')
+      fetch('../avatar/MODELO_UNIVOZ_v0.vrm')
         .then((response) => {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.arrayBuffer();
@@ -2938,6 +3110,19 @@
       // y un delta de cuaternion respecto al rig medido. No depende de Euler
       // X ni de signos distintos para izquierda/derecha.
       usarMuneca: true,
+      // Dedos con direccion 3D completa (ManoIK): cada falange copia hacia
+      // donde apunta el dedo del usuario, asi salen los cruces (R), el
+      // circulo de la O y las pinzas. false vuelve al metodo anterior de un
+      // solo angulo por falange.
+      dedos3d: true,
+      // Separador de cuerpo: evita que muñecas, manos y antebrazos atraviesen
+      // el torso del avatar sin cambiar nunca la altura de la muñeca (ver
+      // SeparadorCuerpo). false = IK sola, como antes.
+      separarCuerpo: true,
+      // Separador de manos: una mano no atraviesa a la otra ni a su antebrazo
+      // (la mano que queda delante se adelanta; la altura de la muñeca no
+      // cambia nunca). false = solo el separador de cuerpo, como antes.
+      separarManos: true,
       // Si una mano desaparece, espera una gracia corta y devuelve sus
       // dedos/muñeca a bind pose. Desactivado conserva comportamiento legacy:
       // última pose válida hasta que mano reaparezca.
@@ -2953,6 +3138,20 @@
       right: { zInv: 1, dedos: -1, palmaInv: 1, palmaOff: 0 },
     };
 
+    // Estado de ManoIK. Va aqui, antes de configurarRig, porque en el modo
+    // web configurarRig corre al evaluar el script y llega a ponerManoReposo.
+    const estadoManoIK = {left: {}, right: {}};
+    const ultimoSolveManoIK = {left: null, right: null};
+    // Modelo de la mano para ManoIK (se arma al primer cuadro y se descarta
+    // cada vez que medirRig() vuelve a medir el rig).
+    const cacheManoIK = {left: null, right: null};
+    // ManoIK filtra 6 parametros por dedo (3 flexiones + 3 separaciones
+    // laterales; el pulgar, 3 giros de 2 componentes), en dos cadenas de 3.
+    const handAngleFilters3D = {
+      left: Array.from({length: 5}, () => createFastFingerAngleFilter(6)),
+      right: Array.from({length: 5}, () => createFastFingerAngleFilter(6)),
+    };
+
     function sanitizarCalibracionRig() {
       const limitado = (value, fallback, min, max) => {
         const numeric = Number(value);
@@ -2966,6 +3165,9 @@
       cal.ikMax = limitado(cal.ikMax, 2.60, cal.ikMin, Math.PI);
       cal.fingerSensitivity = limitado(cal.fingerSensitivity, 1, .75, 1.5);
       cal.wristCompensation = limitado(cal.wristCompensation, 0, -1.5, 1.5);
+      cal.dedos3d = cal.dedos3d !== false;
+      cal.separarCuerpo = cal.separarCuerpo !== false;
+      cal.separarManos = cal.separarManos !== false;
       cal.reposo = limitado(cal.reposo, 1.4, 0, Math.PI);
       for (const lado of ['left', 'right']) {
         cal[lado].dedos = Number(cal[lado].dedos) < 0 ? -1 : 1;
@@ -2994,6 +3196,12 @@
         if (c.resetHandOnLoss != null) {
           cal.resetHandOnLoss = c.resetHandOnLoss !== false;
         }
+        if (c.dedos_3d != null) cal.dedos3d = c.dedos_3d !== false;
+        if (c.dedos3d != null) cal.dedos3d = c.dedos3d !== false;
+        if (c.separar_cuerpo != null) cal.separarCuerpo = c.separar_cuerpo !== false;
+        if (c.separarCuerpo != null) cal.separarCuerpo = c.separarCuerpo !== false;
+        if (c.separar_manos != null) cal.separarManos = c.separar_manos !== false;
+        if (c.separarManos != null) cal.separarManos = c.separarManos !== false;
         if (c.reposo != null) cal.reposo = Number(c.reposo);
         const thumbs = c.thumb_calibration ?? c.thumbCalibration;
         if (thumbs) {
@@ -3016,6 +3224,7 @@
           calibrarEjesPulgar('right');
         }
         posarReposo();
+        if (encuadreModo !== 'cintura') aplicarEncuadre();
       } catch (e) { /* json invalido: se ignora */ }
     };
 
@@ -3094,6 +3303,10 @@
     const refRig = { left: null, right: null };
     const refHand = { left: null, right: null };
     const refTorso = {};
+    // Referencia del torso en reposo para el separador de cuerpo (se mide en
+    // medirRig): hueso del pecho, su matriz de mundo en reposo y el punto medio
+    // de los hombros.
+    let cuerpoRef = null;
     const avDerecha = new THREE.Vector3();
     const avArriba = new THREE.Vector3(0, 1, 0);
     // El avatar mira a +Z: es VRM 0.0 (mira a -Z) y la escena se voltea media
@@ -3128,6 +3341,8 @@
     }
 
     function medirRig() {
+      cacheManoIK.left = null;
+      cacheManoIK.right = null;
       // Hay que medir con TODO en cero: la pose de reposo ya rota los brazos
       // y falsearia las direcciones de referencia.
       for (const n of Object.values(VRMHumanBoneName)) {
@@ -3149,6 +3364,13 @@
           world: h.getWorldQuaternion(new THREE.Quaternion()),
         } : null;
       }
+
+      const pecho = bone(VRMHumanBoneName.Chest) || bone(VRMHumanBoneName.Spine);
+      cuerpoRef = pecho ? {
+        bone: pecho,
+        restWorld: pecho.matrixWorld.clone(),
+        origen: pL.clone().add(pR).multiplyScalar(0.5),
+      } : null;
 
       for (const lado of ['left', 'right']) {
         const up = bone(lado === 'left' ? VRMHumanBoneName.LeftUpperArm : VRMHumanBoneName.RightUpperArm);
@@ -3187,6 +3409,9 @@
         medio.getWorldPosition(pm);
         menique.getWorldPosition(pl);
         const marco = marcoMano(pm.clone().sub(c), pi.clone().sub(pl));
+        // Largo muñeca -> nudillo del medio: escala de la mano para el
+        // separador de cuerpo.
+        refRig[lado].palma = c.distanceTo(pm);
         refHand[lado] = marco ? {
           bone: ma,
           qWorld: ma.getWorldQuaternion(new THREE.Quaternion()),
@@ -3418,12 +3643,624 @@
       aplicar('RightShoulder', 0.30);
     }
 
-    function resolverBrazo(lado, base, hombro, codo, muneca, meta = {}) {
-      const r = refRig[lado];
-      if (!r) return;
-      const up = bone(lado === 'left' ? VRMHumanBoneName.LeftUpperArm : VRMHumanBoneName.RightUpperArm);
-      const lo = bone(lado === 'left' ? VRMHumanBoneName.LeftLowerArm : VRMHumanBoneName.RightLowerArm);
+    // <<CUERPO_INICIO>>
+    // ---------------------------------------------------------------------
+    // Separador de cuerpo: que las manos y los antebrazos del avatar no
+    // atraviesen su propio torso.
+    //
+    // Por que pasa: las plantillas guardan la muñeca en "anchos de hombro"
+    // medidos en una persona real; la mano de quien firma queda ~0.6 anchos
+    // delante de los hombros (el pecho de una persona delgada). El torso de
+    // este avatar (VRoid, con ropa) llega a ~0.67 anchos delante del plano
+    // de los hombros, asi que la IK dejaba la muñeca, la palma y el codo
+    // DENTRO del pecho.
+    //
+    // Que hace (matematica pura, sin THREE, probada en Node):
+    //  1. EMPUJE: si la mano o la muñeca quedan dentro del torso, el objetivo
+    //     de la muñeca se corre hacia ADELANTE (eje horizontal del avatar) lo
+    //     justo para salir. Nunca cambia la altura: el desplazamiento es
+    //     horizontal y se limita para que la IK no tenga que recortar el
+    //     alcance (si lo recortara, la muñeca cambiaria de altura).
+    //  2. GIRO DEL CODO: el codo gira alrededor del eje hombro-muñeca (±90°,
+    //     pasos de 10°) hasta que codo y antebrazo salen del torso, con el
+    //     menor giro posible. No mueve la muñeca ni la mano.
+    //  El torso se aproxima por una tabla de cortes medida en la malla del
+    //  modelo (superelipse N=2.4 por altura); se escala con el ancho de
+    //  hombros del avatar y sigue la inclinacion del pecho.
+    // ---------------------------------------------------------------------
+    const SeparadorCuerpo = (() => {
+      // Ancho de hombros (m) del modelo con el que se midio la tabla.
+      const ANCHO_REF = 0.2171117844;
+      // [altura respecto a los hombros, semiancho, frente, espalda] en
+      // metros del modelo de referencia. frente/espalda: distancia hacia
+      // delante (+) o atras (-) del plano de los hombros.
+      const TABLA = [
+        [-0.44975, 0.03959, 0.12749, -0.06461],
+        [-0.40975, 0.10216, 0.13767, -0.07384],
+        [-0.36975, 0.14139, 0.14769, -0.07623],
+        [-0.32975, 0.14360, 0.14929, -0.07325],
+        [-0.28975, 0.14154, 0.15114, -0.07024],
+        [-0.24975, 0.12474, 0.14455, -0.05285],
+        [-0.20975, 0.11377, 0.14352, -0.03949],
+        [-0.16975, 0.11194, 0.14599, -0.02193],
+        [-0.12975, 0.11715, 0.14581, -0.02410],
+        [-0.08975, 0.13830, 0.14622, -0.04259],
+        [-0.04975, 0.14151, 0.13412, -0.05232],
+        [-0.00975, 0.11926, 0.10004, -0.05647],
+        [0.03025, 0.05898, 0.06941, -0.05298],
+        [0.07025, 0.05170, 0.04617, -0.04899],
+      ];
+      const V0 = TABLA[0][0];
+      const V1 = TABLA[TABLA.length - 1][0];
+      const EXPONENTE = 2.4;
+      const MARGEN = 0.004;
+      const BANDA_U = 0.03;
+      const BANDA_V = 0.04;
+      const TOLERANCIA = 0.0015;
+      const MAX_EMPUJE = 0.20;
+      const TASA_GIRO = 12 * Math.PI / 180;
+      const GIROS = [];
+      for (let g = -90; g <= 90; g += 10) GIROS.push(g * Math.PI / 180);
+      const PASO_GIRO = 10 * Math.PI / 180;
+      const MAX_GIRO = 90 * Math.PI / 180;
+      // Radios (m, modelo de referencia) de lo que se prueba contra el torso.
+      const RADIO_MUNECA = 0.028;
+      const RADIOS_DEDO = [];
+      for (let i = 0; i < 20; i++) {
+        RADIOS_DEDO.push(i % 4 === 0 ? 0.022 : (i % 4 === 3 ? 0.004 : 0.009));
+      }
 
+      const suave = (x) => {
+        const t = x < 0 ? 0 : (x > 1 ? 1 : x);
+        return t * t * (3 - 2 * t);
+      };
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const cruz = (a, b) => [a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const suma = (a, b, s = 1) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s];
+      const largo = (a) => Math.sqrt(dot(a, a));
+
+      function fila(v) {
+        let i = 0;
+        while (i < TABLA.length - 2 && v > TABLA[i + 1][0]) i++;
+        const a = TABLA[i], b = TABLA[i + 1];
+        const t = (v - a[0]) / (b[0] - a[0]);
+        return [a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t,
+          a[3] + (b[3] - a[3]) * t];
+      }
+
+      // Cuanto hay que adelantar (m del modelo de referencia) una esfera de
+      // radio r en q = (derecha, arriba, adelante) para que salga del torso.
+      function necesidad(q, r) {
+        const u = q[0], v = q[1], w = q[2];
+        if (!(v > V0 && v < V1)) return 0;
+        const [a, wf, wb] = fila(v);
+        const R = r + MARGEN;
+        const A = a + R;
+        const B = (wf - wb) / 2 + R;
+        const wc = (wf + wb) / 2;
+        const au = Math.abs(u);
+        if (au >= A) return 0;
+        const t = w - (wc - 0.5 * B);
+        if (t <= 0) return 0;
+        const wSuperficie = wc + B * Math.pow(1 - Math.pow(au / A, EXPONENTE), 1 / EXPONENTE);
+        const n = wSuperficie - w;
+        if (n <= 0) return 0;
+        const g = suave((A - au) / BANDA_U) * suave((v - V0) / BANDA_V) *
+          suave((V1 - v) / BANDA_V) * suave(t / (0.5 * B));
+        return n * g;
+      }
+
+      // IK de dos huesos (misma que resolverBrazo) con giro del codo.
+      function ik(e, delta, giro) {
+        const r = largo(delta);
+        const rr = Math.min(e.radioMax, Math.max(e.radioMin, r));
+        const d = r > 1e-9 ? [delta[0] / r, delta[1] / r, delta[2] / r] : [0, 0, 1];
+        const muneca = suma(e.hombro, d, rr);
+        const quitar = (p) => suma(p, d, -dot(p, d));
+        let pl = quitar(e.codoDeseado);
+        if (dot(pl, pl) < 1e-8) pl = quitar(e.dirUp);
+        if (dot(pl, pl) < 1e-8) pl = [0, 1, 0];
+        pl = quitar(pl);
+        const lp = largo(pl);
+        pl = [pl[0] / lp, pl[1] / lp, pl[2] / lp];
+        if (giro !== 0) {
+          const c = Math.cos(giro), s = Math.sin(giro);
+          const x = cruz(d, pl);
+          pl = [pl[0] * c + x[0] * s, pl[1] * c + x[1] * s, pl[2] * c + x[2] * s];
+        }
+        const avance = (e.lenUp * e.lenUp - e.lenLo * e.lenLo + rr * rr) / (2 * rr);
+        const altura = Math.sqrt(Math.max(0, e.lenUp * e.lenUp - avance * avance));
+        const codo = suma(suma(e.hombro, d, avance), pl, altura);
+        return {codo, muneca};
+      }
+
+      // e: {hombro, delta, codoDeseado, dirUp, lenUp, lenLo, radioMin,
+      //     radioMax, frente, arriba, mano: 20 desplazamientos desde la muñeca (o
+      //     null), marco: {T (12, filas de [R|t]), origen, der, arr, fre,
+      //     escala}} -- todo en el mismo sistema de coordenadas del mundo.
+      // previo: giro (rad) del cuadro anterior o null. Devuelve
+      // {empuje, giro, giroObjetivo, costo, iter}.
+      function resolver(e, previo = null) {
+        const m = e.marco, T = m.T, k = m.escala;
+        const aCuerpo = (p) => {
+          const x = T[0] * p[0] + T[1] * p[1] + T[2] * p[2] + T[3] - m.origen[0];
+          const y = T[4] * p[0] + T[5] * p[1] + T[6] * p[2] + T[7] - m.origen[1];
+          const z = T[8] * p[0] + T[9] * p[1] + T[10] * p[2] + T[11] - m.origen[2];
+          const c = [x, y, z];
+          return [dot(c, m.der) / k, dot(c, m.arr) / k, dot(c, m.fre) / k];
+        };
+        const nec = (p, r) => necesidad(aCuerpo(p), r) * k;
+        // El objetivo ya recortado por el alcance del brazo (lo que haria la
+        // IK sola). El empuje se aplica sobre eso y NUNCA toca su altura:
+        // si adelantar la muñeca excede el alcance, se gira el brazo en
+        // horizontal (misma altura, mismo alcance) en vez de recortarlo.
+        const r0 = largo(e.delta);
+        const rr0 = Math.min(e.radioMax, Math.max(e.radioMin, r0));
+        const base = r0 > 1e-9 ? [e.delta[0] * rr0 / r0, e.delta[1] * rr0 / r0,
+          e.delta[2] * rr0 / r0] : [0, 0, 0];
+        const yb = dot(base, e.arriba);
+        const rTope = e.radioMax - 1e-3;
+        const H2 = rTope * rTope - yb * yb;
+        const hb = suma(base, e.arriba, -yb);
+        const maxS = H2 <= 0 ? 0 : MAX_EMPUJE;
+        const objetivo = (S) => {
+          if (S <= 0) return e.delta;
+          let hn = suma(hb, e.frente, S);
+          const n = largo(hn);
+          const H = Math.sqrt(H2);
+          if (n > H) hn = [hn[0] * H / n, hn[1] * H / n, hn[2] * H / n];
+          return suma(hn, e.arriba, yb);
+        };
+        let S = 0, giro = 0, costo = 0, it = 0;
+        for (it = 0; it < 10; it++) {
+          const d = objetivo(S);
+          let sol = ik(e, d, 0);
+          let necMano = nec(sol.muneca, RADIO_MUNECA);
+          if (e.mano) {
+            for (let i = 0; i < 20; i++) {
+              necMano = Math.max(necMano,
+                nec(suma(sol.muneca, e.mano[i]), RADIOS_DEDO[i]));
+            }
+          }
+          if (necMano > TOLERANCIA) {
+            if (S >= maxS - 1e-9) break;
+            S = Math.min(maxS, S + necMano);
+            continue;
+          }
+          let mejor = null;
+          for (const th of GIROS) {
+            sol = ik(e, d, th);
+            const arm = [[sol.codo, 0.038]];
+            for (const t of [0.2, 0.4, 0.6, 0.8]) {
+              arm.push([suma(sol.codo, suma(sol.muneca, sol.codo, -1), t), 0.04 - 0.01 * t]);
+            }
+            let c = 0;
+            for (const [p, r] of arm) c = Math.max(c, nec(p, r));
+            const j = c * 50 + Math.abs(th) * 0.01;
+            if (mejor === null || j < mejor.j) mejor = {j, th, c};
+          }
+          // Refina el giro (seccion aurea alrededor del mejor de la rejilla)
+          // para que el codo se mueva continuo y no a saltos de 10 grados.
+          const jGiro = (th) => {
+            const s2 = ik(e, d, th);
+            const ar = [[s2.codo, 0.038]];
+            for (const t of [0.2, 0.4, 0.6, 0.8]) {
+              ar.push([suma(s2.codo, suma(s2.muneca, s2.codo, -1), t), 0.04 - 0.01 * t]);
+            }
+            let c2 = 0;
+            for (const [p, r] of ar) c2 = Math.max(c2, nec(p, r));
+            return {j: c2 * 50 + Math.abs(th) * 0.01, th, c: c2};
+          };
+          let a2 = Math.max(-MAX_GIRO, mejor.th - PASO_GIRO);
+          let b2 = Math.min(MAX_GIRO, mejor.th + PASO_GIRO);
+          const gr = (Math.sqrt(5) - 1) / 2;
+          let x1 = b2 - gr * (b2 - a2), x2 = a2 + gr * (b2 - a2);
+          let f1 = jGiro(x1), f2 = jGiro(x2);
+          for (let n = 0; n < 8; n++) {
+            if (f1.j < f2.j) {
+              b2 = x2; x2 = x1; f2 = f1; x1 = b2 - gr * (b2 - a2); f1 = jGiro(x1);
+            } else {
+              a2 = x1; x1 = x2; f1 = f2; x2 = a2 + gr * (b2 - a2); f2 = jGiro(x2);
+            }
+          }
+          const fr = jGiro((a2 + b2) / 2);
+          if (fr.j < mejor.j) mejor = fr;
+          giro = mejor.th;
+          costo = mejor.c;
+          if (mejor.c < TOLERANCIA) break;
+          if (S >= maxS - 1e-9) break;
+          S = Math.min(maxS, S + Math.max(0.005, mejor.c * 0.5));
+        }
+        const giroObjetivo = giro;
+        if (previo !== null && Number.isFinite(previo)) {
+          giro = previo + Math.max(-TASA_GIRO, Math.min(TASA_GIRO, giro - previo));
+        }
+        return {empuje: S, delta: objetivo(S), giro, giroObjetivo, costo, iter: it};
+      }
+
+      return Object.freeze({resolver, necesidad, ik, ANCHO_REF, TABLA, GIROS});
+    })();
+    // <<CUERPO_FIN>>
+
+    // <<MANOS_INICIO>>
+    // ---------------------------------------------------------------------
+    // Separador de manos: que una mano no atraviese a la otra (ni al
+    // antebrazo de la otra). Una persona no pasa una mano por la otra: una
+    // queda apoyada sobre / delante de la otra.
+    //
+    // Por que pasa: la altura y el costado de cada muñeca vienen de video 2D,
+    // pero la PROFUNDIDAD entre las dos manos casi no se mide. Con las dos
+    // manos a la misma altura las plantillas dejan una mano dentro de la otra.
+    //
+    // Que hace (matematica pura, sin THREE, probada en Node):
+    //  - Mide la traslacion relativa HORIZONTAL minima que separa las dos
+    //    manos (esferas en muñeca, palma, nudillos y dedos + antebrazos). La
+    //    altura de cada muñeca NO se toca jamas: solo se desplaza en
+    //    horizontal (si la IK tuviera que recortar el alcance, se gira en
+    //    horizontal para conservar la altura).
+    //  - La profundidad cuesta menos que el costado (asi una mano queda
+    //    "sobre" la otra y no se corre de lado), y en profundidad se adelanta
+    //    la mano que ya esta delante (atras esta el torso).
+    //  - Cada paso vuelve a pasar por SeparadorCuerpo, asi que nada queda
+    //    dentro del torso. Maximo MAX_DESPL por mano; la tasa de cambio esta
+    //    limitada para que no haya saltos entre cuadros.
+    // ---------------------------------------------------------------------
+    const SeparadorManos = (() => {
+      const RADIO_MUNECA = 0.022;
+      const RADIOS_MANO = [];
+      for (let i = 0; i < 20; i++) {
+        RADIOS_MANO.push(i % 4 === 0 ? 0.014 : (i % 4 === 3 ? 0.006 : 0.008));
+      }
+      const RADIO_CODO = 0.040;
+      const TS_ANT = [0.2, 0.4, 0.6, 0.8];
+      const radioAnt = (t) => 0.044 - 0.027 * t;
+      const MARGEN = 0.001;
+      const TOL = 0.0004;
+      const MAX_DESPL = 0.045;   // m por mano (modelo de referencia)
+      const TASA = 0.01;         // m por cuadro
+      const LAMBDA = 1.5;        // costo del costado respecto a la profundidad
+      const KAPPA = 0.8;         // histeresis de la direccion
+      const LEJOS = 0.12;        // discos mas lejos que esto no importan
+      const N_PSI = 48;
+      const PASES = 6;
+
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const cruz = (a, b) => [a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const suma = (a, b, s = 1) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s];
+      const largo = (a) => Math.sqrt(dot(a, a));
+      const hayDespl = (a) => a[0] !== 0 || a[1] !== 0 || a[2] !== 0;
+
+      // Ajusta SOLO la parte horizontal de d para que el alcance quede en
+      // [rmin, rmax-1mm]; la altura no cambia.
+      function topeHorizontal(d, arriba, rmax, rmin) {
+        const rT = rmax - 1e-3;
+        const y = dot(d, arriba);
+        const h = suma(d, arriba, -y);
+        const nh = largo(h);
+        const n = largo(d);
+        if (n > rT) {
+          const H2 = rT * rT - y * y;
+          if (H2 > 0 && nh > 1e-9) return suma(h.map((v) => v * Math.sqrt(H2) / nh), arriba, y);
+        } else if (n < rmin) {
+          const H2 = rmin * rmin - y * y;
+          if (H2 > 0 && nh > 1e-9) return suma(h.map((v) => v * Math.sqrt(H2) / nh), arriba, y);
+        }
+        return d;
+      }
+
+      // Esferas [centro, radio] de la mano (con la muñeca) y del antebrazo.
+      function puntos(e, res, k) {
+        const sol = SeparadorCuerpo.ik(e, res.delta, res.giro);
+        const mano = [[sol.muneca, RADIO_MUNECA * k]];
+        if (e.mano) {
+          for (let i = 0; i < 20; i++) {
+            mano.push([suma(sol.muneca, e.mano[i]), RADIOS_MANO[i] * k]);
+          }
+        }
+        const ant = [];
+        const av = suma(sol.muneca, sol.codo, -1);
+        for (const t of TS_ANT) ant.push([suma(sol.codo, av, t), radioAnt(t) * k]);
+        ant.push([sol.codo, RADIO_CODO * k]);
+        return {mano, ant, muneca: sol.muneca};
+      }
+
+      function penetracion(A, B, margen) {
+        let pen = -1e9;
+        for (const [pa, ra] of A) {
+          for (const [pb, rb] of B) {
+            const dx = pa[0] - pb[0], dy = pa[1] - pb[1], dz = pa[2] - pb[2];
+            const p = ra + rb + margen - Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (p > pen) pen = p;
+          }
+        }
+        return pen;
+      }
+
+      // Discos (hx, hz, Rh) en el plano horizontal: la traslacion relativa T
+      // de A respecto a B debe cumplir |h + T| >= Rh (la altura es fija).
+      function restricciones(A, B, arriba, der, fre, margen, lejos) {
+        const out = [];
+        for (const [pa, ra] of A) {
+          for (const [pb, rb] of B) {
+            const v = [pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]];
+            const R = ra + rb + margen;
+            const dy = dot(v, arriba);
+            if (Math.abs(dy) < R) {
+              const h = suma(v, arriba, -dy);
+              const Rh = Math.sqrt(R * R - dy * dy);
+              if (largo(h) - Rh < lejos) out.push([dot(h, der), dot(h, fre), Rh]);
+            }
+          }
+        }
+        return out;
+      }
+
+      // Traslacion horizontal minima (costo anisotropico) fuera de todos los
+      // discos. Para cada direccion, los discos que cortan la recta dan
+      // intervalos prohibidos de t; se busca el menor t >= 0 fuera de ellos.
+      const COS_PSI = [], SIN_PSI = [], PESO_PSI = [];
+      for (let ip = 0; ip < N_PSI; ip++) {
+        const psi = 2 * Math.PI * ip / N_PSI;
+        COS_PSI.push(Math.cos(psi)); SIN_PSI.push(Math.sin(psi));
+        PESO_PSI.push(Math.sqrt(LAMBDA * Math.cos(psi) ** 2 + Math.sin(psi) ** 2));
+      }
+      const ivA = new Float64Array(4096), ivB = new Float64Array(4096);
+      function mejorT(cons, psiPrev) {
+        if (cons.length === 0) return {tx: 0, tz: 0, psi: null, t: 0};
+        const nc = Math.min(cons.length, ivA.length);
+        let mejor = null;
+        for (let ip = 0; ip < N_PSI; ip++) {
+          const nx = COS_PSI[ip], nz = SIN_PSI[ip];
+          let m = 0;
+          for (let j = 0; j < nc; j++) {
+            const c = cons[j];
+            const hn = c[0] * nx + c[1] * nz;
+            const disc = hn * hn - (c[0] * c[0] + c[1] * c[1]) + c[2] * c[2];
+            if (disc > 0) {
+              const s = Math.sqrt(disc);
+              if (-hn + s > 0) { ivA[m] = -hn - s; ivB[m] = -hn + s; m++; }
+            }
+          }
+          // Menor t >= 0 fuera de todos los intervalos abiertos (a, b): se
+          // avanza hasta el final de cada intervalo que contiene a t.
+          let cur = 0, cambio = true;
+          while (cambio) {
+            cambio = false;
+            for (let j = 0; j < m; j++) {
+              const a = ivA[j], b = ivB[j];
+              if (b > cur && (a < cur - 1e-12 || (cur === 0 && a <= 0))) { cur = b; cambio = true; }
+            }
+          }
+          const t = cur > 0 ? cur + 1e-4 : 0;
+          let c = t * PESO_PSI[ip];
+          const psi = 2 * Math.PI * ip / N_PSI;
+          if (psiPrev !== null && psiPrev !== undefined) {
+            c *= 1 + KAPPA * (1 - Math.cos(psi - psiPrev)) / 2;
+          }
+          if (mejor === null || c < mejor.c) mejor = {c, psi, t, nx, nz};
+        }
+        return {tx: mejor.nx * mejor.t, tz: mejor.nz * mejor.t, psi: mejor.psi, t: mejor.t};
+      }
+
+      // es: [entradaIzq, entradaDer] (mismo formato que SeparadorCuerpo.resolver);
+      // previos: [giroIzq, giroDer] o null; prevPar: {psi, sh: [[x,y,z],[x,y,z]]}
+      // del cuadro anterior (reciente) o null.
+      // Devuelve {res: [resIzq, resDer], sh, psi, limitado, pases}. Cada res es
+      // la salida de SeparadorCuerpo.resolver mas `desplazado` (true si la
+      // muñeca se corrio por la otra mano): res.delta es el objetivo final.
+      function resolverPar(es, previos, prevPar) {
+        const arriba = es[0].arriba, fre = es[0].frente;
+        let der = cruz(arriba, fre);
+        const ld = largo(der);
+        der = [der[0] / ld, der[1] / ld, der[2] / ld];
+        const k = es[0].marco.escala;
+        const margen = MARGEN * k, tol = TOL * k, maxD = MAX_DESPL * k, tasa = TASA * k;
+        const base0 = es.map((e) => {
+          const r0 = largo(e.delta);
+          const rr0 = Math.min(e.radioMax, Math.max(e.radioMin, r0));
+          const f = rr0 / Math.max(r0, 1e-9);
+          return [e.delta[0] * f, e.delta[1] * f, e.delta[2] * f];
+        });
+        const sh = [[0, 0, 0], [0, 0, 0]];
+        const w = [0.5, 0.5];
+        const bloq = [false, false];
+        const res = [null, null], P = [null, null];
+        const correr = (l) => {
+          const e = es[l];
+          let d = e.delta;
+          if (hayDespl(sh[l])) d = topeHorizontal(suma(base0[l], sh[l]), arriba, e.radioMax, e.radioMin);
+          const ee = Object.assign({}, e, {delta: d});
+          res[l] = SeparadorCuerpo.resolver(ee, previos ? previos[l] : null);
+          P[l] = puntos(ee, res[l], k);
+        };
+        correr(0); correr(1);
+        let psi = prevPar ? prevPar.psi : null;
+        let pases = 0;
+        for (let it = 0; it < PASES; it++) {
+          const A = P[0].mano.concat(P[0].ant), B = P[1].mano.concat(P[1].ant);
+          if (penetracion(A, B, margen) <= tol) break;
+          const cons = restricciones(A, B, arriba, der, fre, margen, LEJOS * k);
+          const T = mejorT(cons, psi);
+          if (T.t <= 1e-6) break;
+          psi = T.psi; pases++;
+          // T = traslacion de la izquierda respecto a la derecha. Costado:
+          // repartido. Profundidad: se adelanta la mano que queda delante.
+          let pl = [der[0] * w[0] * T.tx, der[1] * w[0] * T.tx, der[2] * w[0] * T.tx];
+          let pr = [-der[0] * w[1] * T.tx, -der[1] * w[1] * T.tx, -der[2] * w[1] * T.tx];
+          if (T.tz >= 0) {
+            if (!bloq[0]) pl = suma(pl, fre, T.tz); else pr = suma(pr, fre, -T.tz);
+          } else {
+            if (!bloq[1]) pr = suma(pr, fre, -T.tz); else pl = suma(pl, fre, T.tz);
+          }
+          sh[0] = suma(sh[0], pl); sh[1] = suma(sh[1], pr);
+          for (let l = 0; l < 2; l++) {
+            const n = largo(sh[l]);
+            if (n > maxD) sh[l] = sh[l].map((v) => v * maxD / n);
+          }
+          const wr0 = [P[0].muneca, P[1].muneca];
+          correr(0); correr(1);
+          [pl, pr].forEach((pedido, l) => {
+            let dw = suma(P[l].muneca, wr0[l], -1);
+            dw = suma(dw, arriba, -dot(dw, arriba));
+            const plan = largo(pedido);
+            if (plan > 1e-4) {
+              const logro = dot(dw, pedido) / plan / plan;
+              if (logro < 0.6) { bloq[l] = true; w[l] = Math.max(0.1, w[l] * 0.4); }
+            }
+          });
+          const s = w[0] + w[1]; w[0] /= s; w[1] /= s;
+          // Si ninguna muñeca avanzo (las dos topadas), no hay mas que hacer.
+          if (Math.max(largo(suma(P[0].muneca, wr0[0], -1)),
+            largo(suma(P[1].muneca, wr0[1], -1))) < 1e-4 * k) break;
+        }
+        let limitado = false;
+        if (prevPar && prevPar.sh) {
+          for (let l = 0; l < 2; l++) {
+            const d = suma(sh[l], prevPar.sh[l], -1);
+            const n = largo(d);
+            if (n > tasa) { sh[l] = suma(prevPar.sh[l], d, tasa / n); limitado = true; }
+          }
+          if (limitado) { correr(0); correr(1); }
+        }
+        res[0].desplazado = hayDespl(sh[0]);
+        res[1].desplazado = hayDespl(sh[1]);
+        return {res, sh, psi, limitado, pases};
+      }
+
+      return Object.freeze({resolverPar, mejorT, restricciones, topeHorizontal,
+        MAX_DESPL, TASA});
+    })();
+    // <<MANOS_FIN>>
+
+    // Pegamento entre el rig y SeparadorCuerpo (la matematica esta arriba).
+    const estadoCuerpo = {
+      left: {giro: null, ms: 0, ultimo: null},
+      right: {giro: null, ms: 0, ultimo: null},
+    };
+    const matrizCuerpoTmp = new THREE.Matrix4();
+    // Estado del separador de manos (cuadro anterior) y plan del cuadro en
+    // curso: aplicarFrame lo calcula una vez para los dos brazos y
+    // resolverBrazo lo consume.
+    const estadoManos = {psi: null, sh: null, ms: 0, ultimo: null};
+    let planManos = null;
+
+    function reiniciarSeparadorCuerpo() {
+      for (const lado of ['left', 'right']) {
+        estadoCuerpo[lado].giro = null;
+        estadoCuerpo[lado].ms = 0;
+      }
+      estadoManos.psi = null;
+      estadoManos.sh = null;
+      estadoManos.ms = 0;
+      planManos = null;
+    }
+
+    // Transformacion mundo -> torso en reposo. El torso rota con la
+    // inclinacion de la persona (aplicarTorso), la tabla del separador esta
+    // medida en reposo: T = reposo * actual^-1.
+    function marcoCuerpoActual() {
+      const c = cuerpoRef;
+      if (!c || !c.bone) return null;
+      c.bone.updateWorldMatrix(true, false);
+      matrizCuerpoTmp.copy(c.bone.matrixWorld).invert().premultiply(c.restWorld);
+      const e = matrizCuerpoTmp.elements;
+      return {
+        T: [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14]],
+        origen: [c.origen.x, c.origen.y, c.origen.z],
+        der: [avDerecha.x, avDerecha.y, avDerecha.z],
+        arr: [avArriba.x, avArriba.y, avArriba.z],
+        fre: [avFrente.x, avFrente.y, avFrente.z],
+        escala: anchoHombrosAvatar / SeparadorCuerpo.ANCHO_REF,
+      };
+    }
+
+    // Entrada de SeparadorCuerpo para un brazo (o null si falta algo).
+    function entradaCuerpoBrazo(base, puntosMano, hombroAvatar, deltaMano,
+      codoDeseado, r, radioMin, radioMax, marcoDado = null) {
+      const marco = marcoDado || marcoCuerpoActual();
+      if (!marco || !(marco.escala > 0.05) || !Number.isFinite(marco.escala)) return null;
+      // Puntos de la mano en el mundo del avatar, a escala del avatar
+      // (el nudillo del medio queda a la distancia real muñeca-nudillo).
+      let mano = null;
+      if (r.palma > 1e-4 && Array.isArray(puntosMano) && puntosMano.length >= 20) {
+        const mapa = (p) => vectorBaseAvatar(new THREE.Vector3(
+          p[0], p[1], cal.invertZ ? p[2] : -p[2]), base);
+        const largoMedio = mapa(puntosMano[8]).length();
+        if (largoMedio > 1e-6 && Number.isFinite(largoMedio)) {
+          const escalaMano = r.palma / largoMedio;
+          const lista = [];
+          for (let i = 0; i < 20; i++) {
+            const v = mapa(puntosMano[i]).multiplyScalar(escalaMano);
+            if (!Number.isFinite(v.x + v.y + v.z)) { lista.length = 0; break; }
+            lista.push([v.x, v.y, v.z]);
+          }
+          if (lista.length === 20) mano = lista;
+        }
+      }
+      return {
+        hombro: [hombroAvatar.x, hombroAvatar.y, hombroAvatar.z],
+        delta: [deltaMano.x, deltaMano.y, deltaMano.z],
+        codoDeseado: [codoDeseado.x, codoDeseado.y, codoDeseado.z],
+        dirUp: [r.dirUp.x, r.dirUp.y, r.dirUp.z],
+        lenUp: r.lenUp, lenLo: r.lenLo, radioMin, radioMax,
+        frente: [avFrente.x, avFrente.y, avFrente.z],
+        arriba: [avArriba.x, avArriba.y, avArriba.z],
+        mano, marco,
+      };
+    }
+
+    const ahoraMsCuerpo = () => typeof performance !== 'undefined' && performance.now
+      ? performance.now() : Date.now();
+
+    function resultadoCuerpoValido(res) {
+      return !!res && Number.isFinite(res.giro) && Number.isFinite(res.empuje) &&
+        res.delta.every(Number.isFinite);
+    }
+
+    function guardarEstadoCuerpo(lado, res, ahora) {
+      const st = estadoCuerpo[lado];
+      st.giro = res.giro;
+      st.ms = ahora;
+      st.ultimo = {empuje: res.empuje, giro: res.giro,
+        giroObjetivo: res.giroObjetivo, costo: res.costo,
+        desplazado: res.desplazado === true};
+    }
+
+    // El giro del codo cambia con tasa limitada solo si el cuadro anterior
+    // es reciente (si no, es una seña nueva: sin historial).
+    function giroPrevioCuerpo(lado, ahora) {
+      const st = estadoCuerpo[lado];
+      return st.giro !== null && ahora - st.ms < 250 ? st.giro : null;
+    }
+
+    // Devuelve {delta: [x,y,z], empuje, giro} o null (sin cambios). Falla
+    // cerrado: ante cualquier dato raro, la IK sigue como antes.
+    function separarCuerpoBrazo(lado, base, puntosMano, hombroAvatar,
+      deltaMano, codoDeseado, r, radioMin, radioMax) {
+      if (cal.separarCuerpo === false) return null;
+      try {
+        const entrada = entradaCuerpoBrazo(base, puntosMano, hombroAvatar,
+          deltaMano, codoDeseado, r, radioMin, radioMax);
+        if (!entrada) return null;
+        const ahora = ahoraMsCuerpo();
+        const res = SeparadorCuerpo.resolver(entrada, giroPrevioCuerpo(lado, ahora));
+        if (!resultadoCuerpoValido(res)) return null;
+        guardarEstadoCuerpo(lado, res, ahora);
+        return res;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    // Lo que resolverBrazo calcula antes de la IK: hombro del avatar,
+    // objetivo de la muñeca (en unidades del avatar), codo deseado y los
+    // limites de alcance. null si el brazo no se puede resolver.
+    function prepararBrazo(lado, base, hombro, codo, muneca) {
+      const r = refRig[lado];
+      if (!r) return null;
+      const up = bone(lado === 'left' ? VRMHumanBoneName.LeftUpperArm : VRMHumanBoneName.RightUpperArm);
       const hombroAvatar = new THREE.Vector3();
       up.getWorldPosition(hombroAvatar);
       // sign_norm entrega posiciones en anchos de hombro. Se convierten a
@@ -3433,9 +4270,8 @@
       const ganancia = lado === 'left' ? cal.leftArmGain : cal.rightArmGain;
       const deltaMano = vectorBaseAvatar(muneca.clone().sub(hombro), base)
         .multiplyScalar(anchoHombrosAvatar * Math.max(0.2, Math.min(2.0, ganancia)));
-      const objetivoMuneca = hombroAvatar.clone().add(deltaMano);
-      const radioObjetivo = objetivoMuneca.distanceTo(hombroAvatar);
-      if (radioObjetivo < 1e-4 || r.lenUp < 1e-4 || r.lenLo < 1e-4) return;
+      const radioObjetivo = hombroAvatar.clone().add(deltaMano).distanceTo(hombroAvatar);
+      if (radioObjetivo < 1e-4 || r.lenUp < 1e-4 || r.lenLo < 1e-4) return null;
 
       const limiteMin = Math.max(0, Math.min(Math.PI, cal.ikMin));
       const limiteMax = Math.max(limiteMin, Math.min(Math.PI, cal.ikMax));
@@ -3449,6 +4285,81 @@
         2 * r.lenUp * r.lenLo * Math.cos(angulo)));
       const radioMin = Math.max(radioFisicoMin, radioPorAngulo(limiteMax));
       const radioMax = Math.min(radioFisicoMax, radioPorAngulo(limiteMin));
+      const codoDeseado = vectorBaseAvatar(codo.clone().sub(hombro), base);
+      return {r, hombroAvatar, deltaMano, codoDeseado, radioMin, radioMax, radioObjetivo};
+    }
+
+    // Separador de manos: se calcula UNA vez por cuadro para los dos brazos
+    // (cada uno necesita saber donde queda el otro) y resolverBrazo usa el
+    // resultado. Falla cerrado: si algo es raro, planManos queda null y cada
+    // brazo se resuelve solo con el separador de cuerpo, como antes.
+    function planificarManos(p, base) {
+      planManos = null;
+      if (cal.separarManos === false || cal.separarCuerpo === false) return;
+      try {
+        const marco = marcoCuerpoActual();
+        if (!marco || !(marco.escala > 0.05) || !Number.isFinite(marco.escala)) return;
+        const datos = [
+          ['left', p.hombroI, p.codoI, p.munI, p.manoI],
+          ['right', p.hombroD, p.codoD, p.munD, p.manoD],
+        ];
+        const entradas = [];
+        for (const [lado, hombro, codo, muneca, mano] of datos) {
+          const prep = prepararBrazo(lado, base, hombro, codo, muneca);
+          if (!prep) return;
+          const entrada = entradaCuerpoBrazo(base, mano, prep.hombroAvatar,
+            prep.deltaMano, prep.codoDeseado, prep.r, prep.radioMin,
+            prep.radioMax, marco);
+          if (!entrada) return;
+          entradas.push(entrada);
+        }
+        const ahora = ahoraMsCuerpo();
+        const previos = [giroPrevioCuerpo('left', ahora), giroPrevioCuerpo('right', ahora)];
+        const prevPar = estadoManos.sh && ahora - estadoManos.ms < 250
+          ? {psi: estadoManos.psi, sh: estadoManos.sh} : null;
+        const salida = SeparadorManos.resolverPar(entradas, previos, prevPar);
+        if (!salida || !salida.res.every(resultadoCuerpoValido) ||
+            !salida.sh.every((v) => v.every(Number.isFinite))) return;
+        guardarEstadoCuerpo('left', salida.res[0], ahora);
+        guardarEstadoCuerpo('right', salida.res[1], ahora);
+        estadoManos.psi = salida.psi;
+        estadoManos.sh = salida.sh;
+        estadoManos.ms = ahora;
+        estadoManos.ultimo = {pases: salida.pases, limitado: salida.limitado,
+          izq: salida.sh[0].slice(), der: salida.sh[1].slice()};
+        planManos = {left: salida.res[0], right: salida.res[1]};
+      } catch (err) {
+        planManos = null;
+      }
+    }
+    window.diagnosticoCuerpo = () => JSON.parse(JSON.stringify(
+      {cuerpo: estadoCuerpo, manos: estadoManos}));
+
+    function resolverBrazo(lado, base, hombro, codo, muneca, meta = {}, puntosMano = null) {
+      const prep = prepararBrazo(lado, base, hombro, codo, muneca);
+      if (!prep) return;
+      const {r, hombroAvatar, deltaMano, codoDeseado, radioMin, radioMax} = prep;
+      const up = bone(lado === 'left' ? VRMHumanBoneName.LeftUpperArm : VRMHumanBoneName.RightUpperArm);
+      const lo = bone(lado === 'left' ? VRMHumanBoneName.LeftLowerArm : VRMHumanBoneName.RightLowerArm);
+      let objetivoMuneca = hombroAvatar.clone().add(deltaMano);
+      let radioObjetivo = prep.radioObjetivo;
+      // Separador de cuerpo: la muñeca se adelanta lo justo para que mano y
+      // muñeca no queden dentro del torso (nunca cambia su altura) y el codo
+      // gira sobre el eje hombro-muñeca para que codo y antebrazo tampoco.
+      // Con las dos manos en cuadro, el plan del separador de manos (que ya
+      // incluye el de cuerpo) corre ademas la muñeca en horizontal para que
+      // una mano no atraviese a la otra.
+      let giroCodo = 0;
+      const sep = (planManos && planManos[lado]) || separarCuerpoBrazo(lado, base,
+        puntosMano, hombroAvatar, deltaMano, codoDeseado, r, radioMin, radioMax);
+      if (sep) {
+        giroCodo = sep.giro;
+        if (sep.empuje > 0 || sep.desplazado === true) {
+          deltaMano.set(sep.delta[0], sep.delta[1], sep.delta[2]);
+          objetivoMuneca = hombroAvatar.clone().add(deltaMano);
+          radioObjetivo = objetivoMuneca.distanceTo(hombroAvatar);
+        }
+      }
       const radio = Math.max(radioMin, Math.min(radioMax, radioObjetivo));
       const direccionObjetivo = objetivoMuneca.clone().sub(hombroAvatar).normalize();
       const objetivoMunecaResuelto = hombroAvatar.clone()
@@ -3456,7 +4367,6 @@
 
       // Plano de codo: conserva hacia donde se dobla el brazo capturado,
       // evitando que una solución ambigua salte delante/detrás del torso.
-      const codoDeseado = vectorBaseAvatar(codo.clone().sub(hombro), base);
       let planoCodo = codoDeseado.clone()
         .addScaledVector(direccionObjetivo, -codoDeseado.dot(direccionObjetivo));
       if (planoCodo.lengthSq() < 1e-8) {
@@ -3466,6 +4376,7 @@
       if (planoCodo.lengthSq() < 1e-8) planoCodo.copy(avArriba);
       planoCodo.addScaledVector(direccionObjetivo,
         -planoCodo.dot(direccionObjetivo)).normalize();
+      if (giroCodo !== 0) planoCodo.applyAxisAngle(direccionObjetivo, giroCodo);
 
       const avance = (r.lenUp * r.lenUp - r.lenLo * r.lenLo + radio * radio) /
         (2 * radio);
@@ -3535,6 +4446,7 @@
     };
 
     function reiniciarEstadoPerdidaMano() {
+      reiniciarSeparadorCuerpo();
       estadoPerdidaMano.left.desde = 0;
       estadoPerdidaMano.left.enReposo = false;
       estadoPerdidaMano.left.reposoAplicado = false;
@@ -3555,6 +4467,7 @@
         estado.recoveryFrames = reaparecioTrasReposo ? 3 : 0;
         if (reaparecioTrasReposo) {
           rigThumbState[lado] = null;
+          reiniciarManoIK(lado);
           if (typeof handAngleFilters !== 'undefined') {
             for (const filtro of handAngleFilters[lado]) filtro.reset();
           }
@@ -3587,10 +4500,1551 @@
       return Math.acos(Math.max(-1, Math.min(1, c)));
     }
 
-    function moverMano(lado, presente, puntos, meta = {}) {
+    // <<DEDOS3D_INICIO>>
+    // ---------------------------------------------------------------------
+    // Dedos en 3D (ManoIK).
+    //
+    // Antes cada falange solo sabia FLEXIONARSE (un angulo, alrededor de Z). Con
+    // eso ni la R (indice y medio cruzados) ni la O (circulo pulgar-indice)
+    // podian salir: los dedos nunca se acercaban ni se separaban de lado y el
+    // pulgar solo iba de "abierto" a "cerrado".
+    //
+    // Aqui el avatar copia la DIRECCION 3D de cada falange tal como la ve la
+    // camara, medida en el marco de la propia mano:
+    //   - dedos largos: cada falange tiene flexion (eje Z) y separacion lateral
+    //     (eje Y), con el orden Rz(flexion)·Ry(separacion) que es el de la
+    //     anatomia del nudillo: primero se abre de lado, luego se dobla.
+    //   - pulgar: cada hueso gira lo minimo para apuntar donde apunta el pulgar
+    //     del usuario, y un ajuste numerico lleva la punta del pulgar a la punta
+    //     del dedo que toca (OK, O, F...), porque los dedos del avatar no miden lo
+    //     mismo que los del usuario y copiar solo angulos dejaba un hueco.
+    //
+    // Todo trabaja con arreglos [x,y,z] y matrices 3x3 planas (fila mayor), sin
+    // THREE, para poder probarlo en Node con las plantillas reales.
+    // ---------------------------------------------------------------------
+    const ManoIK = (() => {
+      const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+      const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+      const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const largo = (a) => Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+      const unit = (a) => {
+        const l = largo(a);
+        return l > 1e-9 ? [a[0] / l, a[1] / l, a[2] / l] : null;
+      };
+      const finito = (a) => a.every(Number.isFinite);
+      const envolver = (x) => {
+        while (x > Math.PI) x -= 2 * Math.PI;
+        while (x < -Math.PI) x += 2 * Math.PI;
+        return x;
+      };
+
+      // Matrices 3x3 planas, fila mayor: [m00,m01,m02, m10,m11,m12, m20,m21,m22]
+      const I3 = () => [1, 0, 0, 0, 1, 0, 0, 0, 1];
+      const mm = (A, B) => {
+        const R = new Array(9);
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 3; j++) {
+            R[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] +
+              A[i * 3 + 2] * B[6 + j];
+          }
+        }
+        return R;
+      };
+      const mv = (A, x) => [
+        A[0] * x[0] + A[1] * x[1] + A[2] * x[2],
+        A[3] * x[0] + A[4] * x[1] + A[5] * x[2],
+        A[6] * x[0] + A[7] * x[1] + A[8] * x[2]];
+      const tr = (A) => [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]];
+      const rotZ = (f) => {
+        const c = Math.cos(f), s = Math.sin(f);
+        return [c, -s, 0, s, c, 0, 0, 0, 1];
+      };
+      const rotY = (a) => {
+        const c = Math.cos(a), s = Math.sin(a);
+        return [c, 0, s, 0, 1, 0, -s, 0, c];
+      };
+      // Rotacion alrededor de un eje unitario (Rodrigues)
+      const rotEje = (e, ang) => {
+        const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
+        const [x, y, z] = e;
+        return [t * x * x + c, t * x * y - s * z, t * x * z + s * y,
+          t * x * y + s * z, t * y * y + c, t * y * z - s * x,
+          t * x * z - s * y, t * y * z + s * x, t * z * z + c];
+      };
+      // Giro minimo que lleva la direccion unitaria a hacia b
+      const giroMinimo = (a, b) => {
+        const c = clamp(dot(a, b), -1, 1);
+        let eje = cross(a, b);
+        const s = largo(eje);
+        if (s < 1e-9) {
+          if (c > 0) return I3();
+          // opuestos: cualquier eje perpendicular
+          const p = Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+          return rotEje(unit(cross(a, p)), Math.PI);
+        }
+        eje = mul(eje, 1 / s);
+        return rotEje(eje, Math.atan2(s, c));
+      };
+      // Matriz -> cuaternion [x,y,z,w]
+      const aCuaternion = (R) => {
+        const t = R[0] + R[4] + R[8];
+        let x, y, z, w;
+        if (t > 0) {
+          const s = Math.sqrt(t + 1) * 2;
+          w = 0.25 * s; x = (R[7] - R[5]) / s; y = (R[2] - R[6]) / s;
+          z = (R[3] - R[1]) / s;
+        } else if (R[0] > R[4] && R[0] > R[8]) {
+          const s = Math.sqrt(1 + R[0] - R[4] - R[8]) * 2;
+          w = (R[7] - R[5]) / s; x = 0.25 * s; y = (R[1] + R[3]) / s;
+          z = (R[2] + R[6]) / s;
+        } else if (R[4] > R[8]) {
+          const s = Math.sqrt(1 + R[4] - R[0] - R[8]) * 2;
+          w = (R[2] - R[6]) / s; x = (R[1] + R[3]) / s; y = 0.25 * s;
+          z = (R[5] + R[7]) / s;
+        } else {
+          const s = Math.sqrt(1 + R[8] - R[0] - R[4]) * 2;
+          w = (R[3] - R[1]) / s; x = (R[2] + R[6]) / s; y = (R[5] + R[7]) / s;
+          z = 0.25 * s;
+        }
+        const n = Math.hypot(x, y, z, w) || 1;
+        return [x / n, y / n, z / n, w / n];
+      };
+
+      const kNombresLargos = ['Index', 'Middle', 'Ring', 'Little'];
+      // Indices de los 4 landmarks de cada dedo dentro de los 20 de la mano
+      const kIdx = {
+        Thumb: [0, 1, 2, 3], Index: [4, 5, 6, 7], Middle: [8, 9, 10, 11],
+        Ring: [12, 13, 14, 15], Little: [16, 17, 18, 19],
+      };
+
+      // Limites de flexion (positiva = hacia la palma) y de separacion lateral
+      // por falange, en radianes. La extension hacia atras es corta en la vida
+      // real (nudillo ~25 deg, interfalangicas casi nada). La separacion lateral
+      // es amplia en el nudillo y minima mas adelante: ahi solo hace falta lo
+      // justo para seguir la direccion que mide la camara.
+      const kFlexMin = [-0.45, -0.12, -0.12];
+      const kFlexMax = [1.75, 1.95, 1.60];
+      const kSepMax = [0.50, 0.30, 0.25];
+
+      /**
+       * Modelo de una mano del avatar. `huesos` trae, por dedo, los
+       * desplazamientos entre huesos consecutivos en el marco local de la mano
+       * (metros): offs[0] = nudillo respecto a la muneca (en el pulgar, la base
+       * del pulgar), offs[1] = segunda falange respecto a la primera, offs[2] =
+       * tercera respecto a la segunda; `punta` = largo de la yema.
+       * `signoFlex` = cal[lado].dedos (sentido de Rz que lleva el dedo a la
+       * palma).
+       */
+      function crearModelo(lado, huesos, signoFlex) {
+        const modelo = {
+          lado, signoFlex: signoFlex < 0 ? -1 : 1, dedos: {}, palma: 0,
+        };
+        for (const nombre of Object.keys(kIdx)) {
+          const h = huesos[nombre];
+          if (!h) continue;
+          const offs = h.offs.map((o) => o.slice());
+          const r = [unit(offs[1]), unit(offs[2])];
+          r.push(r[1]); // la yema sigue la direccion de la ultima falange
+          // La direccion de reposo del primer hueso apunta hacia el siguiente
+          // hueso (r[0] = hacia offs[1]).
+          modelo.dedos[nombre] = {
+            offs, r, punta: h.punta,
+            largo: [largo(offs[1]), largo(offs[2]), h.punta],
+          };
+        }
+        if (modelo.dedos.Middle) modelo.palma = largo(modelo.dedos.Middle.offs[0]);
+        return modelo;
+      }
+
+      // Resuelve R = Rz(f)·Ry(a) tal que R·r = u, con |a| <= amax.
+      function dosEjes(r, u, amax) {
+        const A = Math.hypot(r[0], r[2]);
+        let a = 0;
+        if (A > 1e-6) {
+          const delta = Math.atan2(r[0], r[2]);
+          const ac = Math.acos(clamp(u[2] / A, -1, 1));
+          const a1 = envolver(ac - delta), a2 = envolver(-ac - delta);
+          a = Math.abs(a1) <= Math.abs(a2) ? a1 : a2;
+        }
+        a = clamp(a, -amax, amax);
+        const w = mv(rotY(a), r);
+        const f = envolver(Math.atan2(u[1], u[0]) - Math.atan2(w[1], w[0]));
+        return {f, a};
+      }
+
+      /**
+       * Cuatro dedos largos. `M` = 4 puntos [nudillo, PIP, DIP, punta] en el
+       * marco local de la mano. Devuelve por falange {f, a, flex} (rotacion
+       * Rz(f)·Ry(a); flex = flexion con signo anatomico, positiva hacia la
+       * palma).
+       *
+       * Se resuelve primero la cadena exacta (cada hueso apunta justo a su
+       * segmento) y despues se recorta cada articulacion POR SEPARADO. Recortar
+       * mientras se resuelve haria que el error de un hueso se propagara a los
+       * siguientes y un puño apretado deformaria las yemas.
+       */
+      function resolverDedoLargo(modelo, nombre, M, sensibilidad = 1) {
+        const d = modelo.dedos[nombre];
+        if (!d || !M || M.length < 4) return null;
+        const t = [unit(sub(M[1], M[0])), unit(sub(M[2], M[1])),
+          unit(sub(M[3], M[2]))];
+        if (!t[0] || !t[1] || !t[2]) return null;
+        const signo = modelo.signoFlex;
+        let Q = I3();
+        const out = [];
+        for (let k = 0; k < 3; k++) {
+          const u = mv(tr(Q), t[k]);
+          const exacto = dosEjes(d.r[k], u, Math.PI / 2);
+          Q = mm(Q, mm(rotZ(exacto.f), rotY(exacto.a)));
+          // recorte de esta articulacion
+          const lim = dosEjes(d.r[k], u, kSepMax[k]);
+          const flex = clamp(signo * lim.f * sensibilidad, kFlexMin[k], kFlexMax[k]);
+          out.push({f: signo * flex, a: lim.a, flex});
+        }
+        return out;
+      }
+
+      // Posiciones [MCP, PIP, DIP, punta] del dedo largo dadas sus rotaciones
+      function fkDedoLargo(modelo, nombre, rots) {
+        const d = modelo.dedos[nombre];
+        let Q = I3();
+        let p = d.offs[0].slice();
+        const pts = [p];
+        for (let k = 0; k < 3; k++) {
+          Q = mm(Q, mm(rotZ(rots[k].f), rotY(rots[k].a)));
+          const off = k < 2 ? d.offs[k + 1] : mul(d.r[2], d.punta);
+          p = add(p, mv(Q, off));
+          pts.push(p);
+        }
+        return pts;
+      }
+
+      // ------------------------------- Pulgar -------------------------------
+      // Cada hueso: giro minimo (sin torsion) de su direccion de reposo hacia la
+      // direccion objetivo, expresada en el marco del hueso padre. La torsion no
+      // se puede medir con un solo segmento y la malla del pulgar es casi
+      // cilindrica; lo que importa es hacia donde apunta cada hueso.
+
+      function fkPulgar(modelo, giros) {
+        const d = modelo.dedos.Thumb;
+        // giros = [R0,R1,R2] locales (3x3). Devuelve {pts:[CMC,MCP,IP,punta], Q:[Q0,Q1,Q2]}
+        let Q = I3();
+        let p = d.offs[0].slice();
+        const pts = [p];
+        const Qs = [];
+        for (let k = 0; k < 3; k++) {
+          Q = mm(Q, giros[k]);
+          Qs.push(Q);
+          const off = k < 2 ? d.offs[k + 1] : mul(d.r[2], d.punta);
+          p = add(p, mv(Q, off));
+          pts.push(p);
+        }
+        return {pts, Q: Qs};
+      }
+
+      // Giros desde parametros (2 por hueso: componentes del vector de giro en
+      // el plano perpendicular a la direccion de reposo del hueso).
+      function baseTangente(r) {
+        const p = Math.abs(r[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+        const e1 = unit(cross(r, p));
+        const e2 = cross(r, e1);
+        return [e1, e2];
+      }
+
+      function girosDeParams(base, params) {
+        return [0, 1, 2].map((k) => {
+          const w = add(mul(base[k][0], params[2 * k]),
+            mul(base[k][1], params[2 * k + 1]));
+          const ang = largo(w);
+          return ang < 1e-9 ? I3() : rotEje(mul(w, 1 / ang), ang);
+        });
+      }
+
+      const kPulgarMaxGiro = [1.25, 1.45, 1.35];
+
+      // Costo del ajuste del pulgar: direcciones de cada hueso + (opcional) la
+      // punta hacia un blanco.
+      function costoPulgar(modelo, base, params, dirs, blanco, pesoBlanco) {
+        const giros = girosDeParams(base, params);
+        const {pts, Q} = fkPulgar(modelo, giros);
+        const d = modelo.dedos.Thumb;
+        let c = 0;
+        for (let k = 0; k < 3; k++) {
+          const dir = mv(Q[k], d.r[k]);
+          c += (1 - dot(dir, dirs[k]));
+        }
+        // blando: no pasarse del rango de cada hueso
+        for (let k = 0; k < 3; k++) {
+          const m = Math.hypot(params[2 * k], params[2 * k + 1]);
+          if (m > kPulgarMaxGiro[k]) c += 20 * (m - kPulgarMaxGiro[k]) ** 2;
+        }
+        if (blanco && pesoBlanco > 0) {
+          const e = sub(pts[3], blanco);
+          c += pesoBlanco * dot(e, e) / (0.01 * 0.01);
+        }
+        return c;
+      }
+
+      function paramsDeDirecciones(modelo, base, dirs) {
+        const d = modelo.dedos.Thumb;
+        const params = new Array(6).fill(0);
+        let Q = I3();
+        for (let k = 0; k < 3; k++) {
+          const u = unit(mv(tr(Q), dirs[k]));
+          // vector de giro del giro minimo: eje·angulo, perpendicular a r[k]
+          const eje = cross(d.r[k], u);
+          const s = largo(eje);
+          let ang = Math.atan2(s, clamp(dot(d.r[k], u), -1, 1));
+          ang = Math.min(ang, kPulgarMaxGiro[k]);
+          const w = s > 1e-9 ? mul(eje, ang / s) : [0, 0, 0];
+          params[2 * k] = dot(w, base[k][0]);
+          params[2 * k + 1] = dot(w, base[k][1]);
+          // El padre acumulado ya incluye el limite: asi el hueso siguiente
+          // compensa lo que el anterior no alcanzo.
+          Q = mm(Q, ang < 1e-9 ? I3() : rotEje(mul(w, 1 / ang), ang));
+        }
+        return params;
+      }
+
+      /**
+       * `P` = 20 puntos de la mano en el marco local (metros). `blanco`: punto
+       * (marco local) al que debe llegar la punta del pulgar, con peso en [0,1].
+       */
+      function resolverPulgar(modelo, P, blanco, pesoBlanco, previo) {
+        const d = modelo.dedos.Thumb;
+        if (!d) return null;
+        const q = kIdx.Thumb.map((i) => P[i]);
+        const dirs = [unit(sub(q[1], q[0])), unit(sub(q[2], q[1])),
+          unit(sub(q[3], q[2]))];
+        if (!dirs[0] || !dirs[1] || !dirs[2]) return null;
+        const base = d.r.map(baseTangente);
+        let params = paramsDeDirecciones(modelo, base, dirs);
+        const conBlanco = blanco && pesoBlanco > 0.02;
+        if (conBlanco) {
+          // Descenso con paso adaptativo (diferencias finitas). 6 incognitas.
+          let c = costoPulgar(modelo, base, params, dirs, blanco, pesoBlanco);
+          let paso = 0.25;
+          for (let it = 0; it < 40 && paso > 1e-4; it++) {
+            const g = new Array(6);
+            const h = 1e-4;
+            for (let i = 0; i < 6; i++) {
+              const p2 = params.slice(); p2[i] += h;
+              g[i] = (costoPulgar(modelo, base, p2, dirs, blanco, pesoBlanco) - c) / h;
+            }
+            const gn = Math.hypot(...g);
+            if (gn < 1e-6) break;
+            let mejoro = false;
+            for (let ls = 0; ls < 6; ls++) {
+              const p2 = params.map((v, i) => v - paso * g[i] / gn);
+              const c2 = costoPulgar(modelo, base, p2, dirs, blanco, pesoBlanco);
+              if (c2 < c) { params = p2; c = c2; mejoro = true; break; }
+              paso *= 0.5;
+            }
+            if (!mejoro) break;
+            paso = Math.min(0.25, paso * 1.6);
+          }
+        }
+        const giros = girosDeParams(base, params);
+        const fk = fkPulgar(modelo, giros);
+        return {
+          params, giros, quats: giros.map(aCuaternion), pts: fk.pts,
+          contacto: conBlanco ? pesoBlanco : 0,
+        };
+      }
+
+
+      // ------------------- Landmarks -> marco local de la mano -------------------
+      // Mismo marco que usa orientarMuneca: X = muneca -> nudillo medio, Y =
+      // (indice - menique) ortogonalizado, Z = X x Y, con el signo de Y fijado
+      // por la base del pulgar. Se arma igual con los landmarks y con los huesos
+      // del avatar en reposo; la mano se orienta con el delta entre ambos y los
+      // dedos se expresan en el marco de reposo, de modo que forma y orientacion
+      // quedan separadas.
+      function marcoMano(x, y, cmc) {
+        const ex = unit(x);
+        if (!ex) return null;
+        let ey = sub(y, mul(ex, dot(y, ex)));
+        ey = unit(ey);
+        if (!ey) return null;
+        let ez = unit(cross(ex, ey));
+        if (!ez) return null;
+        if (cmc) {
+          const c = unit(cmc);
+          if (c && dot(c, ey) < 0) { ey = mul(ey, -1); ez = mul(ez, -1); }
+        }
+        return {x: ex, y: ey, z: ez};
+      }
+
+      /**
+       * `w`: 20 puntos relativos a la muneca, en ejes del MUNDO del avatar
+       * (sin normalizar). `ref`: marco de reposo {x,y,z} en el mundo.
+       * `mundoALocal`: matriz 3x3 del mundo al marco local de la mano en
+       * reposo. `palma`: distancia muneca-nudillo medio del avatar (m).
+       * Devuelve los 20 puntos en el marco local de la mano, en metros del
+       * avatar.
+       */
+      function aMarcoLocal(w, ref, mundoALocal, palma) {
+        if (!w || w.length < 20) return null;
+        const obj = marcoMano(w[8], sub(w[4], w[16]), w[0]);
+        if (!obj) return null;
+        const long = largo(w[8]);
+        if (!(long > 1e-6)) return null;
+        const esc = palma / long;
+        return w.map((p) => {
+          const a = dot(p, obj.x), b = dot(p, obj.y), c = dot(p, obj.z);
+          const m = add(add(mul(ref.x, a), mul(ref.y, b)), mul(ref.z, c));
+          return mul(mv(mundoALocal, m), esc);
+        });
+      }
+
+      const smooth01 = (x) => {
+        const t = clamp(x, 0, 1);
+        return t * t * (3 - 2 * t);
+      };
+
+      // --------------------- Dedos que se cruzan (R, V cerrada) ---------------------
+      // Con la direccion copiada, dos dedos que se cruzan quedan con el mismo eje
+      // y las dos mallas se funden en un solo dedo. Los landmarks no distinguen
+      // cual pasa por encima (la diferencia real es de un grosor de dedo, menos
+      // que el error de la camara), asi que se separan lo justo girando cada dedo
+      // desde el nudillo: mitad cada uno, en la direccion dorso/palma que dicta el
+      // orden medido (con histeresis para que no cambien de capa por ruido).
+      const kParesDedos = [['Index', 'Middle', 'IM'], ['Middle', 'Ring', 'MR'],
+        ['Ring', 'Little', 'RL']];
+      const kTaperRadio = [1, 0.85, 0.75];
+
+      function puntoMasCercano(a0, a1, b0, b1) {
+        // Cercania entre dos segmentos (Ericson). Devuelve {d, ca, cb, s, t}
+        const d1 = sub(a1, a0), d2 = sub(b1, b0), r = sub(a0, b0);
+        const a = dot(d1, d1), e = dot(d2, d2), f = dot(d2, r);
+        let s, t;
+        const c = dot(d1, r);
+        const b = dot(d1, d2);
+        const den = a * e - b * b;
+        s = den > 1e-12 ? clamp((b * f - c * e) / den, 0, 1) : 0;
+        t = (b * s + f) / (e || 1e-12);
+        if (t < 0) { t = 0; s = clamp(-c / (a || 1e-12), 0, 1); }
+        else if (t > 1) { t = 1; s = clamp((b - c) / (a || 1e-12), 0, 1); }
+        const ca = add(a0, mul(d1, s)), cb = add(b0, mul(d2, t));
+        return {d: largo(sub(ca, cb)), ca, cb, s, t};
+      }
+
+      function aplicarFlexLimites(r, k, signo) {
+        const flex = clamp(signo * r.f, kFlexMin[k], kFlexMax[k]);
+        r.f = signo * flex;
+        r.flex = flex;
+        r.a = clamp(r.a, -kSepMax[k], kSepMax[k]);
+      }
+
+      function separarDedos(modelo, resultados, P, estado) {
+        const signo = modelo.signoFlex;
+        if (estado && !estado.cruce) estado.cruce = {};
+        const cruce = (estado && estado.cruce) || {};
+        for (let pasada = 0; pasada < 2; pasada++) {
+          for (const [na, nb, clave] of kParesDedos) {
+            const ra = resultados[na], rb = resultados[nb];
+            if (!ra || !rb) continue;
+            const da = modelo.dedos[na], db = modelo.dedos[nb];
+            const sep0 = largo(sub(da.offs[0], db.offs[0]));
+            const A = fkDedoLargo(modelo, na, ra), B = fkDedoLargo(modelo, nb, rb);
+            // peor penetracion entre segmentos
+            let peor = null;
+            for (let i = 0; i < 3; i++) {
+              for (let j = 0; j < 3; j++) {
+                const rr = 0.37 * sep0 * (kTaperRadio[i] + kTaperRadio[j]);
+                const c = puntoMasCercano(A[i], A[i + 1], B[j], B[j + 1]);
+                const pen = rr - c.d;
+                if (pen > 1e-5 && (!peor || pen > peor.pen)) {
+                  peor = {pen, rr, i, j, ...c};
+                }
+              }
+            }
+            if (!peor) continue;
+            // convencion dorso/palma con histeresis (eje Y local = dorso)
+            const lmA = [P[kIdx[na][peor.i]], P[kIdx[na][peor.i + 1]]];
+            const lmB = [P[kIdx[nb][peor.j]], P[kIdx[nb][peor.j + 1]]];
+            const lc = puntoMasCercano(lmA[0], lmA[1], lmB[0], lmB[1]);
+            const dy = lc.ca[1] - lc.cb[1];
+            if (cruce[clave] == null) cruce[clave] = dy >= 0 ? 1 : -1;
+            else if (Math.abs(dy) > 0.015 * (modelo.palma || 0.067)) {
+              cruce[clave] = dy > 0 ? 1 : -1;
+            }
+            const nConv = [0, cruce[clave], 0];
+            let n = nConv;
+            if (peor.d > 1e-6) {
+              const nGeo = mul(sub(peor.ca, peor.cb), 1 / peor.d);
+              const w = smooth01((peor.d / peor.rr - 0.25) / 0.35);
+              n = unit(add(mul(nGeo, w), mul(nConv, 1 - w))) || nConv;
+            }
+            const cantidad = peor.pen * 0.5 * 1.05;
+            for (const [nombre, res, punto, sg] of [
+              [na, ra, peor.ca, 1], [nb, rb, peor.cb, -1]]) {
+              const R0 = mm(rotZ(res[0].f), rotY(res[0].a));
+              const mcp = modelo.dedos[nombre].offs[0];
+              const palanca = sub(punto, mcp);
+              const ejeF = [0, 0, 1];
+              const ejeA = mv(R0, [0, 1, 0]);
+              const gF = dot(cross(ejeF, palanca), n) * sg;
+              const gA = dot(cross(ejeA, palanca), n) * sg;
+              const g2 = gF * gF + gA * gA;
+              if (g2 < 1e-10) continue;
+              let df = gF * cantidad / g2, dA = gA * cantidad / g2;
+              df = clamp(df, -0.2, 0.2); dA = clamp(dA, -0.2, 0.2);
+              res[0].f += df; res[0].a += dA;
+              aplicarFlexLimites(res[0], 0, signo);
+            }
+          }
+        }
+      }
+
+      // ------------- Contacto y colision: ajuste conjunto de las cadenas -------------
+      // Despues de resolver cada dedo por separado se hace un repaso donde TODAS
+      // las falanges pueden moverse un poco: (1) la yema del pulgar y la del dedo
+      // con el que hace contacto se acercan hasta tocarse (el circulo de la D, la
+      // O, la F...) repartiendo el movimiento entre las dos cadenas; (2) ningun par
+      // de falanges de dedos distintos puede quedar a menos de `kHolgura` (si se
+      // traspasan, la malla se funde y desaparece la linea oscura que divide los
+      // dedos; el contorno del avatar mide ~2.5 mm); (3) el lazo que forman el
+      // pulgar y el dedo se redondea: la curvatura se reparte entre todas las
+      // falanges en vez de concentrarse en dos articulaciones (triangulo).
+      // Es un ajuste basado en posiciones (PBD) con derivadas analiticas: cada
+      // restriccion mueve los angulos de las dos cadenas en proporcion a cuanto
+      // ayuda cada articulacion, respetando los limites.
+      // Radios (m) por falange medidos en la malla del avatar: [prox, medio, yema].
+      const kRadios = {
+        Index: [0.0071, 0.0054, 0.0036], Middle: [0.0066, 0.0055, 0.0040],
+        Ring: [0.0069, 0.0050, 0.0031], Little: [0.0054, 0.0045, 0.0028],
+        Thumb: [0.0090, 0.0075, 0.0042],
+      };
+      const kPalmaRef = 0.0668;       // largo de palma con el que se midieron
+      const kHolguraDedos = 0.0020;   // entre dedos largos
+      const kHolguraPulgar = 0.0015;  // pulgar contra dedo
+      const kContactoSecundario = 0.35;
+      const kPesoPlano = 3;
+      // "masa inversa" de cada parametro: cuanto se deja mover. Flexion libre;
+      // la separacion lateral solo en el nudillo (las demas casi no giran).
+      const kMovDedo = [1, 1, 1.2, 0.5, 0.12, 0.12];
+      const kDevDedo = [0.9, 0.9, 0.9, 0.2, 0.08, 0.08];  // desviacion maxima (rad)
+      const kParesLargos = [['Index', 'Middle'], ['Middle', 'Ring'], ['Ring', 'Little'],
+        ['Index', 'Ring'], ['Middle', 'Little'], ['Index', 'Little']];
+      const kEjeArt = [0, 1, 2, 0, 1, 2];   // articulacion de cada parametro del dedo largo
+      const kEjeArtPulgar = [0, 0, 1, 1, 2, 2];  // y del pulgar (2 por hueso)
+
+      function cadenasDe(modelo, out) {
+        const signo = modelo.signoFlex;
+        const esc = (modelo.palma || kPalmaRef) / kPalmaRef;
+        const lista = [];
+        for (const nombre of kNombresLargos) {
+          const r = out.dedos[nombre];
+          if (!r) continue;
+          const th = [r[0].f, r[1].f, r[2].f, r[0].a, r[1].a, r[2].a];
+          const lo = [], hi = [];
+          for (let k = 0; k < 3; k++) {
+            const a = signo * kFlexMin[k], b = signo * kFlexMax[k];
+            lo.push(Math.min(a, b)); hi.push(Math.max(a, b));
+          }
+          for (let k = 0; k < 3; k++) { lo.push(-kSepMax[k]); hi.push(kSepMax[k]); }
+          for (let k = 0; k < 6; k++) {
+            lo[k] = Math.max(lo[k], th[k] - kDevDedo[k]);
+            hi[k] = Math.min(hi[k], th[k] + kDevDedo[k]);
+          }
+          lista.push({nombre, pulgar: false, th, th0: th.slice(), lo, hi, mov: kMovDedo,
+            rad: kRadios[nombre].map((v) => v * esc), pts: null});
+        }
+        if (out.pulgar && modelo.dedos.Thumb) {
+          const th = out.pulgar.params.slice();
+          const lo = th.map((v) => v - 0.9), hi = th.map((v) => v + 0.9);
+          lista.push({nombre: 'Thumb', pulgar: true, th, th0: th.slice(), lo, hi,
+            mov: [1, 1, 1, 1, 1, 1], base: modelo.dedos.Thumb.r.map(baseTangente),
+            rad: kRadios.Thumb.map((v) => v * esc), pts: null});
+        }
+        return lista;
+      }
+
+      // Jacobiano derecho de SO(3) en el vector de giro W (|W| = ang)
+      function jacobianoDerecho(W, ang) {
+        const a2 = ang * ang;
+        const a = ang < 1e-3 ? 0.5 - a2 / 24 : (1 - Math.cos(ang)) / a2;
+        const b = ang < 1e-3 ? 1 / 6 - a2 / 120 : (ang - Math.sin(ang)) / (a2 * ang);
+        const x = W[0], y = W[1], z = W[2];
+        const K = [0, -z, y, z, 0, -x, -y, x, 0];
+        const K2 = mm(K, K);
+        const J = new Array(9);
+        for (let i = 0; i < 9; i++) J[i] = (i % 4 === 0 ? 1 : 0) - a * K[i] + b * K2[i];
+        return J;
+      }
+
+      // Cinematica directa de la cadena + eje de giro (en el marco de la mano) de
+      // cada parametro: c.eW[m] = eje, c.eK[m] = articulacion (su pivote es
+      // pts[eK[m]]; mueve todos los puntos posteriores). Tambien guarda las
+      // capsulas (3 segmentos; el ultimo termina un radio antes de la punta) y una
+      // esfera que las envuelve.
+      function fkCadena(modelo, c) {
+        const d = modelo.dedos[c.nombre];
+        let Q = I3();
+        let p = d.offs[0].slice();
+        const pts = [p];
+        const eW = new Array(6);
+        if (!c.pulgar) {
+          c.eK = kEjeArt;
+          for (let k = 0; k < 3; k++) {
+            const QRz = mm(Q, rotZ(c.th[k]));
+            eW[k] = [Q[2], Q[5], Q[8]];
+            eW[3 + k] = [QRz[1], QRz[4], QRz[7]];
+            Q = mm(QRz, rotY(c.th[3 + k]));
+            const off = k < 2 ? d.offs[k + 1] : mul(d.r[2], d.punta);
+            p = add(p, mv(Q, off));
+            pts.push(p);
+          }
+        } else {
+          c.eK = kEjeArtPulgar;
+          for (let k = 0; k < 3; k++) {
+            const e1 = c.base[k][0], e2 = c.base[k][1];
+            const W = add(mul(e1, c.th[2 * k]), mul(e2, c.th[2 * k + 1]));
+            const ang = largo(W);
+            const G = ang < 1e-9 ? I3() : rotEje(mul(W, 1 / ang), ang);
+            Q = mm(Q, G);
+            const Jr = jacobianoDerecho(W, ang);
+            eW[2 * k] = mv(Q, mv(Jr, e1));
+            eW[2 * k + 1] = mv(Q, mv(Jr, e2));
+            const off = k < 2 ? d.offs[k + 1] : mul(d.r[2], d.punta);
+            p = add(p, mv(Q, off));
+            pts.push(p);
+          }
+        }
+        c.pts = pts; c.eW = eW;
+        const v = sub(pts[3], pts[2]);
+        const l = largo(v);
+        const r2 = c.rad[2];
+        c.segs = [[pts[0], pts[1]], [pts[1], pts[2]],
+          [pts[2], l > r2 + 1e-5 ? sub(pts[3], mul(v, r2 / l)) : pts[2]]];
+        const cen = mul(add(pts[0], pts[3]), 0.5);
+        let rr = 0;
+        for (const q of pts) rr = Math.max(rr, largo(sub(q, cen)));
+        c.cen = cen; c.esf = rr + Math.max(c.rad[0], c.rad[1], c.rad[2]);
+        return c;
+      }
+
+      function estadoCadena(modelo, c) {
+        if (!c.pts) fkCadena(modelo, c);
+        return c;
+      }
+
+      function limitarCadena(c) {
+        for (let k = 0; k < 6; k++) c.th[k] = clamp(c.th[k], c.lo[k], c.hi[k]);
+        if (c.pulgar) {
+          for (let k = 0; k < 3; k++) {
+            const m = Math.hypot(c.th[2 * k], c.th[2 * k + 1]);
+            if (m > kPulgarMaxGiro[k]) {
+              const e = kPulgarMaxGiro[k] / m;
+              c.th[2 * k] *= e; c.th[2 * k + 1] *= e;
+            }
+          }
+        }
+        c.pts = null;
+      }
+
+      const cercanas = (A, B, margen) => {
+        const d = sub(A.cen, B.cen);
+        return d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <
+          (A.esf + B.esf + margen) * (A.esf + B.esf + margen);
+      };
+
+      // Un paso de proyeccion de la restriccion rc = {A, i, B, j, obj, modo,
+      // capa, relax}. modo 'min': solo actua si la separacion entre las
+      // superficies es menor que `obj`; 'igual': la lleva a `obj` (contacto).
+      // Devuelve la violacion que tenia (m).
+      function proyectarRestriccion(modelo, rc) {
+        const {A, B, i, j} = rc;
+        estadoCadena(modelo, A); estadoCadena(modelo, B);
+        const sa = A.segs[i], sb = B.segs[j];
+        const c = puntoMasCercano(sa[0], sa[1], sb[0], sb[1]);
+        const R = A.rad[i] + B.rad[j];
+        const C = c.d - R - rc.obj;
+        if (rc.modo === 'min' ? C >= -2e-5 : Math.abs(C) < 1.5e-4) return 0;
+        // direccion de A respecto a B (de B hacia A)
+        let n;
+        if (c.d > 1e-6) {
+          n = mul(sub(c.ca, c.cb), 1 / c.d);
+          if (rc.capa) {
+            const w = smooth01((c.d / R - 0.25) / 0.35);
+            n = unit(add(mul(n, w), mul(rc.capa, 1 - w))) || rc.capa;
+          }
+        } else n = rc.capa || [0, 1, 0];
+        const gr = [];
+        let den = 0;
+        for (const [K, idx, signoK, pto] of [[A, i, 1, c.ca], [B, j, -1, c.cb]]) {
+          const g = [0, 0, 0, 0, 0, 0];
+          for (let m = 0; m < 6; m++) {
+            const k = K.eK[m];
+            if (k > idx) continue;
+            g[m] = signoK * dot(n, cross(K.eW[m], sub(pto, K.pts[k])));
+            // articulacion en su tope empujando hacia afuera: no cuenta
+            const dd = -C * g[m];
+            if ((dd > 0 && K.th[m] >= K.hi[m] - 1e-4) ||
+                (dd < 0 && K.th[m] <= K.lo[m] + 1e-4)) g[m] = 0;
+            den += K.mov[m] * g[m] * g[m];
+          }
+          gr.push(g);
+        }
+        if (den < 1e-9) return Math.abs(C);
+        const lam = -C / den * (rc.relax == null ? 1 : rc.relax);
+        [[A, gr[0]], [B, gr[1]]].forEach(([K, g]) => {
+          for (let m = 0; m < 6; m++) {
+            if (g[m] === 0) continue;
+            K.th[m] += clamp(K.mov[m] * g[m] * lam, -0.25, 0.25);
+          }
+          limitarCadena(K);
+        });
+        return Math.abs(C);
+      }
+
+      // Una pasada: contactos y choques entre los pares de cadenas que estan cerca
+      function pasadaRestricciones(modelo, contacto, grupos) {
+        let peor = 0;
+        for (const rc of contacto) peor = Math.max(peor, proyectarRestriccion(modelo, rc));
+        for (const g of grupos) {
+          estadoCadena(modelo, g.A); estadoCadena(modelo, g.B);
+          if (!cercanas(g.A, g.B, g.margen)) continue;
+          for (const rc of g.lista) peor = Math.max(peor, proyectarRestriccion(modelo, rc));
+        }
+        return peor;
+      }
+
+      // ---- Redondez del lazo pulgar-dedo (la O, la D, la F, la C...) ----
+      // El lazo que forman la base del pulgar, sus tres huesos, el punto de
+      // contacto, los tres huesos del dedo y la palma es un poligono. Si solo
+      // se dobla en dos articulaciones queda en TRIANGULO. Un circulo reparte la
+      // curvatura por igual: el giro en cada vertice es proporcional al largo
+      // de los dos lados que lo tocan. Ademas debe quedar plano.
+      function lazoPuntos(modelo, T, F) {
+        estadoCadena(modelo, T); estadoCadena(modelo, F);
+        const t = T.pts, f = F.pts;
+        return [t[0], t[1], t[2], mul(add(t[3], f[3]), 0.5), f[2], f[1], f[0]];
+      }
+      const kVertPlano = [1, 2, 4, 5];
+      const angEntre = (a, b) => Math.atan2(largo(cross(a, b)), dot(a, b));
+      // Residuos del lazo: 7 de curvatura (giro - kappa*largo) y 4 de planaridad.
+      function residuosLazo(V) {
+        const n = V.length;
+        const e = [], l = [];
+        for (let i = 0; i < n; i++) {
+          const d = sub(V[(i + 1) % n], V[i]);
+          e.push(d); l.push(largo(d));
+        }
+        const tau = [], lv = [];
+        let sumaT = 0, sumaL = 0;
+        for (let i = 0; i < n; i++) {
+          const p = (i + n - 1) % n;
+          const t = l[p] * l[i] > 1e-10 ? angEntre(e[p], e[i]) : 0;
+          tau.push(t); lv.push(0.5 * (l[p] + l[i]));
+          sumaT += t; sumaL += lv[i];
+        }
+        const kappa = sumaL > 0 ? sumaT / sumaL : 0;
+        const r = new Array(n + 4).fill(0);
+        for (let i = 0; i < n; i++) r[i] = tau[i] - kappa * lv[i];
+        const nPl = cross(sub(V[3], V[0]), sub(V[n - 1], V[0]));
+        const lPl = largo(nPl);
+        let fuera = 0;
+        if (lPl > 1e-8) {
+          const s = Math.sqrt(kPesoPlano) / 0.03;
+          kVertPlano.forEach((i, q) => {
+            const d = dot(sub(V[i], V[0]), nPl) / lPl;
+            r[n + q] = s * d; fuera += d * d;
+          });
+        }
+        return {r, kappa, fuera: Math.sqrt(fuera / 4), l, e};
+      }
+      // Estadisticas del lazo (para decidir si aplica y para diagnostico)
+      function redondezLazo(V) {
+        const rs = residuosLazo(V);
+        let E = 0;
+        for (const x of rs.r) E += x * x;
+        let A = [0, 0, 0], per = 0;
+        const n = V.length;
+        for (let i = 0; i < n; i++) {
+          A = add(A, cross(V[i], V[(i + 1) % n]));
+          per += rs.l[i];
+        }
+        const q = per > 1e-9 ? 0.5 * largo(A) / (per * per) : 0;
+        return {E, q, kappa: rs.kappa, fuera: rs.fuera, area: 0.5 * largo(A), per,
+          cuerda: largo(sub(V[3], V[n - 1])), cy: V[3][1], cx: V[3][0]};
+      }
+
+      // Resuelve A x = b (n <= 12) por eliminacion con pivoteo; A se destruye
+      function resolverLineal(A, b, n) {
+        for (let i = 0; i < n; i++) {
+          let p = i;
+          for (let r = i + 1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+          if (Math.abs(A[p][i]) < 1e-12) return null;
+          if (p !== i) { [A[p], A[i]] = [A[i], A[p]]; [b[p], b[i]] = [b[i], b[p]]; }
+          for (let r = i + 1; r < n; r++) {
+            const f = A[r][i] / A[i][i];
+            if (f === 0) continue;
+            for (let c = i; c < n; c++) A[r][c] -= f * A[i][c];
+            b[r] -= f * b[i];
+          }
+        }
+        const x = new Array(n);
+        for (let i = n - 1; i >= 0; i--) {
+          let s = b[i];
+          for (let c = i + 1; c < n; c++) s -= A[i][c] * x[c];
+          x[i] = s / A[i][i];
+        }
+        return x;
+      }
+
+      // Un paso de Levenberg-Marquardt sobre los 12 angulos (pulgar + dedo) que
+      // reparte la curvatura del lazo y lo aplana SIN soltar el contacto ni
+      // meterse en otros dedos: el contacto y los choques que tocan al pulgar o
+      // al dedo entran como filas del mismo sistema (con derivadas analiticas).
+      // `gate` (0..1) atenua solo la parte de redondez.
+      const kAj = {mu: 0.06,       // amortiguacion (mas alto = pasos mas cortos)
+        fide: 0.2,                // ancla suave a los angulos de los landmarks
+        contacto: 400,             // 1 mm de hueco ~ 0.4 rad de curvatura
+        choque: 400,
+        temp: 3};                // ancla al resultado del cuadro anterior (estabilidad)
+      function pasoRedondez(modelo, T, F, gate, contacto, grupos) {
+        const V = lazoPuntos(modelo, T, F);
+        const base = residuosLazo(V).r.map((x) => x * gate);
+        const mR = base.length;
+        const h = 5e-3;
+        const cols = [];
+        for (const K of [T, F]) for (let m = 0; m < 6; m++) cols.push([K, m]);
+        const N = cols.length;
+        const J = cols.map(() => []);      // J[col][fila]
+        // columnas de redondez (diferencias finitas sobre los vertices)
+        cols.forEach(([K, m], ci) => {
+          const esT = K === T;
+          const k = K.eK[m];
+          const w = K.eW[m], piv = K.pts[k];
+          const dp = (j) => cross(w, sub(K.pts[j], piv));
+          const V2 = V.slice();
+          if (esT) {
+            if (k < 1) V2[1] = add(V[1], mul(dp(1), h));
+            if (k < 2) V2[2] = add(V[2], mul(dp(2), h));
+          } else {
+            if (k < 2) V2[4] = add(V[4], mul(dp(2), h));
+            if (k < 1) V2[5] = add(V[5], mul(dp(1), h));
+          }
+          V2[3] = add(V[3], mul(dp(3), 0.5 * h));
+          const r2 = residuosLazo(V2).r;
+          for (let q = 0; q < mR; q++) J[ci].push((gate * r2[q] - base[q]) / h);
+        });
+        // filas de contacto y choques que involucran a T o F
+        const filas = [];   // residuos
+        const agregar = (rc, peso) => {
+          const {A, B, i, j} = rc;
+          const enA = A === T || A === F, enB = B === T || B === F;
+          if (!enA && !enB) return;
+          estadoCadena(modelo, A); estadoCadena(modelo, B);
+          const sa = A.segs[i], sb = B.segs[j];
+          const c = puntoMasCercano(sa[0], sa[1], sb[0], sb[1]);
+          const R = A.rad[i] + B.rad[j];
+          const g = c.d - R - rc.obj;
+          if (rc.modo === 'min' && g > 0.0005) return;
+          let n;
+          if (c.d > 1e-6) {
+            n = mul(sub(c.ca, c.cb), 1 / c.d);
+            if (rc.capa) {
+              const w = smooth01((c.d / R - 0.25) / 0.35);
+              n = unit(add(mul(n, w), mul(rc.capa, 1 - w))) || rc.capa;
+            }
+          } else n = rc.capa || [0, 1, 0];
+          filas.push(peso * (rc.modo === 'min' ? Math.min(g, 0) : g));
+          cols.forEach(([K, m], ci) => {
+            let d = 0;
+            const k = K.eK[m];
+            if (K === A && k <= i) d += dot(n, cross(K.eW[m], sub(c.ca, K.pts[k])));
+            if (K === B && k <= j) d -= dot(n, cross(K.eW[m], sub(c.cb, K.pts[k])));
+            J[ci].push(peso * d);
+          });
+        };
+        for (const rc of contacto) agregar(rc, kAj.contacto * (rc.relax == null ? 1 : rc.relax));
+        for (const g of grupos) {
+          estadoCadena(modelo, g.A); estadoCadena(modelo, g.B);
+          if (!cercanas(g.A, g.B, g.margen)) continue;
+          for (const rc of g.lista) agregar(rc, kAj.choque);
+        }
+        const res = base.concat(filas);
+        const M0 = res.length;
+        const A = [], b = new Array(N);
+        for (let a = 0; a < N; a++) {
+          const fila = new Array(N);
+          for (let c = 0; c < N; c++) {
+            let s = 0;
+            for (let q = 0; q < M0; q++) s += J[a][q] * J[c][q];
+            fila[c] = s;
+          }
+          const [K, m] = cols[a];
+          fila[a] += kAj.mu / K.mov[m] + kAj.fide * kAj.fide;
+          let g = 0;
+          for (let q = 0; q < M0; q++) g += J[a][q] * res[q];
+          b[a] = -g - kAj.fide * kAj.fide * (K.th[m] - K.th0[m]);
+          if (K.thPrev) {
+            fila[a] += kAj.temp * kAj.temp;
+            b[a] -= kAj.temp * kAj.temp * (K.th[m] - K.thPrev[m]);
+          }
+          A.push(fila);
+        }
+        const x = resolverLineal(A, b, N);
+        if (!x) return 0;
+        let mayor = 0;
+        for (let a = 0; a < N; a++) {
+          const [K, m] = cols[a];
+          const dlt = clamp(x[a], -0.35, 0.35);
+          K.th[m] += dlt;
+          mayor = Math.max(mayor, Math.abs(dlt));
+        }
+        limitarCadena(T); limitarCadena(F);
+        return mayor;
+      }
+
+      /**
+       * `contactos`: {Index: {w, vl}, ...} con el peso de contacto del pulgar con
+       * la yema de cada dedo (de los landmarks) y la distancia entre yemas.
+       */
+      function refinarMano(modelo, out, P, estado, contactos, opciones) {
+        const cad = cadenasDe(modelo, out);
+        const porNombre = {};
+        for (const c of cad) porNombre[c.nombre] = c;
+        if (cad.length < 2) return null;
+        const cruce = (estado && (estado.cruce = estado.cruce || {})) || {};
+        // Capa (dorso +Y / palma -Y) de cada par segun los landmarks, con histeresis
+        const capaDe = (clave, a, b) => {
+          let mejor = null;
+          for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+            const lc = puntoMasCercano(P[kIdx[a][i]], P[kIdx[a][i + 1]],
+              P[kIdx[b][j]], P[kIdx[b][j + 1]]);
+            if (!mejor || lc.d < mejor.d) mejor = lc;
+          }
+          const dy = mejor.ca[1] - mejor.cb[1];
+          if (cruce[clave] == null) cruce[clave] = dy >= 0 ? 1 : -1;
+          else if (Math.abs(dy) > 0.015 * (modelo.palma || kPalmaRef)) {
+            cruce[clave] = dy > 0 ? 1 : -1;
+          }
+          return [0, cruce[clave], 0];
+        };
+        const claves = {'Index-Middle': 'IM', 'Middle-Ring': 'MR', 'Ring-Little': 'RL'};
+        const contacto = [], grupos = [];
+        const pul = porNombre.Thumb;
+        // Dedo principal del contacto (el de mayor peso): el pulgar lo toca de
+        // verdad; los demas dedos que tambien estan cerca solo lo intentan con
+        // menos fuerza, si no los contactos se estorban entre si.
+        let principal = null, wMax = 0.25;
+        if (contactos) {
+          for (const nb of kNombresLargos) {
+            const ct = contactos[nb];
+            if (ct && ct.w > wMax) { wMax = ct.w; principal = nb; }
+          }
+        }
+        for (const [na, nb] of kParesLargos) {
+          const A = porNombre[na], B = porNombre[nb];
+          if (!A || !B) continue;
+          const clave = claves[na + '-' + nb] || (na[0] + nb[0] + 'x');
+          const capa = capaDe(clave, na, nb);
+          const lista = [];
+          for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+            lista.push({A, i, B, j, obj: kHolguraDedos, modo: 'min', capa});
+          }
+          grupos.push({A, B, lista, margen: kHolguraDedos + 0.002});
+        }
+        if (pul) {
+          for (const nb of kNombresLargos) {
+            const B = porNombre[nb];
+            if (!B) continue;
+            const capa = capaDe('T' + nb[0], 'Thumb', nb);
+            const ct = contactos && contactos[nb];
+            const w = ct ? ct.w : 0;
+            const enContacto = w > 0.25;
+            const lista = [];
+            for (let i = 1; i < 3; i++) for (let j = 0; j < 3; j++) {
+              if (enContacto && i === 2 && j === 2) continue; // lo lleva el contacto
+              lista.push({A: pul, i, B, j, obj: kHolguraPulgar, modo: 'min', capa});
+            }
+            grupos.push({A: pul, B, lista, margen: kHolguraPulgar + 0.002});
+            if (enContacto) {
+              const R = pul.rad[2] + B.rad[2];
+              contacto.push({A: pul, i: 2, B, j: 2, modo: 'igual',
+                obj: (1 - w) * Math.max(0, ct.vl - R), capa: null,
+                relax: clamp((w - 0.25) / 0.35, 0, 1) * (nb === principal ? 1 : kContactoSecundario)});
+            }
+          }
+        }
+        // Solo se trabaja si hay contacto o alguna falange demasiado cerca
+        const hayContacto = contacto.length > 0;
+        let hayChoque = false;
+        for (const g of grupos) {
+          estadoCadena(modelo, g.A); estadoCadena(modelo, g.B);
+          if (!cercanas(g.A, g.B, g.margen)) continue;
+          for (const rc of g.lista) {
+            const sa = rc.A.segs[rc.i], sb = rc.B.segs[rc.j];
+            const c = puntoMasCercano(sa[0], sa[1], sb[0], sb[1]);
+            if (c.d - rc.A.rad[rc.i] - rc.B.rad[rc.j] < rc.obj - 2e-5) {
+              hayChoque = true; break;
+            }
+          }
+          if (hayChoque) break;
+        }
+        if (!hayContacto && !hayChoque) return {iter: 0, peor: 0};
+        const maxPas = opciones.pasadasRefinar ?? 10;
+        let iter = 0, peor = 0;
+        for (; iter < maxPas; iter++) {
+          peor = pasadaRestricciones(modelo, contacto, grupos);
+          if (opciones.trazas) opciones.trazas.push(peor);
+          if (peor < 5e-5) { iter++; break; }
+        }
+        // Redondear el lazo pulgar-dedo cuando hay un contacto claro
+        let redondez = null;
+        if (principal && pul && porNombre[principal] && opciones.redondear !== false) {
+          const F = porNombre[principal];
+          const r0 = redondezLazo(lazoPuntos(modelo, pul, F));
+          const wP = contactos[principal].w;
+          // solo si el lazo deja un hueco (no un puño apretado)
+          const gate = smooth01((wP - 0.4) / 0.4) * smooth01((r0.q - 0.015) / 0.03);
+          if (gate > 0.02) {
+            // Continuidad: si el cuadro anterior ya redondeo este mismo lazo, se
+            // parte de su resultado y se ancla a el (sin esto, el lazo salta
+            // entre soluciones parecidas de un cuadro a otro).
+            const prev = estado && estado.prevLazo;
+            if (prev && prev.dedo === principal && prev.pulgar && prev.dedoTh) {
+              pul.thPrev = prev.pulgar; F.thPrev = prev.dedoTh;
+              pul.th = prev.pulgar.slice(); F.th = prev.dedoTh.slice();
+              limitarCadena(pul); limitarCadena(F);
+            }
+            const rondas = opciones.rondasRedondez ?? 5;
+            let ro = 0;
+            for (; ro < rondas; ro++) {
+              const mayor = pasoRedondez(modelo, pul, F, gate, contacto, grupos);
+              for (let p = 0; p < (opciones.pasadasRonda ?? 2); p++) {
+                pasadaRestricciones(modelo, contacto, grupos);
+              }
+              if (mayor < 0.004) break;
+            }
+            // cierre final: contacto y choques, sin redondear mas
+            for (let p = 0; p < (opciones.pasadasFinal ?? 4); p++) {
+              if (pasadaRestricciones(modelo, contacto, grupos) < 5e-5) break;
+            }
+            const r1 = redondezLazo(lazoPuntos(modelo, pul, F));
+            redondez = {gate, antes: r0, despues: r1, rondas: ro};
+            if (estado) estado.prevLazo = {dedo: principal, pulgar: pul.th.slice(), dedoTh: F.th.slice()};
+          } else if (estado) estado.prevLazo = null;
+        } else if (estado) estado.prevLazo = null;
+        // Niveles tras el contacto. El dedo que toca el pulgar se baja (o sube)
+        // hasta la yema del pulgar, que en el avatar queda mas lejos que en los
+        // landmarks; si los dedos vecinos estaban al mismo nivel que el, deben
+        // acompanarlo con el mismo cambio, no quedarse a otra altura (en la D el
+        // medio llegaba al pulgar y el anular y el menique se quedaban 3 cm mas
+        // cerca de la palma). Cada seguidor parte de lo que vio la camara y recibe
+        // el cambio del dedo principal, ponderado por lo parecido que era su nivel.
+        let seguidores = null;
+        if (principal && pul && porNombre[principal] && opciones.nivelar !== 0) {
+          const Pr = porNombre[principal];
+          const sg = modelo.signoFlex;
+          const nivel0 = (c) => sg * (c.th0[0] + c.th0[1] + c.th0[2]);
+          const cambio = [0, 1, 2].map((k) => Pr.th[k] - Pr.th0[k]);
+          const fuerza = opciones.nivelar ?? 1;
+          for (const nb of kNombresLargos) {
+            if (nb === principal) continue;
+            const F = porNombre[nb];
+            if (!F) continue;
+            const w = fuerza * smooth01((kNivelLejos - Math.abs(nivel0(F) - nivel0(Pr))) /
+              (kNivelLejos - kNivelCerca));
+            if (w <= 0.001) continue;
+            for (let k = 0; k < 3; k++) F.th[k] = F.th0[k] + w * cambio[k];
+            limitarCadena(F);
+            (seguidores = seguidores || {})[nb] = w;
+          }
+          if (seguidores) {
+            for (let p = 0; p < (opciones.pasadasNivel ?? 6); p++) {
+              if (pasadaRestricciones(modelo, contacto, grupos) < 5e-5) break;
+            }
+          }
+        }
+        if (opciones.dep) {
+          for (const g of grupos) for (const rc of contacto.concat(g.lista)) {
+            estadoCadena(modelo, rc.A); estadoCadena(modelo, rc.B);
+            const sa = rc.A.segs[rc.i], sb = rc.B.segs[rc.j];
+            const c = puntoMasCercano(sa[0], sa[1], sb[0], sb[1]);
+            const C = c.d - rc.A.rad[rc.i] - rc.B.rad[rc.j] - rc.obj;
+            if (rc.modo === 'igual' || C < 0) {
+              opciones.dep.push(`${rc.modo} ${rc.A.nombre}${rc.i}-${rc.B.nombre}${rc.j} C=${(C * 1000).toFixed(2)} obj=${(rc.obj * 1000).toFixed(1)} relax=${rc.relax}`);
+            }
+          }
+        }
+        // volcar a la salida
+        const signo = modelo.signoFlex;
+        for (const c of cad) {
+          if (c.pulgar) {
+            const giros = girosDeParams(c.base, c.th);
+            const fk = fkPulgar(modelo, giros);
+            out.pulgar.params = c.th.slice();
+            out.pulgar.giros = giros;
+            out.pulgar.quats = giros.map(aCuaternion);
+            out.pulgar.pts = fk.pts;
+          } else {
+            const r = out.dedos[c.nombre];
+            for (let k = 0; k < 3; k++) {
+              r[k].f = c.th[k]; r[k].a = c.th[3 + k]; r[k].flex = signo * c.th[k];
+            }
+          }
+        }
+        return {iter, peor, redondez, seguidores};
+      }
+
+      // ----------------------------- Mano completa -----------------------------
+      /**
+       * `P`: 20 puntos [x,y,z] en el marco local de la mano, en metros del
+       * avatar. Devuelve {dedos:{Index:[{f,a,flex}x3],...}, pulgar:{params,...},
+       * contacto}. `opciones.estado` guarda la capa (dorso/palma) de cada cruce.
+       */
+      // Un dedo solo se dobla hacia la palma. Si los landmarks de una mano traen
+      // las articulaciones doblandose hacia el dorso en conjunto, la mano esta
+      // "al reves" (el detector la asigno al lado contrario: pasa en senas con
+      // las manos juntas, como PERDON o GRACIAS). Se refleja contra el plano de
+      // la palma para que el avatar doble los dedos hacia su palma, que es lo que
+      // hacia el metodo anterior al medir solo el valor absoluto del angulo.
+      function evidenciaEspejo(modelo, P) {
+        let suma = 0;
+        for (const nombre of kNombresLargos) {
+          const M = kIdx[nombre].map((i) => P[i]);
+          const t = [unit(sub(M[1], M[0])), unit(sub(M[2], M[1])),
+            unit(sub(M[3], M[2]))];
+          if (!t[0] || !t[1] || !t[2]) continue;
+          const d = modelo.dedos[nombre];
+          let Q = I3();
+          for (let k = 0; k < 3; k++) {
+            const u = mv(tr(Q), t[k]);
+            const e = dosEjes(d.r[k], u, Math.PI / 2);
+            Q = mm(Q, mm(rotZ(e.f), rotY(e.a)));
+            if (k > 0) suma += clamp(modelo.signoFlex * e.f, -1.5, 1.5);
+          }
+        }
+        return suma;
+      }
+
+      // ------------------------------ Niveles de los dedos ------------------------------
+      // Cuando varios dedos estan en el MISMO estado (varios doblados, varios
+      // estirados) la mano se ve ordenada si los dedos de ese estado quedan al
+      // mismo nivel, y no cada uno con la flexion suelta que dejo la camara (uno
+      // curvado en el nudillo, otro doblado hasta el tope en la articulacion
+      // media). Los dedos en estados distintos conservan niveles distintos.
+      //   - Nivel de un dedo = suma de la flexion de sus 3 articulaciones.
+      //   - Dos dedos comparten nivel si sus niveles se parecen (peso suave, sin
+      //     saltos entre cuadros): total hasta kNivelCerca, nada desde kNivelLejos.
+      //   - El dedo que toca la yema del pulgar (D, O, F...) hace de ancla: es el
+      //     que forma el circulo, asi que los demas toman SU forma y no al reves.
+      //   - Solo cambia la flexion; la separacion lateral de cada dedo se queda.
+      const kNivelCerca = 0.7;     // rad de flexion total
+      const kNivelLejos = 1.3;
+      const kAnclaContacto = 8;
+
+      function nivelarDedos(modelo, dedos, P, opciones = {}) {
+        const fuerza = opciones.nivelar ?? 1;
+        if (!(fuerza > 0)) return;
+        const nombres = kNombresLargos.filter((n) => dedos[n]);
+        if (nombres.length < 2) return;
+        const palma = modelo.palma || kPalmaRef;
+        const cerca = opciones.contactoCerca ?? 0.15;
+        const lejos = opciones.contactoLejos ?? 0.32;
+        const info = nombres.map((n) => {
+          const fl = dedos[n].map((r) => r.flex);
+          const vl = largo(sub(P[3], P[kIdx[n][3]]));
+          const wC = 1 - smooth01((vl / palma - cerca) / (lejos - cerca));
+          return {n, fl, nivel: fl[0] + fl[1] + fl[2], ancla: 1 + kAnclaContacto * wC};
+        });
+        const signo = modelo.signoFlex;
+        const nuevos = info.map((a) => {
+          let den = 0;
+          const num = [0, 0, 0];
+          for (const b of info) {
+            const w = a === b ? 1
+              : smooth01((kNivelLejos - Math.abs(a.nivel - b.nivel)) / (kNivelLejos - kNivelCerca));
+            if (w <= 0) continue;
+            const peso = w * b.ancla;
+            den += peso;
+            for (let k = 0; k < 3; k++) num[k] += peso * b.fl[k];
+          }
+          return a.fl.map((v, k) => v + fuerza * (num[k] / den - v));
+        });
+        info.forEach((a, i) => {
+          for (let k = 0; k < 3; k++) {
+            const flex = clamp(nuevos[i][k], kFlexMin[k], kFlexMax[k]);
+            dedos[a.n][k].flex = flex;
+            dedos[a.n][k].f = signo * flex;
+          }
+        });
+      }
+
+      // ------------------------ Pulgar sobre la palma (B, 5...) ------------------------
+      // Con el pulgar cruzado sobre la palma la camara lo ve de canto y suele
+      // darle la ultima falange apuntando hacia adelante, junto al indice, como
+      // si el pulgar estuviera a un lado. Para que se lea "va dentro de la palma"
+      // se gira un poco esa ultima falange hacia el centro de la mano (a lo
+      // ancho, sin mandar la punta hacia atras). El giro es pequeno (hasta
+      // kPulgarPalmaMax) y solo cuando la punta ya esta sobre la palma y cerca de
+      // su plano; si el pulgar toca otro dedo (O, F, D...) no se toca.
+      const kPulgarPalmaMax = 0.45;   // rad (~26 deg)
+      function pulgarHaciaPalma(modelo, P, pesoContacto, dedos, opciones = {}) {
+        const maxGiro = opciones.pulgarPalma ?? kPulgarPalmaMax;
+        if (!(maxGiro > 0)) return P;
+        const q = kIdx.Thumb.map((i) => P[i]);
+        const dist = sub(q[3], q[2]);
+        const largoFal = largo(dist);
+        const u = unit(dist);
+        if (!u) return P;
+        let c = [0, 0, 0];
+        for (const n of kNombresLargos) c = add(c, P[kIdx[n][0]]);
+        c = mul(c, 1 / 5);               // muneca (origen) + 4 nudillos
+        const palma = modelo.palma || kPalmaRef;
+        const dTip = largo(sub(q[3], c)) / palma;
+        const wPos = 1 - smooth01((dTip - 0.6) / 0.4);
+        const wPlano = 1 - smooth01((Math.abs(q[3][1] - c[1]) / palma - 0.2) / 0.3);
+        // Solo con la palma al descubierto: si los dedos estan doblados (T, A,
+        // S...) el pulgar queda debajo o entre ellos y girarlo lo atravesaria.
+        let suma = 0, cuenta = 0;
+        for (const n of kNombresLargos) {
+          if (!dedos || !dedos[n]) continue;
+          suma += dedos[n][0].flex + dedos[n][1].flex + dedos[n][2].flex;
+          cuenta++;
+        }
+        const wDedos = cuenta ? 1 - smooth01((suma / cuenta - 0.5) / 0.8) : 1;
+        const w = wPos * wPlano * wDedos * (1 - clamp(pesoContacto, 0, 1));
+        if (w < 0.01) return P;
+        const lado = (c[2] - q[2][2]) >= 0 ? 1 : -1;
+        const obj = [0, 0, lado];
+        const ang = Math.acos(clamp(dot(u, obj), -1, 1));
+        const giro = Math.min(maxGiro * w, ang);
+        if (giro < 1e-4) return P;
+        const eje = unit(cross(u, obj));
+        if (!eje) return P;
+        const u2 = mv(rotEje(eje, giro), u);
+        const P2 = P.slice();
+        P2[3] = add(q[2], mul(u2, largoFal));
+        return P2;
+      }
+
+      const kCurvaContactoMin = 0.7;   // flexion total (rad) bajo la cual el contacto no cuenta
+      const kCurvaContactoPaso = 0.8;
+
+      function resolverMano(modelo, P, opciones = {}) {
+        if (!modelo || !P || P.length < 20 || P.some((p) => !p || !finito(p))) {
+          return null;
+        }
+        let espejo = false;
+        if (opciones.espejo !== false) {
+          const ev = evidenciaEspejo(modelo, P);
+          const est = opciones.estado;
+          const previo = est ? est.espejo === true : false;
+          // histeresis: cambiar de estado solo con evidencia clara
+          espejo = ev < -0.9 || (previo && ev < 0.9);
+          if (est) est.espejo = espejo;
+        }
+        if (espejo) P = P.map((p) => [p[0], -p[1], p[2]]);
+        const out = {dedos: {}, pulgar: null};
+        const sens = opciones.sensibilidad ?? 1;
+        for (const nombre of kNombresLargos) {
+          const M = kIdx[nombre].map((i) => P[i]);
+          const r = resolverDedoLargo(modelo, nombre, M, sens);
+          if (r) out.dedos[nombre] = r;
+        }
+        if (opciones.nivelar !== 0) nivelarDedos(modelo, out.dedos, P, opciones);
+        if (opciones.separar !== false) {
+          separarDedos(modelo, out.dedos, P, opciones.estado);
+        }
+        const largos = {};
+        for (const nombre of Object.keys(out.dedos)) {
+          largos[nombre] = fkDedoLargo(modelo, nombre, out.dedos[nombre]);
+        }
+        // Contacto del pulgar: promedio ponderado de las yemas que, en los
+        // landmarks, estan al alcance de la punta del pulgar.
+        const tipPulgar = P[3];
+        const palma = modelo.palma || 0.067;
+        const cerca = opciones.contactoCerca ?? 0.15;   // en palmas
+        const lejos = opciones.contactoLejos ?? 0.32;
+        const sepMin = opciones.separacionMin ?? 0.009;
+        let sumaW = 0, sumaB = [0, 0, 0], peso = 0, mejor = null, dMejor = Infinity;
+        const pesosContacto = {};
+        for (const nombre of kNombresLargos) {
+          if (!largos[nombre]) continue;
+          const v = sub(tipPulgar, P[kIdx[nombre][3]]);
+          const vl = largo(v);
+          if (vl < dMejor) { dMejor = vl; mejor = nombre; }
+          // El contacto del pulgar con un dedo recto (K, P: el pulgar toca el
+          // medio por el lado) no debe doblar ese dedo hasta la yema del pulgar:
+          // solo cuenta cuando el dedo ya viene curvado (D, O, F, U...).
+          const rd = out.dedos[nombre];
+          const curva = rd ? rd[0].flex + rd[1].flex + rd[2].flex : 3;
+          const w = (1 - smooth01((vl / palma - cerca) / (lejos - cerca))) *
+            smooth01((curva - kCurvaContactoMin) / kCurvaContactoPaso);
+          pesosContacto[nombre] = {w, vl};
+          if (w <= 0.001) continue;
+          const dir = vl > 1e-9 ? mul(v, 1 / vl) : [0, 0, 0];
+          const b = add(largos[nombre][3], mul(dir, Math.max(vl, sepMin)));
+          sumaW += w; sumaB = add(sumaB, mul(b, w));
+          peso = Math.max(peso, w);
+        }
+        const blanco = sumaW > 0 ? mul(sumaB, 1 / sumaW) : null;
+        const Ppul = pulgarHaciaPalma(modelo, P, peso, out.dedos, opciones);
+        out.pulgar = resolverPulgar(modelo, Ppul, blanco, peso);
+        out.contacto = {dedo: mejor, distancia: dMejor / palma, peso};
+        out.espejo = espejo;
+        if (opciones.refinar !== false && out.pulgar) {
+          out.refinado = refinarMano(modelo, out, P, opciones.estado || {},
+            pesosContacto, opciones);
+        }
+        return out;
+      }
+
+      // Cuaterniones [x,y,z,w] del dedo largo (R = Rz(f)·Ry(a)) y del pulgar
+      const cuaternionDedo = (f, a) => aCuaternion(mm(rotZ(f), rotY(a)));
+      function cuaternionesPulgar(modelo, params) {
+        const base = modelo.dedos.Thumb.r.map(baseTangente);
+        return girosDeParams(base, params).map(aCuaternion);
+      }
+
+      return {
+        crearModelo, resolverMano, resolverDedoLargo, resolverPulgar,
+        fkDedoLargo, fkPulgar, dosEjes, aCuaternion, rotZ, rotY, mm, mv, tr, I3,
+        cuaternionDedo, cuaternionesPulgar, separarDedos, nivelarDedos, pulgarHaciaPalma, marcoMano, aMarcoLocal, giroMinimo, kIdx, kNombresLargos, kFlexMin, kFlexMax, kSepMax,
+      };
+    })();
+    // <<DEDOS3D_FIN>>
+
+    // <<DEDOS3D_ADAPTADOR_INICIO>>
+    // ---------------------------------------------------------------------
+    // Dedos en 3D: adaptador entre el visor y ManoIK.
+    //
+    // moverMano() llama primero a moverMano3D(). Si devuelve false (el modelo
+    // no trae los huesos, no hay marco de reposo, o cal.dedos3d esta apagado)
+    // se usa el metodo anterior de un angulo por falange. Un cuadro con datos
+    // degenerados NO cae al metodo anterior: devuelve true y conserva la ultima
+    // pose, igual que antes.
+    // ---------------------------------------------------------------------
+    // El avatar no trae hueso de yema. Se estima con la proporcion medida en el
+    // modelo de UNIVOZ (largo de la yema / distancia muneca-nudillo medio).
+    const kYemaPalma = 0.352, kYemaPulgarPalma = 0.367;
+    const kDedosIK = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
+    const kFlexReferenciaIK = 1.6;
+
+    function reiniciarManoIK(lado = null) {
+      for (const l of ['left', 'right']) {
+        if (lado && lado !== l) continue;
+        estadoManoIK[l] = {};
+        ultimoSolveManoIK[l] = null;
+        if (typeof handAngleFilters3D !== 'undefined') {
+          for (const filtro of handAngleFilters3D[l]) filtro.reset();
+        }
+      }
+    }
+
+    // Modelo de la mano del avatar (largos y direcciones de reposo de cada
+    // falange) leido de los huesos normalizados. En el rig normalizado todos los
+    // huesos parten con rotacion identidad, asi que `position` de cada falange ya
+    // esta en el marco local de la mano.
+    function modeloManoIK(lado) {
+      const signo = cal[lado].dedos < 0 ? -1 : 1;
+      const hecho = cacheManoIK[lado];
+      if (hecho && hecho.modelo.signoFlex === signo) return hecho;
+      if (!vrm || typeof ManoIK === 'undefined') return null;
+      const ref = refHand[lado];
+      if (!ref) return null;
+      const prefijo = lado === 'left' ? 'Left' : 'Right';
+      const huesos = {}, nodos = {}, fases = {};
+      for (const nombre of kDedosIK) {
+        const lista = nombre === 'Thumb' ? kFasesPulgar : kFasesGenericas;
+        const hs = lista.map((fase) =>
+          bone(VRMHumanBoneName[`${prefijo}${nombre}${fase}`]));
+        if (hs.some((h) => !h)) return null;
+        huesos[nombre] = {offs: hs.map((h) => h.position.toArray()), punta: 0};
+        nodos[nombre] = hs;
+        fases[nombre] = lista;
+      }
+      const palma = Math.hypot(...huesos.Middle.offs[0]);
+      if (!(palma > 1e-4)) return null;
+      for (const nombre of kDedosIK) {
+        huesos[nombre].punta =
+          (nombre === 'Thumb' ? kYemaPulgarPalma : kYemaPalma) * palma;
+      }
+      const modelo = ManoIK.crearModelo(lado, huesos, signo);
+      // mundo -> marco local de la mano en reposo (fila mayor)
+      const m = new THREE.Matrix4().makeRotationFromQuaternion(
+        ref.qWorld.clone().invert()).elements;
+      const mundoALocal = [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]];
+      const marco = {
+        x: ref.marco.x.toArray(), y: ref.marco.y.toArray(),
+        z: ref.marco.z.toArray(),
+      };
+      cacheManoIK[lado] = {modelo, nodos, fases, marco, mundoALocal, palma};
+      return cacheManoIK[lado];
+    }
+
+    function escribirDedosIK(lado, items, meta) {
+      for (const it of items) {
+        aplicarQuaternionSegura(it.hueso, it.jointId, it.q, meta, {
+          handId: lado,
+          expectedHandId: lado,
+          recovery: meta.recovery === true,
+        });
+      }
+    }
+
+    function registrarDedoIK(lado, dedoIndex, nombreDedo, entrada, salida,
+        filtrado, t, meta) {
+      if (filtrado) {
+        const diag = ultimoDiagnosticoAngulos[lado];
+        diag.madOutliers.push(...filtrado.diagnostics.madOutliers.map(
+          (joint) => dedoIndex * 3 + (joint % 3)));
+        if (filtrado.diagnostics.jumpRejectedChains.length) {
+          diag.jumpRejectedChains.push(dedoIndex);
+        }
+        diag.delayMs = Math.max(diag.delayMs, filtrado.diagnostics.delayMs);
+        diag.rawToFilteredRms = Math.max(diag.rawToFilteredRms,
+          filtrado.diagnostics.rawToFilteredRms);
+      }
+      const estadoDedo = fingerRenderState[lado]?.[dedoIndex];
+      if (!estadoDedo) return;
+      const media = (values) => values.reduce((sum, value) => sum + value, 0) /
+        Math.max(1, values.length);
+      estadoDedo.input = entrada.slice();
+      estadoDedo.render = salida.slice();
+      estadoDedo.timestampMs = t;
+      estadoDedo.samples.push({
+        timestampMs: t,
+        input: Math.min(1, media(entrada) / kFlexReferenciaIK),
+        avatar: Math.min(1, media(salida) / kFlexReferenciaIK),
+      });
+      if (estadoDedo.samples.length > 120) estadoDedo.samples.shift();
+      estadoDedo.lagMs = measureFingerLag(estadoDedo.samples);
+      ultimoDiagnosticoAngulos[lado].fingerLagMs = Math.max(
+        ultimoDiagnosticoAngulos[lado].fingerLagMs ?? 0, estadoDedo.lagMs);
+      if (estadoDedo.lagMs > 66) {
+        guardarAudit({
+          frame: meta.frameId ?? null,
+          timestampMs: t,
+          stage: 'finger_render',
+          joint: `${lado}:${nombreDedo}`,
+          score: Math.max(0, 1 - estadoDedo.lagMs / 250),
+          severity: 'error',
+          state: 'VALID',
+          action: 'inspect_filter_chain',
+          code: 'finger_response_lag',
+        });
+      }
+    }
+
+    function moverMano3D(lado, puntos, meta, base) {
+      if (cal.dedos3d === false || !base) return false;
+      const rig = modeloManoIK(lado);
+      if (!rig) return false;
+      const frameTime = Number(meta.timestampMs) ||
+        (typeof frameVivoTimestampMs !== 'undefined'
+          ? Number(frameVivoTimestampMs) : 0);
+      const t = frameTime || (typeof performance !== 'undefined' && performance.now
+        ? performance.now() : Date.now());
+      // El modo vivo llama a 60 Hz con el mismo cuadro de camara (~30 Hz): no se
+      // vuelve a resolver lo que ya se resolvio, solo se reaplica.
+      const ultimo = ultimoSolveManoIK[lado];
+      if (ultimo && ultimo.t === t) {
+        escribirDedosIK(lado, ultimo.items, meta);
+        return true;
+      }
+
+      // Landmarks -> ejes del avatar (misma conversion que orientarMuneca) -> marco
+      // local de la mano.
+      const w = new Array(20);
+      for (let i = 0; i < 20; i++) {
+        const p = puntos[i];
+        if (!Array.isArray(p) || p.length < 3 || !Number.isFinite(p[0]) ||
+            !Number.isFinite(p[1]) || !Number.isFinite(p[2])) return true;
+        const v = vectorBaseAvatar(new THREE.Vector3(
+          p[0], p[1], cal.invertZ ? p[2] : -p[2]), base);
+        w[i] = [v.x, v.y, v.z];
+      }
+      const P = ManoIK.aMarcoLocal(w, rig.marco, rig.mundoALocal, rig.palma);
+      if (!P) return true; // landmarks degenerados: conservar ultima pose
+      const resultado = ManoIK.resolverMano(rig.modelo, P, {
+        estado: estadoManoIK[lado],
+        sensibilidad: cal.fingerSensitivity,
+      });
+      if (!resultado) return true;
+
+      const filtrar = typeof handAngleFilters3D !== 'undefined' &&
+        webCameraState.smoothing;
+      if (filtrar && ultimoAnguloTimestamp[lado] !== t) {
+        ultimoAnguloTimestamp[lado] = t;
+        ultimoDiagnosticoAngulos[lado] = {
+          madOutliers: [], jumpRejectedChains: [], delayMs: 0, fingerLagMs: 0,
+          rawToFilteredRms: 0,
+        };
+      }
+      const signo = rig.modelo.signoFlex;
+      const items = [];
+      for (let dedoIndex = 0; dedoIndex < kDedosIK.length; dedoIndex++) {
+        const nombre = kDedosIK[dedoIndex];
+        const esPulgar = nombre === 'Thumb';
+        let entrada = null;
+        if (esPulgar) {
+          if (resultado.pulgar) entrada = resultado.pulgar.params.slice();
+        } else {
+          const r = resultado.dedos[nombre];
+          if (r) entrada = [r[0].f, r[1].f, r[2].f, r[0].a, r[1].a, r[2].a];
+        }
+        if (!entrada) continue; // dedo sin datos: se queda como estaba
+        let salida = entrada;
+        let filtrado = null;
+        if (filtrar) {
+          filtrado = handAngleFilters3D[lado][dedoIndex].filter(
+            entrada, t, frameVivoQuality || 1);
+          if (filtrado) salida = filtrado.angles;
+        }
+        const quats = esPulgar
+          ? ManoIK.cuaternionesPulgar(rig.modelo, salida)
+          : [0, 1, 2].map((k) => ManoIK.cuaternionDedo(salida[k], salida[3 + k]));
+        quats.forEach((q, k) => {
+          items.push({
+            hueso: rig.nodos[nombre][k],
+            jointId: `${lado}:${nombre}:${rig.fases[nombre][k]}`,
+            q: new THREE.Quaternion(q[0], q[1], q[2], q[3]),
+          });
+        });
+        // Para el diagnostico: "cuanto se dobla" cada falange, en radianes.
+        const magnitud = (v) => esPulgar
+          ? [0, 1, 2].map((k) => Math.hypot(v[2 * k], v[2 * k + 1]))
+          : [0, 1, 2].map((k) => Math.max(0, signo * v[k]));
+        registrarDedoIK(lado, dedoIndex, nombre, magnitud(entrada), magnitud(salida),
+          filtrado, t, meta);
+        if (esPulgar) {
+          const mags = magnitud(salida);
+          rigThumbState[lado] = {
+            closure: Math.max(0, Math.min(1, media3(mags) / 1.0)),
+            flexions: mags,
+            contacto: resultado.contacto?.peso ?? 0,
+            dedoContacto: resultado.contacto?.dedo ?? null,
+            espejo: resultado.espejo === true,
+          };
+        }
+      }
+      ultimoSolveManoIK[lado] = {t, items};
+      escribirDedosIK(lado, items, meta);
+      return true;
+    }
+
+    function media3(v) { return (v[0] + v[1] + v[2]) / 3; }
+    // <<DEDOS3D_ADAPTADOR_FIN>>
+
+    function moverMano(lado, presente, puntos, meta = {}, base = null) {
       // Si tracking pierde mano, presencia=0 significa conservar ultima
       // posicion valida. Asi no aparece un puño abierto durante un gap breve.
       if (!presente || !puntos) return;
+      // Camino principal: direccion 3D de cada falange (ManoIK). El resto de
+      // esta funcion es el metodo anterior (un angulo por falange); solo se
+      // usa si el 3D no esta disponible.
+      if (moverMano3D(lado, puntos, meta, base)) return;
       // puntos: 20 landmarks [x,y,z] relativos a la muneca, ya rotados y
       // escalados por sign_norm.dart.
       //
@@ -3767,6 +6221,7 @@
     }
 
     function ponerManoReposo(lado) {
+      ultimoSolveManoIK[lado] = null;
       const dedos = [
         ['Thumb', kFasesPulgar], ['Index', kFasesGenericas],
         ['Middle', kFasesGenericas], ['Ring', kFasesGenericas],
@@ -3777,10 +6232,9 @@
           const nombreHueso = VRMHumanBoneName[
             `${lado === 'left' ? 'Left' : 'Right'}${nombreDedo}${fase}`];
           const h = nombreHueso ? bone(nombreHueso) : null;
-          if (h) {
-            if (nombreDedo === 'Thumb') h.rotation.set(0, 0, 0);
-            else h.rotation.z = 0;
-          }
+          // Identidad completa: con ManoIK los dedos tambien giran de lado
+          // (eje Y) y no solo se flexionan (eje Z).
+          if (h) h.quaternion.identity();
         }
       }
     }
@@ -3929,6 +6383,7 @@
       for (const lado of ['left', 'right']) {
         for (const filtro of handAngleFilters[lado]) filtro.reset();
       }
+      reiniciarManoIK();
       ultimoAnguloTimestamp = {left: -1, right: -1};
       ultimoDiagnosticoAngulos = {
         left: {madOutliers: [], jumpRejectedChains: [], delayMs: 0, fingerLagMs: 0},
@@ -5493,13 +7948,20 @@
       const usarManoD = actualizarEstadoPerdidaMano(
         'right', !!brazoDVisible && p.presD, ahoraMs);
       if (base) aplicarTorso(p, meta);
+      // Separador de manos: solo cuando los DOS brazos se van a resolver.
+      planManos = null;
+      if (base && manosActivas.left && manosActivas.right &&
+          brazoIVisible && p.presI && usarManoI &&
+          brazoDVisible && p.presD && usarManoD) {
+        planificarManos(p, base);
+      }
       if (manosActivas.left) {
         const estado = estadoPerdidaMano.left;
         if (brazoIVisible && p.presI && usarManoI) {
           const frameMeta = estado.recoveryFrames > 0
             ? {...meta, recovery: true} : meta;
-          resolverBrazo('left', base, p.hombroI, p.codoI, p.munI, frameMeta);
-          moverMano('left', true, p.manoI, frameMeta);
+          resolverBrazo('left', base, p.hombroI, p.codoI, p.munI, frameMeta, p.manoI);
+          moverMano('left', true, p.manoI, frameMeta, base);
           orientarMuneca('left', true, p.manoI, base, frameMeta);
           estado.recoveryFrames = Math.max(0, estado.recoveryFrames - 1);
         } else if (!brazoIVisible || estado.enReposo) {
@@ -5521,8 +7983,8 @@
         if (brazoDVisible && p.presD && usarManoD) {
           const frameMeta = estado.recoveryFrames > 0
             ? {...meta, recovery: true} : meta;
-          resolverBrazo('right', base, p.hombroD, p.codoD, p.munD, frameMeta);
-          moverMano('right', true, p.manoD, frameMeta);
+          resolverBrazo('right', base, p.hombroD, p.codoD, p.munD, frameMeta, p.manoD);
+          moverMano('right', true, p.manoD, frameMeta, base);
           orientarMuneca('right', true, p.manoD, base, frameMeta);
           estado.recoveryFrames = Math.max(0, estado.recoveryFrames - 1);
         } else if (!brazoDVisible || estado.enReposo) {
@@ -5539,11 +8001,342 @@
           }
         }
       }
+      planManos = null;
     }
 
     // Modulo interno: un solo punto de entrada para vivo y replay. El estado
     // del rig queda encapsulado en esta pagina; Dart solo conoce contrato V2.
     const RigBodyEngine = Object.freeze({ aplicarFrame });
+
+    // ---------------------------------------------------------------------
+    // Reproduccion estable de secuencias (SOLO replay; el modo espejo en
+    // vivo no pasa por aqui y sigue con sus propios filtros).
+    //
+    // Que arregla, medido con las plantillas reales:
+    //  - Cada plantilla son 32 cuadros que cubren toda la sena, asi que entre
+    //    un cuadro y el siguiente la muñeca avanza hasta 8 cm. Aplicarlos
+    //    tal cual a 30 Hz se ve a saltos ("tiembla"); aqui se interpolan a
+    //    la tasa de la pantalla.
+    //  - El detector pierde la mano en cuadros sueltos dentro de la sena.
+    //    Antes eso dejaba al brazo congelado y, pasados 250 ms, lo mandaba a
+    //    reposo en medio de la sena. Los huecos se rellenan interpolando.
+    //  - El detector vibra unos milimetros aunque la mano este quieta. Se
+    //    suaviza con un filtro gaussiano que se apaga cuando la mano se mueve
+    //    rapido (asi no se aplanan los gestos): el temblor en reposo baja a
+    //    ~26 % y la velocidad pico de los gestos se queda igual.
+    //  - Las señas con la mano muy abajo (DISCULPA, PERDON...) se salian del
+    //    encuadre "de los codos para arriba": la camara baja lo justo.
+    // ---------------------------------------------------------------------
+    // <<ESTABLE_INICIO>>
+    const kManosRep = [
+      {loc: kOffLocL, pres: kOffPresL, shape: kOffShapeL},
+      {loc: kOffLocR, pres: kOffPresR, shape: kOffShapeR},
+    ];
+    const kSuavSigma = 1.3;
+    const kSuavRadio = 3;
+    // Velocidad (unidades por cuadro) por debajo de la cual el suavizado es
+    // total (v0) y por encima de la cual no se aplica (v1).
+    const kSuavUmbrales = {
+      cuerpo: [0.02, 0.08],
+      muneca: [0.04, 0.14],
+      forma: [0.06, 0.25],
+    };
+    const kSuavNucleo = (() => {
+      const k = [];
+      let suma = 0;
+      for (let i = -kSuavRadio; i <= kSuavRadio; i++) {
+        const w = Math.exp(-0.5 * (i / kSuavSigma) ** 2);
+        k.push(w);
+        suma += w;
+      }
+      return k.map((w) => w / suma);
+    })();
+
+    function _rachas(marca) {
+      const out = [];
+      let i = 0;
+      while (i < marca.length) {
+        if (marca[i]) {
+          let j = i;
+          while (j < marca.length && marca[j]) j++;
+          out.push([i, j]);
+          i = j;
+        } else {
+          i++;
+        }
+      }
+      return out;
+    }
+
+    // Rellena por interpolacion lineal los cuadros SIN mano que quedan entre
+    // la primera y la ultima deteccion de esa mano. Lo de antes de la primera
+    // y despues de la ultima no se toca: ahi la mano de verdad no esta.
+    function _rellenarHuecos(F) {
+      for (const m of kManosRep) {
+        let a = -1;
+        let b = -1;
+        for (let t = 0; t < F.length; t++) {
+          if (F[t][m.pres] >= 0.5) {
+            if (a < 0) a = t;
+            b = t;
+          }
+        }
+        if (a < 0 || a === b) continue;
+        let t = a;
+        while (t <= b) {
+          if (F[t][m.pres] >= 0.5) { t++; continue; }
+          const t0 = t - 1;
+          let t1 = t;
+          while (F[t1][m.pres] < 0.5) t1++;
+          for (let u = t0 + 1; u < t1; u++) {
+            const w = (u - t0) / (t1 - t0);
+            for (let c = 0; c < 3; c++) {
+              F[u][m.loc + c] = F[t0][m.loc + c] * (1 - w) + F[t1][m.loc + c] * w;
+            }
+            for (let c = 0; c < 60; c++) {
+              F[u][m.shape + c] = F[t0][m.shape + c] * (1 - w) + F[t1][m.shape + c] * w;
+            }
+            F[u][m.pres] = 1.0;
+          }
+          t = t1;
+        }
+      }
+    }
+
+    function _suaveParaVelocidad(v0, v1, v) {
+      const t = Math.min(1, Math.max(0, (v - v0) / (v1 - v0)));
+      return t * t * (3 - 2 * t);
+    }
+
+    // Suaviza F[a..b) en las columnas c0..c0+n-1. Cada cuadro mezcla el dato
+    // crudo con su version gaussiana segun la velocidad local.
+    function _suavizarTramo(F, a, b, c0, n, grupo, factor) {
+      const largo = b - a;
+      if (largo < 1) return;
+      const x = [];
+      for (let t = a; t < b; t++) x.push(F[t].slice(c0, c0 + n));
+      const d = [];
+      for (let i = 0; i < largo - 1; i++) {
+        let s = 0;
+        for (let k = 0; k < n; k++) {
+          const q = x[i + 1][k] - x[i][k];
+          s += q * q;
+        }
+        d.push(Math.sqrt(s));
+      }
+      const [v0, v1] = kSuavUmbrales[grupo];
+      for (let i = 0; i < largo; i++) {
+        let v = 0;
+        if (largo > 1) {
+          if (i === 0) v = d[0];
+          else if (i === largo - 1) v = d[largo - 2];
+          else v = 0.5 * (d[i - 1] + d[i]);
+        }
+        const w = 1 - _suaveParaVelocidad(v0, v1, v / factor);
+        if (w <= 0) continue;
+        for (let k = 0; k < n; k++) {
+          let acc = 0;
+          for (let j = -kSuavRadio; j <= kSuavRadio; j++) {
+            const idx = Math.min(largo - 1, Math.max(0, i + j));
+            acc += kSuavNucleo[j + kSuavRadio] * x[idx][k];
+          }
+          F[a + i][c0 + k] = x[i][k] + w * (acc - x[i][k]);
+        }
+      }
+    }
+
+    // Devuelve una COPIA lista para reproducir: huecos rellenos y temblor
+    // quitado. No toca la secuencia original ni lo que usa el reconocimiento.
+    function prepararSecuencia(frames) {
+      const F = frames.map((f) => f.slice());
+      _rellenarHuecos(F);
+      for (const m of kManosRep) {
+        const presente = F.map((f) => f[m.pres] >= 0.5);
+        for (const [a, b] of _rachas(presente)) {
+          _suavizarTramo(F, a, b, m.loc, 3, 'muneca', 1);
+          _suavizarTramo(F, a, b, m.shape, 60, 'forma', Math.sqrt(20));
+        }
+      }
+      for (let p = 0; p < 8; p++) {
+        const c0 = kOffBody + p * 3;
+        const tiene = F.map((f) => Math.hypot(f[c0], f[c0 + 1], f[c0 + 2]) > 1e-6);
+        for (const [a, b] of _rachas(tiene)) {
+          _suavizarTramo(F, a, b, c0, 3, 'cuerpo', 1);
+        }
+      }
+      return F;
+    }
+
+    // Cuadro intermedio en la posicion fraccionaria `pos` (0 = primer cuadro).
+    // Solo mezcla lo que existe en los dos cuadros vecinos; si un punto o una
+    // mano falta en uno de los dos, toma el del mas cercano (no inventa un
+    // punto entre "hay mano" y "no hay mano").
+    function interpolarFrame(F, pos, salida) {
+      const n = F.length;
+      const p = Math.min(Math.max(pos, 0), n - 1);
+      const i0 = Math.floor(p);
+      const i1 = Math.min(n - 1, i0 + 1);
+      const f = p - i0;
+      const A = F[i0];
+      const B = F[i1];
+      if (i0 === i1 || f === 0) {
+        for (let k = 0; k < kFrameDim; k++) salida[k] = A[k];
+        return salida;
+      }
+      const cerca = f < 0.5 ? A : B;
+      for (let pt = 0; pt < 8; pt++) {
+        const c = kOffBody + pt * 3;
+        const ambos = Math.hypot(A[c], A[c + 1], A[c + 2]) > 1e-6 &&
+          Math.hypot(B[c], B[c + 1], B[c + 2]) > 1e-6;
+        for (let k = 0; k < 3; k++) {
+          salida[c + k] = ambos ? A[c + k] + (B[c + k] - A[c + k]) * f : cerca[c + k];
+        }
+      }
+      for (const m of kManosRep) {
+        const ambas = A[m.pres] >= 0.5 && B[m.pres] >= 0.5;
+        if (ambas) {
+          for (let k = 0; k < 3; k++) {
+            salida[m.loc + k] = A[m.loc + k] + (B[m.loc + k] - A[m.loc + k]) * f;
+          }
+          for (let k = 0; k < 60; k++) {
+            salida[m.shape + k] = A[m.shape + k] + (B[m.shape + k] - A[m.shape + k]) * f;
+          }
+          salida[m.pres] = 1;
+        } else {
+          for (let k = 0; k < 3; k++) salida[m.loc + k] = cerca[m.loc + k];
+          for (let k = 0; k < 60; k++) salida[m.shape + k] = cerca[m.shape + k];
+          salida[m.pres] = cerca[m.pres];
+        }
+      }
+      return salida;
+    }
+
+    // Cuanto hay que bajar el borde de abajo del encuadre "codos" (en unidades
+    // del mundo) para que la mano mas baja de la secuencia siga a la vista.
+    //   m = {hombroY, brazo} a escala 1; anchoHombros ya viene en unidades de
+    //   mundo (es como se mide el avatar al cargarlo).
+    function extraEncuadreAbajo(frames, m, escala, reposo, anchoHombros) {
+      if (!m || !Array.isArray(frames) || !(anchoHombros > 0)) return 0;
+      let yMin = Infinity;
+      for (const f of frames) {
+        if (f[kOffPresL] >= 0.5) yMin = Math.min(yMin, f[kOffLocL + 1]);
+        if (f[kOffPresR] >= 0.5) yMin = Math.min(yMin, f[kOffLocR + 1]);
+      }
+      if (!Number.isFinite(yMin)) return 0;
+      const munecaY = m.hombroY * escala + yMin * anchoHombros;
+      const codoY = (m.hombroY - m.brazo * Math.sin(reposo)) * escala;
+      const abajoBase = codoY - 0.03 * escala;
+      const mano = 0.4 * m.brazo * escala; // lo que cuelga la mano bajo la muñeca
+      const extra = abajoBase - (munecaY - mano);
+      // Por debajo de ~4.5 cm la mano apenas se corta: no vale mover la camara.
+      if (!(extra > 0.045 * escala)) return 0;
+      return Math.min(extra, m.brazo * escala);
+    }
+    // <<ESTABLE_FIN>>
+
+    // Estado de la reproduccion estable.
+    let tReproMs = 0;
+    let frameIdRepro = 0;
+    const frameInterp = new Array(kFrameDim).fill(0);
+
+    // Suavizado de SALIDA (solo replay). Pasa los huesos del rig por un filtro
+    // exponencial de rotacion: quita lo que el IK deje de saltos, y convierte
+    // en una transicion corta el arranque desde reposo y el regreso a reposo
+    // al terminar (antes el brazo se "chasqueaba" a su lugar). El motor de
+    // arriba sigue viendo SUS rotaciones objetivo, no las suavizadas: antes de
+    // cada cuadro se restauran, y despues se guardan y se suavizan.
+    const suavizador = { activo: false, items: null, vrm: null };
+    const kSuavTauBaseMs = 28;
+    const kSuavTauReposoMs = 110;
+
+    function construirSuavizador() {
+      const vistos = new Set();
+      const items = [];
+      const agregar = (nombre) => {
+        const h = nombre ? bone(nombre) : null;
+        if (!h || vistos.has(h)) return;
+        vistos.add(h);
+        items.push({hueso: h, objetivo: h.quaternion.clone(),
+          suave: h.quaternion.clone()});
+      };
+      for (const n of ['Hips', 'Spine', 'Chest', 'UpperChest',
+        'LeftShoulder', 'RightShoulder']) agregar(VRMHumanBoneName[n]);
+      for (const lado of ['Left', 'Right']) {
+        for (const n of ['UpperArm', 'LowerArm', 'Hand']) {
+          agregar(VRMHumanBoneName[lado + n]);
+        }
+        for (const dedo of ['Thumb', 'Index', 'Middle', 'Ring', 'Little']) {
+          for (const fase of ['Metacarpal', 'Proximal', 'Intermediate', 'Distal']) {
+            agregar(VRMHumanBoneName[lado + dedo + fase]);
+          }
+        }
+      }
+      suavizador.items = items;
+      suavizador.vrm = vrm;
+    }
+
+    function activarSuavizador() {
+      if (!vrm) return;
+      if (!suavizador.items || suavizador.vrm !== vrm) construirSuavizador();
+      suavizador.activo = true;
+    }
+
+    // Antes de que el motor escriba: cada hueso vuelve a su objetivo. Si
+    // alguien mas lo toco desde el cuadro anterior (configurarManos, por
+    // ejemplo), lo que dejo pasa a ser el nuevo objetivo.
+    function suavizadoRestaurar() {
+      if (!suavizador.items) return;
+      for (const it of suavizador.items) {
+        const q = it.hueso.quaternion;
+        if (q.equals(it.suave)) q.copy(it.objetivo);
+        else it.objetivo.copy(q);
+      }
+    }
+
+    // Despues de que el motor escribio: guarda el objetivo y deja el hueso en
+    // su version suavizada. Devuelve cuanto falta (rad) para llegar al
+    // objetivo.
+    function suavizadoAplicar(dtMs, tauMs) {
+      if (!suavizador.items) return 0;
+      const a = 1 - Math.exp(-Math.max(1, dtMs) / Math.max(1, tauMs));
+      let falta = 0;
+      for (const it of suavizador.items) {
+        it.objetivo.copy(it.hueso.quaternion);
+        it.suave.slerp(it.objetivo, a);
+        it.hueso.quaternion.copy(it.suave);
+        falta = Math.max(falta, it.suave.angleTo(it.objetivo));
+      }
+      return falta;
+    }
+
+    // Termina el suavizado dejando cada hueso exactamente en su objetivo.
+    function suavizadoTerminar() {
+      if (suavizador.items) {
+        for (const it of suavizador.items) {
+          if (it.hueso.quaternion.equals(it.suave)) {
+            it.hueso.quaternion.copy(it.objetivo);
+            it.suave.copy(it.objetivo);
+          }
+        }
+      }
+      suavizador.activo = false;
+    }
+
+    // Camara dinamica (encuadre 'codos'): se acerca/aleja suavemente a lo que
+    // pide la seña en curso y vuelve al terminar.
+    function actualizarEncuadreDinamico(dtMs) {
+      if (encuadreModo !== 'codos') return;
+      const dif = encuadreExtraObjetivo - encuadreExtra;
+      if (Math.abs(dif) < 0.0005) {
+        if (encuadreExtra !== encuadreExtraObjetivo) {
+          encuadreExtra = encuadreExtraObjetivo;
+          aplicarEncuadre();
+        }
+        return;
+      }
+      encuadreExtra += dif * (1 - Math.exp(-Math.max(1, dtMs) / 180));
+      aplicarEncuadre();
+    }
 
     window.reproducirSecuencia = function (seqJson, fps, normVersion) {
       if (normVersion != null && String(normVersion) !== '2.0.0') {
@@ -5564,6 +8357,85 @@
         colaFrames = [];
         return;
       }
+      // Copia sin huecos ni temblor; la secuencia original no se usa mas aqui.
+      arrancarReproduccion(prepararSecuencia(colaFrames), fps);
+    };
+
+    // Valida un cuadro de 152 numeros finitos.
+    const esFrameValido = (frame) => Array.isArray(frame) &&
+      frame.length === kFrameDim && frame.every((v) => Number.isFinite(Number(v)));
+
+    // <<FRASE_INICIO>>
+    // Frase: varias señas SEGUIDAS, sin volver a reposo entre una y otra.
+    // Flutter manda [{frames: 32x152, fps}, ...] (una entrada por seña o por
+    // letra deletreada). Cada seña se limpia por separado (prepararSecuencia,
+    // asi el suavizado no mezcla una seña con la siguiente), se lleva a un
+    // mismo ritmo (los cuadros por segundo de la mas rapida; las mas lentas
+    // se estiran) y entre una y otra se intercala una transicion corta que
+    // lleva la ultima pose de una a la primera de la siguiente. La
+    // transicion usa las mismas reglas que interpolarFrame: una mano que solo
+    // esta en una de las dos señas no se inventa, aparece/desaparece y el
+    // visor la lleva a reposo con su margen normal.
+    const kFraseTransicionMs = 260;
+    const kFraseMaxSegmentos = 60;
+
+    function armarFrase(segmentos) {
+      const fpsSeg = segmentos.map((s) => Number.isFinite(Number(s.fps)) && Number(s.fps) > 0
+        ? Math.min(120, Math.max(1, Number(s.fps))) : 30);
+      const base = Math.max(...fpsSeg);
+      const out = [];
+      const nTrans = Math.max(2, Math.round(kFraseTransicionMs / 1000 * base));
+      segmentos.forEach((seg, i) => {
+        const P = prepararSecuencia(seg.frames);
+        if (out.length > 0) {
+          const par = [out[out.length - 1], P[0]];
+          for (let j = 1; j <= nTrans; j++) {
+            const x = j / (nTrans + 1);
+            const f = x * x * (3 - 2 * x);
+            out.push(interpolarFrame(par, f, new Array(kFrameDim).fill(0)));
+          }
+        }
+        const n = Math.max(2, Math.round(P.length * base / fpsSeg[i]));
+        for (let k = 0; k < n; k++) {
+          const pos = k * (P.length - 1) / (n - 1);
+          out.push(interpolarFrame(P, pos, new Array(kFrameDim).fill(0)));
+        }
+      });
+      return {frames: out, fps: base};
+    }
+
+    window.reproducirFrase = function (segmentosJson, normVersion) {
+      if (normVersion != null && String(normVersion) !== '2.0.0') {
+        avisar('norm_version incompatible: ' + normVersion);
+        return;
+      }
+      let segmentos;
+      try {
+        segmentos = JSON.parse(segmentosJson);
+      } catch (e) {
+        avisar('frase invalida: ' + e);
+        return;
+      }
+      if (!Array.isArray(segmentos) || segmentos.length === 0 ||
+          segmentos.length > kFraseMaxSegmentos ||
+          segmentos.some((s) => !s || !Array.isArray(s.frames) ||
+            s.frames.length !== kTFrames || !s.frames.every(esFrameValido))) {
+        avisar('frase incompatible: cada seña debe tener 32 frames de 152 valores');
+        return;
+      }
+      const frase = armarFrase(segmentos);
+      colaFrames = frase.frames;
+      arrancarReproduccion(colaFrames, frase.fps);
+    };
+    window.diagnosticoFrase = (segmentosJson) => {
+      const f = armarFrase(JSON.parse(segmentosJson));
+      return {cuadros: f.frames.length, fps: f.fps};
+    };
+    // <<FRASE_FIN>>
+
+    // Arranca la reproduccion de una secuencia YA preparada (sin huecos).
+    function arrancarReproduccion(frames, fps) {
+      colaFrames = frames;
       frameActual = 0;
       kFps = Number.isFinite(Number(fps)) && Number(fps) > 0
         ? Math.min(120, Math.max(1, Number(fps))) : 30;
@@ -5576,8 +8448,16 @@
       reiniciarFiltroWeb();
       reiniciarNeutralPulgar();
       reiniciarEstadoPerdidaMano();
+      tReproMs = 0;
+      frameIdRepro = 0;
+      fijarVelocidadGates(kVelGateReplay);
+      encuadreExtraObjetivo = encuadreModo === 'codos' && medidasEncuadre && vrm
+        ? extraEncuadreAbajo(colaFrames, medidasEncuadre, vrm.scene.scale.y || 1,
+          Number.isFinite(cal.reposo) ? cal.reposo : 1.4, anchoHombrosAvatar)
+        : 0;
       reproduciendo = colaFrames.length > 0;
-    };
+      if (reproduciendo) activarSuavizador();
+    }
 
     // Modo espejo: aplica UN frame al instante, sin cola ni interpolacion.
     // Lo alimenta la camara en vivo (pantalla_espejo.dart). Corta cualquier
@@ -5634,8 +8514,11 @@
         reiniciarNeutralPulgar();
         reiniciarEstadoPerdidaMano();
       }
+      if (reproduciendo || suavizador.activo) suavizadoTerminar();
       reproduciendo = false;
       colaFrames = [];
+      encuadreExtraObjetivo = 0;
+      if (velocidadMaxGate !== kVelGateVivo) fijarVelocidadGates(kVelGateVivo);
       frameVivoTimestampMs = Number(timestampMs) || 0;
       frameVivoFrameId++;
       frameVivoSourceSkewMs = Number(sourceMeta?.source_skew_ms ?? 0);
@@ -5682,28 +8565,33 @@
     let modoManual = false;
 
     let ultimoT = 0;
-    let acumMs = 0;
     function animar(t) {
       requestAnimationFrame(animar);
       const dt = ultimoT ? t - ultimoT : 16;
       ultimoT = t;
 
+      if (suavizador.activo) suavizadoRestaurar();
       if (reproduciendo) {
-        acumMs += dt;
+        // Tiempo continuo + interpolacion entre cuadros: la pose se actualiza
+        // en cada cuadro de pantalla (60 Hz), no a saltos de 30 Hz. El dt se
+        // recorta para que un tirón del WebView no se salte cuadros.
+        tReproMs += Math.min(dt, 50);
         const msPorFrame = 1000 / kFps;
-        while (acumMs >= msPorFrame && reproduciendo) {
-          acumMs -= msPorFrame;
-          if (frameActual >= colaFrames.length) {
-            reproduciendo = false;
-            posarReposo();
-            if (window.SenasChannel) window.SenasChannel.postMessage('fin');
-            break;
-          }
-          RigBodyEngine.aplicarFrame(colaFrames[frameActual], {
-            frameId: frameActual + 1,
-            timestampMs: frameActual * 1000 / kFps,
+        if (tReproMs >= colaFrames.length * msPorFrame) {
+          reproduciendo = false;
+          frameActual = colaFrames.length;
+          encuadreExtraObjetivo = 0;
+          posarReposo();
+          if (window.SenasChannel) window.SenasChannel.postMessage('fin');
+        } else {
+          const pos = tReproMs / msPorFrame;
+          frameActual = Math.floor(pos);
+          interpolarFrame(colaFrames, pos, frameInterp);
+          // +1 ms: moverMano toma timestampMs == 0 como "sin dato".
+          RigBodyEngine.aplicarFrame(frameInterp, {
+            frameId: ++frameIdRepro,
+            timestampMs: 1 + tReproMs,
           });
-          frameActual++;
         }
       } else if (frameVivo) {
         // Último frame gana: render 60 FPS, entrada de tracking ~30 FPS,
@@ -5747,6 +8635,15 @@
           }
         }
       }
+
+      if (suavizador.activo) {
+        const tau = reproduciendo
+          ? kSuavTauBaseMs + 90 * Math.max(0, 1 - tReproMs / 350)
+          : kSuavTauReposoMs;
+        const falta = suavizadoAplicar(dt, tau);
+        if (!reproduciendo && falta < 0.001) suavizadoTerminar();
+      }
+      actualizarEncuadreDinamico(dt);
 
       moverExpresionBasica(t / 1000);
       orbita.update();

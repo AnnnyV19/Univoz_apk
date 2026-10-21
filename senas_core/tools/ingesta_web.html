@@ -1,0 +1,1153 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UNIVOZ · Subir señas desde un link</title>
+<style>
+  /* Sin fuentes ni CSS de internet a proposito: esta herramienta tiene que
+     funcionar sin conexion, igual que el resto del pipeline. */
+  :root{
+    --morado:#6C63FF; --morado-osc:#5249d9; --lila:#B84FCE;
+    --fondo:#F7F2FA; --panel:#fff; --borde:#e2dced;
+    --texto:#241B35; --gris:#6B6478; --verde:#1f8a5b; --rojo:#c0392b;
+    --verde-fondo:#e6f6ee; --ambar-fondo:#fff5d6; --rojo-fondo:#fdecea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--texto);
+       font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{background:linear-gradient(90deg,var(--morado),#8B5CF6);color:#fff;
+         padding:14px 20px;display:flex;align-items:baseline;gap:12px}
+  header h1{margin:0;font-size:18px;letter-spacing:.5px}
+  header span{opacity:.85;font-size:13px}
+  main{max-width:1400px;margin:0 auto;padding:20px}
+  .paso{background:var(--panel);border:1px solid var(--borde);border-radius:14px;
+        padding:18px 20px;margin-bottom:16px}
+  .paso h2{margin:0 0 4px;font-size:16px;display:flex;align-items:center;flex-wrap:wrap}
+  .paso h2 b{display:inline-block;width:24px;height:24px;line-height:24px;
+             text-align:center;border-radius:50%;background:var(--morado);
+             color:#fff;font-size:13px;margin-right:8px;flex:none}
+  .ayuda{color:var(--gris);font-size:13px;margin:0 0 14px 32px}
+  .campos{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+  label{display:flex;flex-direction:column;gap:4px;font-size:12px;
+        font-weight:700;color:var(--gris)}
+  input[type=text],input[type=number],select{
+    font:inherit;padding:9px 11px;border:1px solid var(--borde);
+    border-radius:8px;background:#fff;color:var(--texto);min-width:120px}
+  input:focus,select:focus,button:focus-visible{outline:2px solid var(--morado);border-color:transparent}
+  .check{flex-direction:row;align-items:center;gap:6px;font-weight:600;
+         color:var(--texto);font-size:13px;padding-bottom:10px}
+  button{font:inherit;font-weight:700;padding:10px 18px;border:0;border-radius:24px;
+         background:var(--morado);color:#fff;cursor:pointer}
+  button:hover:not(:disabled){background:var(--morado-osc)}
+  button:disabled{opacity:.45;cursor:default}
+  button.grande{padding:13px 30px;font-size:16px}
+  button.sec{background:#efeaf7;color:var(--texto);font-weight:600;padding:8px 14px}
+  button.sec:hover:not(:disabled){background:#e3dbf2}
+  button.peligro{background:var(--lila)}
+  button.bien{background:var(--verde)} button.bien:hover:not(:disabled){background:#17704a}
+  button.mal{background:#8a8396} button.mal:hover:not(:disabled){background:#6f687c}
+  button.mini{padding:4px 10px;font-size:13px;border-radius:14px}
+  .pista{font-size:12px;color:var(--gris);margin:8px 0 0}
+  .pista .si{color:var(--verde);font-weight:700} .pista .no{color:var(--rojo);font-weight:700}
+
+  /* ---- revision ---- */
+  .revision{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:18px;align-items:start}
+  @media(max-width:980px){.revision{grid-template-columns:1fr}}
+  .visor{position:sticky;top:12px;background:#17112a;border-radius:14px;padding:12px;color:#fff}
+  @media(max-width:980px){.visor{position:static}}
+  .visor video{width:100%;max-height:300px;border-radius:10px;background:#000;display:block}
+  .marco{position:relative}
+  .marco canvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;border-radius:10px}
+  .marco.marcando canvas{pointer-events:auto;cursor:crosshair;touch-action:none}
+  .zonaTxt{font-size:12px;color:#cfc6e6;align-self:center}
+  .visor .info{margin:10px 2px 8px;font-size:13px;color:#cfc6e6}
+  .visor .info strong{display:block;font-size:20px;color:#fff;line-height:1.2;margin-bottom:2px;
+                      word-break:break-word}
+  .visor .barra{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .visor label{color:#cfc6e6;font-weight:600}
+  .visor .check{padding-bottom:0}
+  .visor select{min-width:0;padding:5px 8px;font-size:13px}
+  .visor .atajos{font-size:11px;color:#9d93b8;margin-top:10px}
+  .tabla-caja{overflow-x:auto}
+  .filtros{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+  .filtros button{padding:5px 12px;font-size:12px}
+  .filtros button.on{background:var(--morado);color:#fff}
+  .filtros .sep{flex:1}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;
+     color:var(--gris);border-bottom:2px solid var(--borde);padding:6px 4px;white-space:nowrap}
+  td{border-bottom:1px solid var(--borde);padding:4px;vertical-align:middle}
+  td input{width:100%;min-width:0;padding:6px 8px}
+  td input[type=number]{width:74px}
+  tr.fila{cursor:pointer}
+  tr.fila:hover{background:#faf7fd}
+  tr.fila.sel{outline:2px solid var(--morado);outline-offset:-2px;background:#f3f0ff}
+  tr.fila.aprobada{background:var(--verde-fondo)}
+  tr.fila.descartada{background:#f1eff4;color:#9a93a6}
+  tr.fila.descartada input{text-decoration:line-through;color:#9a93a6}
+  tr.fila.sinpalabra td.pal input{background:#fffaf0;border-color:#f0d98a}
+  .num{width:34px;text-align:right;color:var(--gris);font-variant-numeric:tabular-nums}
+  .dur{color:var(--gris);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .chip{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;
+        padding:1px 8px;background:#efeaf7;color:var(--gris);white-space:nowrap;margin:1px 2px 1px 0}
+  .chip.ojo{background:var(--ambar-fondo);color:#8a6a00}
+  .chip.mal{background:var(--rojo-fondo);color:var(--rojo)}
+  .chip.si{background:var(--verde-fondo);color:var(--verde)}
+  td.acc{white-space:nowrap}
+  td.acc button{padding:4px 11px;font-size:14px;border-radius:12px;margin-right:3px}
+  td.acc button.activo.ok{background:var(--verde)} td.acc button.activo.no{background:var(--rojo)}
+  td.acc button:not(.activo){background:#efeaf7;color:var(--gris)}
+  .grid.sinhoja{display:block}
+
+  #log{background:#1d1630;color:#e8e2f5;border-radius:12px;padding:12px 14px;
+       font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;
+       max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  .estado{font-size:13px;font-weight:700;margin-left:10px}
+  .estado.ok{color:var(--verde)} .estado.error{color:var(--rojo)}
+  .estado.corriendo{color:var(--morado)}
+  .banner{border-radius:10px;padding:12px 14px;font-size:14px;margin:0 0 14px}
+  .banner.bien{background:var(--verde-fondo);border:1px solid #a8dcc2}
+  .banner.ojo{background:var(--ambar-fondo);border:1px solid #f0d98a}
+  .aviso{background:var(--ambar-fondo);border:1px solid #f0d98a;border-radius:10px;
+         padding:10px 12px;font-size:13px;margin-top:12px}
+  .resumen-subida{font-size:14px;margin:0 0 12px;padding:10px 12px;border-radius:10px;background:#f3f0ff}
+  details{margin-top:14px;border-top:1px solid var(--borde);padding-top:12px}
+  summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--gris)}
+  details .campos{margin-top:12px}
+  .hoja img{width:100%;border:1px solid var(--borde);border-radius:10px;background:#fff;margin-top:10px}
+  .oculto{display:none}
+</style>
+</head>
+<body>
+<header><h1>UNIVOZ</h1><span>Subir señas desde un link</span></header>
+
+<main>
+  <!-- 1 ------------------------------------------------------------ -->
+  <section class="paso">
+    <h2><b>1</b>Pega el link y listo</h2>
+    <p class="ayuda">Baja el video y busca qué seña se hace en cada momento: por
+       sus <strong>subtítulos</strong>, por el <strong>texto escrito en el
+       video</strong> o por la <strong>voz</strong>. Tú revisas el resultado en
+       el paso 2 antes de que nada se suba.</p>
+    <div class="campos">
+      <label style="flex:1;min-width:300px">Link del video
+        <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=...">
+      </label>
+      <label>Categoría
+        <input type="text" id="categoria" placeholder="conversacion">
+      </label>
+      <label>Cómo identificar las señas
+        <select id="fuente">
+          <option value="auto">Automático (lo mejor que haya)</option>
+          <option value="subtitulos">Solo subtítulos</option>
+          <option value="texto">Texto escrito en el video</option>
+          <option value="voz">La voz del video</option>
+          <option value="imagen">Solo cortes por imagen (sin palabras)</option>
+        </select>
+      </label>
+      <button class="grande" id="btnPreparar">Preparar</button>
+    </div>
+    <div class="campos" style="margin-top:12px">
+      <label style="flex:1;min-width:300px">O uno que ya bajaste
+        <select id="videos"><option value="">—</option></select>
+      </label>
+      <label>Cuántas señas trae
+        <input type="number" id="nEsperado" min="1" placeholder="opcional">
+      </label>
+      <button class="sec" id="btnRecargar">Actualizar lista</button>
+    </div>
+    <p class="pista" id="herramientas"></p>
+  </section>
+
+  <!-- 2 ------------------------------------------------------------ -->
+  <section class="paso" id="seccionSegmentos">
+    <h2><b>2</b>Revisa y aprueba cada seña<span class="estado" id="estadoTabla"></span></h2>
+    <p class="ayuda">Toca una fila para ver su clip. Si la palabra y el corte están bien, aprueba
+       con ✓; si no, corrige la palabra o los tiempos, o descarta con ✗.
+       <strong>Solo se suben las aprobadas.</strong></p>
+    <div id="banner" class="oculto"></div>
+
+    <div class="revision">
+      <div class="visor">
+        <div class="marco" id="marco">
+          <video id="reproductor" controls preload="metadata" playsinline></video>
+          <canvas id="zonaCanvas"></canvas>
+        </div>
+        <div class="info">
+          <strong id="visorPalabra">—</strong>
+          <span id="visorTiempo">Elige una fila de la tabla.</span>
+        </div>
+        <div class="barra">
+          <button class="sec mini" id="btnAnterior" title="Fila anterior">⏮</button>
+          <button class="sec mini" id="btnRepetir" title="Ver el clip otra vez (Alt+R)">↻ Repetir</button>
+          <button class="sec mini" id="btnSiguiente" title="Fila siguiente">⏭</button>
+          <button class="bien mini" id="btnAprobar" title="Aprobar y pasar a la siguiente (Alt+A)">✓ Aprobar</button>
+          <button class="mal mini" id="btnDescartar" title="Descartar y pasar a la siguiente (Alt+D)">✗ Descartar</button>
+        </div>
+        <div class="barra">
+          <button class="sec mini" id="btnIniAhora" title="Pone el inicio de esta seña donde está el video ahora">Inicio = aquí</button>
+          <button class="sec mini" id="btnFinAhora" title="Pone el fin de esta seña donde está el video ahora">Fin = aquí</button>
+        </div>
+        <div class="barra">
+          <label class="check"><input type="checkbox" id="repetirSolo" checked> Repetir el clip</label>
+          <label class="check">Velocidad
+            <select id="velocidad">
+              <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+              <option value="1" selected>1×</option>
+            </select>
+          </label>
+        </div>
+        <div class="barra">
+          <button class="sec mini" id="btnMarcar"
+            title="Pausa el video en un momento donde se vea la letra o palabra y dibuja un rectángulo encima">▭ Marcar dónde sale la letra</button>
+          <button class="sec mini" id="btnLeerZona"
+            title="Vuelve a leer los rótulos del video, mirando solo esa zona">Leer en esa zona</button>
+          <span class="zonaTxt" id="zonaTexto"></span>
+        </div>
+        <div class="atajos">Alt+A aprueba y sigue · Alt+D descarta y sigue · Alt+R repite ·
+          Enter en una palabra baja a la siguiente</div>
+      </div>
+
+      <div>
+        <div class="filtros" id="filtros">
+          <button class="sec on" data-f="todas">Todas</button>
+          <button class="sec" data-f="pendientes">Por revisar</button>
+          <button class="sec" data-f="aprobadas">Aprobadas</button>
+          <button class="sec" data-f="descartadas">Descartadas</button>
+          <button class="sec" data-f="alertas">Con alerta</button>
+          <span class="sep"></span>
+          <button class="sec" id="btnAprobarBuenas"
+                  title="Aprueba las que ya tienen palabra y una duración normal (0.5 a 8 s)">Aprobar las que se ven bien</button>
+        </div>
+        <div class="tabla-caja">
+          <table>
+            <thead><tr>
+              <th class="num">#</th><th></th><th>Inicio</th><th>Fin</th><th>Dur.</th>
+              <th style="width:34%">Palabra</th><th>Fuente</th><th>Alertas</th><th>Revisión</th>
+            </tr></thead>
+            <tbody id="filas"><tr><td colspan="9" style="color:var(--gris);padding:14px 4px">
+              Pega un link arriba y dale <strong>Preparar</strong>.</td></tr></tbody>
+          </table>
+        </div>
+        <div class="campos" style="margin-top:14px">
+          <button id="btnGuardar" disabled>Guardar</button>
+          <span id="guardado" style="font-size:13px;color:var(--gris)">Se guarda solo al editar.</span>
+        </div>
+        <details class="hoja oculto" id="detalleHoja">
+          <summary>Hoja de contactos (la detección por imagen)</summary>
+          <img id="imgContactos" alt="Hoja de contactos" class="oculto">
+          <img id="imgPerfil" alt="Perfil de la señal" class="oculto">
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 ------------------------------------------------------------ -->
+  <section class="paso">
+    <h2><b>3</b>Subir a la base</h2>
+    <p class="resumen-subida" id="resumenSubida">Todavía no hay señas aprobadas.</p>
+    <div class="campos">
+      <label>Quién señaliza
+        <input type="text" id="signer" placeholder="anny">
+      </label>
+      <label>Manos
+        <select id="manos"><option value="1">1</option><option value="2">2</option></select>
+      </label>
+      <label class="check"><input type="checkbox" id="espejo"> Video espejeado</label>
+      <label class="check"><input type="checkbox" id="genEspejo"> Generar versión espejada</label>
+      <label class="check"><input type="checkbox" id="aprobar"> Dejarlas ya aprobadas en la base</label>
+      <button class="sec" id="btnSeco">Probar en seco</button>
+      <button class="peligro" id="btnSubir">Subir de verdad</button>
+    </div>
+    <div class="aviso"><strong>Dos aprobaciones distintas.</strong> La del paso 2 decide
+      <em>qué se sube</em>. La casilla «Dejarlas ya aprobadas en la base» decide si
+      entran como <code>aprobada</code> o como <code>pendiente</code> (sin ella, quedan
+      pendientes para revisar otra vez en Supabase). Después de subir hay que correr
+      <code>exportar_paquete.py</code> y recompilar para que lleguen al celular.</div>
+  </section>
+
+  <!-- salida + ajustes ---------------------------------------------- -->
+  <section class="paso">
+    <h2>Detalle<span class="estado" id="estado"></span></h2>
+    <!-- Se abre solo mientras algo corre y si algo falla; cuando sale bien
+         se cierra, porque el resultado ya se ve arriba en la tabla. -->
+    <details id="detalle">
+      <summary>Ver lo que hicieron los scripts</summary>
+      <div id="log">Esperando…</div>
+    </details>
+
+    <details id="ajustes">
+      <summary>Ajustes manuales (solo si lo automático no acertó)</summary>
+      <div class="campos">
+        <label>Tipo de rótulo
+          <select id="senal">
+            <option value="tinta">Texto sobre franja limpia</option>
+            <option value="caja">Subtítulo en cajita negra</option>
+          </select>
+        </label>
+        <label>ROI
+          <input type="text" id="roi" value="0.50,0.18,0.655,0.60">
+        </label>
+        <label class="check"><input type="checkbox" id="mascaraSep"> Tapar al intérprete</label>
+        <label class="check"><input type="checkbox" id="estatica"> Señas estáticas</label>
+        <button class="sec" id="btnAuto">Buscar encuadre</button>
+        <button class="sec" id="btnRoi">Ver la ROI</button>
+        <button class="sec" id="btnSegmentar">Detectar por imagen</button>
+        <button class="sec" id="btnSubs">Solo subtítulos</button>
+      </div>
+      <div id="opciones" class="oculto" style="margin-top:14px"></div>
+      <div id="previaRoi" class="oculto" style="margin-top:14px">
+        <img id="imgRoi" alt="Vista de la ROI" style="max-width:100%;border-radius:10px;border:1px solid var(--borde)">
+      </div>
+    </details>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+let videoActual = "";
+let videoCargado = "";
+let linksPorVideo = {};
+let sondeo = null;
+let ocupado = false;
+
+/* ---- tabla de revisión: una fila por seña ---- */
+let filas = [];          // {n, inicio, fin, palabra, categoria, fuente, confianza, aprobada}
+let sel = -1;            // índice (en `filas`) de la fila que se está viendo
+let filtro = "todas";
+let guardarEn = null;    // temporizador del guardado automático
+let raf = 0;
+
+const DUR_MAX = 8, DUR_MIN = 0.5, CONF_MIN = 0.5;
+
+function estado(txt, clase) {
+  const e = $("estado");
+  e.textContent = txt;
+  e.className = "estado " + (clase || "");
+}
+
+function banner(texto, clase) {
+  const b = $("banner");
+  if (!texto) { b.classList.add("oculto"); return; }
+  b.className = "banner " + clase;
+  b.innerHTML = texto;
+  b.classList.remove("oculto");
+}
+
+function logLineas(lineas, reiniciar) {
+  const caja = $("log");
+  if (reiniciar) caja.textContent = "";
+  if (lineas.length) caja.textContent += lineas.join("\n") + "\n";
+  caja.scrollTop = caja.scrollHeight;
+}
+
+async function pedir(ruta, cuerpo) {
+  const opciones = cuerpo
+    ? { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cuerpo) }
+    : {};
+  const r = await fetch(ruta, opciones);
+  const datos = await r.json().catch(() => ({ error: "respuesta ilegible" }));
+  if (!r.ok || datos.error) throw new Error(datos.error || ("HTTP " + r.status));
+  return datos;
+}
+
+/* Arranca un trabajo y sondea su log hasta que termina. */
+function correr(ruta, cuerpo, alTerminar) {
+  if (sondeo) { clearInterval(sondeo); sondeo = null; }
+  logLineas([], true);
+  $("detalle").open = true;
+  estado("trabajando…", "corriendo");
+  ocupado = true;
+  document.querySelectorAll("button").forEach(b => b.disabled = true);
+
+  const liberar = () => {
+    ocupado = false;
+    document.querySelectorAll("button").forEach(b => b.disabled = false);
+    refrescarBotones();
+  };
+
+  pedir(ruta, cuerpo).then(({ trabajo }) => {
+    let desde = 0;
+    sondeo = setInterval(async () => {
+      let t;
+      try {
+        t = await pedir(`/api/trabajo?id=${trabajo}&desde=${desde}`);
+      } catch (e) {
+        clearInterval(sondeo); sondeo = null;
+        estado("se perdió el trabajo", "error");
+        liberar();
+        return;
+      }
+      logLineas(t.log, false);
+      desde = t.total;
+      if (t.estado === "corriendo") return;
+
+      clearInterval(sondeo); sondeo = null;
+      estado(t.estado === "ok" ? "listo" : "falló", t.estado);
+      $("detalle").open = t.estado !== "ok";
+      liberar();
+      if (alTerminar) alTerminar(t.datos || {}, t.estado);
+    }, 800);
+  }).catch(e => {
+    estado("error", "error");
+    logLineas([String(e.message || e)], true);
+    liberar();
+  });
+}
+
+function refrescarBotones() {
+  const hay = !!videoActual;
+  ["btnAuto", "btnRoi", "btnSegmentar", "btnSubs"]
+    .forEach(id => { $(id).disabled = !hay; });
+  const c = contar();
+  $("btnSeco").disabled = !hay || c.aprobadas === 0;
+  $("btnSubir").disabled = !hay || c.aprobadas === 0;
+  $("btnGuardar").disabled = !hay || !filas.length;
+  $("btnMarcar").disabled = !hay;
+  $("btnLeerZona").disabled = !hay || !zona;
+  const hayFilas = filas.length > 0;
+  ["btnAnterior", "btnRepetir", "btnSiguiente", "btnAprobar", "btnDescartar",
+   "btnIniAhora", "btnFinAhora", "btnAprobarBuenas"]
+    .forEach(id => { $(id).disabled = !hayFilas; });
+}
+
+/* ------------------------------------------------ zona del rótulo (marcar) */
+/* Fracciones 0..1 del VIDEO (no del cuadro de la pagina), que es lo que
+   espera ocr_rotulos.py --roi. */
+let zona = null;          // [x0, y0, x1, y1] o null
+let marcando = false;
+let inicioArrastre = null;
+
+function rectVideo() {
+  // El <video> deja barras negras si el cuadro no tiene su proporcion: el
+  // rectangulo del video de verdad es solo la parte que si lo muestra.
+  const v = $("reproductor"), cw = v.clientWidth || 1, ch = v.clientHeight || 1;
+  const vw = v.videoWidth || cw, vh = v.videoHeight || ch;
+  const e = Math.min(cw / vw, ch / vh);
+  const w = vw * e, h = vh * e;
+  return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
+}
+
+function dibujarZona(temporal) {
+  const c = $("zonaCanvas"), v = $("reproductor");
+  c.width = v.clientWidth; c.height = v.clientHeight;
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  const z = temporal || zona;
+  if (!z) return;
+  const r = rectVideo();
+  const x = r.x + z[0] * r.w, y = r.y + z[1] * r.h;
+  const w = (z[2] - z[0]) * r.w, h = (z[3] - z[1]) * r.h;
+  g.fillStyle = "rgba(255,196,0,.18)"; g.fillRect(x, y, w, h);
+  g.strokeStyle = "#ffc400"; g.lineWidth = 2; g.strokeRect(x, y, w, h);
+}
+
+function ponerZona(z) {
+  zona = z && z.length === 4 ? z.map(Number) : null;
+  $("zonaTexto").textContent = zona
+    ? `zona: x ${Math.round(zona[0] * 100)}–${Math.round(zona[2] * 100)} %, `
+      + `y ${Math.round(zona[1] * 100)}–${Math.round(zona[3] * 100)} %`
+    : "";
+  dibujarZona();
+  refrescarBotones();
+}
+
+function salirDeMarcar() {
+  marcando = false;
+  $("marco").classList.remove("marcando");
+  $("reproductor").controls = true;
+  $("btnMarcar").textContent = "▭ Marcar dónde sale la letra";
+}
+
+$("btnMarcar").onclick = () => {
+  if (marcando) { salirDeMarcar(); ponerZona(zona); return; }
+  const v = asegurarVideo();
+  v.pause();
+  v.controls = false;          // los controles tapan la orilla de abajo
+  marcando = true;
+  $("marco").classList.add("marcando");
+  $("btnMarcar").textContent = "Cancelar";
+  $("zonaTexto").textContent = "Arrastra un rectángulo sobre la letra o palabra.";
+  dibujarZona();
+};
+
+function aFraccion(ev) {
+  const c = $("zonaCanvas").getBoundingClientRect(), r = rectVideo();
+  const x = (ev.clientX - c.left - r.x) / r.w, y = (ev.clientY - c.top - r.y) / r.h;
+  return [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+}
+
+$("zonaCanvas").addEventListener("pointerdown", (ev) => {
+  if (!marcando) return;
+  inicioArrastre = aFraccion(ev);
+  $("zonaCanvas").setPointerCapture(ev.pointerId);
+});
+$("zonaCanvas").addEventListener("pointermove", (ev) => {
+  if (!marcando || !inicioArrastre) return;
+  const [x, y] = aFraccion(ev);
+  dibujarZona([Math.min(inicioArrastre[0], x), Math.min(inicioArrastre[1], y),
+               Math.max(inicioArrastre[0], x), Math.max(inicioArrastre[1], y)]);
+});
+$("zonaCanvas").addEventListener("pointerup", (ev) => {
+  if (!marcando || !inicioArrastre) return;
+  const [x, y] = aFraccion(ev);
+  const z = [Math.min(inicioArrastre[0], x), Math.min(inicioArrastre[1], y),
+             Math.max(inicioArrastre[0], x), Math.max(inicioArrastre[1], y)];
+  inicioArrastre = null;
+  if (z[2] - z[0] < 0.02 || z[3] - z[1] < 0.02) {   // un clic suelto, no una zona
+    $("zonaTexto").textContent = "Eso es muy chico: arrastra sobre la letra completa.";
+    dibujarZona();
+    return;
+  }
+  salirDeMarcar();
+  ponerZona(z);
+});
+["loadedmetadata", "resize"].forEach(e => $("reproductor").addEventListener(e, () => dibujarZona()));
+window.addEventListener("resize", () => dibujarZona());
+
+$("btnLeerZona").onclick = () => {
+  if (!videoActual || !zona) return;
+  if (!avisarSiBorra("Leer en esa zona")) return;
+  banner("", "");
+  correr("/api/preparar",
+    { video: videoActual, categoria: $("categoria").value,
+      esperado: $("nEsperado").value || null, fuente: "texto", roi: zona },
+    alTerminarPreparar);
+};
+
+function ponerVideo(ruta) {
+  if (marcando) salirDeMarcar();
+  ponerZona(null);
+  videoActual = ruta || "";
+  if (videoActual) {
+    $("videos").value = videoActual;
+    if (linksPorVideo[videoActual]) $("url").value = linksPorVideo[videoActual];
+    asegurarVideo();      // para poder marcar la zona aunque aun no haya tabla
+    cargarSegmentos();
+  } else {
+    filas = []; sel = -1; render();
+  }
+  refrescarBotones();
+}
+
+async function listarVideos() {
+  try {
+    const { videos, links } = await pedir("/api/videos");
+    linksPorVideo = links || {};
+    const sel = $("videos");
+    sel.innerHTML = '<option value="">—</option>';
+    for (const v of videos) {
+      const o = document.createElement("option");
+      o.value = v.ruta;
+      o.textContent = `${v.nombre}  (${v.mb} MB)`;
+      sel.appendChild(o);
+    }
+    if (videoActual) sel.value = videoActual;
+  } catch (e) { /* la lista es un extra */ }
+}
+
+async function mostrarHerramientas() {
+  try {
+    const h = await pedir("/api/herramientas");
+    const dato = (ok, txt, cmd) => ok
+      ? `<span class="si">✓ ${txt}</span>`
+      : `<span class="no">✗ ${txt}</span> (<code>${cmd}</code>)`;
+    $("herramientas").innerHTML =
+      "Disponible en esta computadora: "
+      + dato(h.voz, "voz", "pip install faster-whisper") + " · "
+      + dato(h.texto, "texto escrito en el video", "pip install rapidocr onnxruntime");
+  } catch (e) { /* es una ayuda, no un requisito */ }
+}
+
+function imagen(el, salida, alt) {
+  if (!salida) { el.classList.add("oculto"); return; }
+  // ?v= con el mtime: sin eso el navegador reusa la imagen vieja.
+  el.src = `/api/archivo?ruta=${encodeURIComponent(salida.ruta)}&v=${salida.v}`;
+  el.alt = alt;
+  el.classList.remove("oculto");
+}
+
+/* ------------------------------------------------------------ la tabla */
+
+function banderas(f) {
+  const b = [];
+  const d = f.fin - f.inicio;
+  if (!f.palabra.trim()) b.push(["sin palabra", "ojo"]);
+  if (d > DUR_MAX) b.push(["muy larga", "mal"]);
+  if (d < DUR_MIN) b.push(["muy corta", "mal"]);
+  if (f.confianza !== "" && +f.confianza < CONF_MIN) b.push(["poca confianza", "ojo"]);
+  return b;
+}
+
+function visible(f) {
+  switch (filtro) {
+    case "pendientes": return f.aprobada === "";
+    case "aprobadas": return f.aprobada === "si";
+    case "descartadas": return f.aprobada === "no";
+    case "alertas": return banderas(f).length > 0;
+    default: return true;
+  }
+}
+
+function num(v, otro) {
+  const x = parseFloat(v);
+  return Number.isFinite(x) ? x : otro;
+}
+
+function contar() {
+  const total = filas.length;
+  const aprobadas = filas.filter(f => f.aprobada === "si" && f.palabra.trim()).length;
+  const descartadas = filas.filter(f => f.aprobada === "no").length;
+  const pendientes = filas.filter(f => f.aprobada === "").length;
+  const conPalabra = filas.filter(f => f.palabra.trim()).length;
+  return { total, aprobadas, descartadas, pendientes, conPalabra };
+}
+
+function pintarResumen() {
+  const c = contar();
+  const t = $("estadoTabla");
+  t.textContent = c.total
+    ? `${c.aprobadas} aprobadas · ${c.pendientes} por revisar · ${c.descartadas} descartadas`
+    : "";
+  t.className = "estado " + (c.total && c.pendientes === 0 ? "ok" : "");
+  $("resumenSubida").textContent = c.aprobadas
+    ? `Se subirán ${c.aprobadas} seña(s) aprobada(s). Las ${c.total - c.aprobadas} restantes no se suben.`
+    : "Todavía no hay señas aprobadas: aprueba al menos una en el paso 2.";
+}
+
+function pintarFila(tr, i) {
+  const f = filas[i];
+  tr.className = "fila" + (f.aprobada === "si" ? " aprobada" : "")
+    + (f.aprobada === "no" ? " descartada" : "")
+    + (i === sel ? " sel" : "")
+    + (f.palabra.trim() ? "" : " sinpalabra");
+  tr.querySelector(".dur").textContent = (f.fin - f.inicio).toFixed(1) + "s";
+
+  const fu = tr.querySelector(".fuente");
+  fu.textContent = "";
+  if (f.fuente) {
+    const ch = document.createElement("span");
+    ch.className = "chip";
+    ch.textContent = f.fuente + (f.confianza !== "" ? " " + Math.round(+f.confianza * 100) + "%" : "");
+    fu.appendChild(ch);
+  }
+  const al = tr.querySelector(".alertas");
+  al.textContent = "";
+  for (const [txt, clase] of banderas(f)) {
+    const ch = document.createElement("span");
+    ch.className = "chip " + clase;
+    ch.textContent = txt;
+    al.appendChild(ch);
+  }
+  const ok = tr.querySelector("button.ok"), no = tr.querySelector("button.no");
+  ok.classList.toggle("activo", f.aprobada === "si");
+  no.classList.toggle("activo", f.aprobada === "no");
+}
+
+function crearFila(i) {
+  const f = filas[i];
+  const tr = document.createElement("tr");
+  tr.dataset.i = i;
+
+  const td = (clase) => { const c = document.createElement("td"); if (clase) c.className = clase; tr.appendChild(c); return c; };
+
+  td("num").textContent = f.n || i + 1;
+
+  const bVer = document.createElement("button");
+  bVer.className = "sec mini"; bVer.textContent = "▶"; bVer.title = "Ver este clip";
+  td().appendChild(bVer);
+
+  const campoNum = (clave) => {
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.step = "0.05"; inp.min = "0";
+    inp.value = (+f[clave]).toFixed(2);
+    inp.addEventListener("change", () => {
+      f[clave] = num(inp.value, f[clave]);
+      if (f.fin <= f.inicio) f.fin = f.inicio + 0.5;
+      inp.value = (+f[clave]).toFixed(2);
+      tr.querySelector('input[data-c="inicio"]').value = f.inicio.toFixed(2);
+      tr.querySelector('input[data-c="fin"]').value = f.fin.toFixed(2);
+      cambio(i);
+      if (i === sel) reproducir(i);
+    });
+    inp.dataset.c = clave;
+    td().appendChild(inp);
+  };
+  campoNum("inicio");
+  campoNum("fin");
+
+  td("dur");
+
+  const pal = document.createElement("input");
+  pal.type = "text"; pal.value = f.palabra; pal.dataset.c = "palabra";
+  pal.addEventListener("input", () => { f.palabra = pal.value; cambio(i); });
+  pal.addEventListener("focus", () => { if (sel !== i) seleccionar(i, true); });
+  pal.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    const sig = siguienteVisible(i, 1);
+    if (sig >= 0) {
+      seleccionar(sig, true);
+      const o = $("filas").querySelector(`tr[data-i="${sig}"] input[data-c="palabra"]`);
+      if (o) o.focus();
+    }
+  });
+  td("pal").appendChild(pal);
+
+  td("fuente");
+  td("alertas");
+
+  const acc = td("acc");
+  const bOk = document.createElement("button"); bOk.className = "ok"; bOk.textContent = "✓"; bOk.title = "Aprobar";
+  const bNo = document.createElement("button"); bNo.className = "no"; bNo.textContent = "✗"; bNo.title = "Descartar";
+  acc.appendChild(bOk); acc.appendChild(bNo);
+  bOk.addEventListener("click", (ev) => { ev.stopPropagation(); marcar(i, "si"); });
+  bNo.addEventListener("click", (ev) => { ev.stopPropagation(); marcar(i, "no"); });
+
+  tr.addEventListener("click", (ev) => {
+    if (ev.target.tagName === "INPUT") return;
+    seleccionar(i, true);
+  });
+  pintarFila(tr, i);
+  return tr;
+}
+
+function render() {
+  const tbody = $("filas");
+  tbody.innerHTML = "";
+  if (!filas.length) {
+    const tr = document.createElement("tr");
+    const c = document.createElement("td");
+    c.colSpan = 9; c.style.cssText = "color:var(--gris);padding:14px 4px";
+    c.textContent = videoActual
+      ? "Todavía no hay señas para este video."
+      : "Pega un link arriba y dale Preparar.";
+    tr.appendChild(c); tbody.appendChild(tr);
+  } else {
+    let hubo = false;
+    filas.forEach((f, i) => { if (visible(f)) { tbody.appendChild(crearFila(i)); hubo = true; } });
+    if (!hubo) {
+      const tr = document.createElement("tr");
+      const c = document.createElement("td");
+      c.colSpan = 9; c.style.cssText = "color:var(--gris);padding:14px 4px";
+      c.textContent = "Ninguna fila cumple este filtro.";
+      tr.appendChild(c); tbody.appendChild(tr);
+    }
+  }
+  pintarResumen();
+  refrescarBotones();
+}
+
+function filaDom(i) { return $("filas").querySelector(`tr[data-i="${i}"]`); }
+
+function cambio(i) {
+  const tr = filaDom(i);
+  if (tr) pintarFila(tr, i);
+  pintarResumen();
+  refrescarBotones();
+  if (i === sel) pintarVisor();
+  $("guardado").textContent = "sin guardar…";
+  clearTimeout(guardarEn);
+  guardarEn = setTimeout(() => { guardar(); }, 1200);
+}
+
+function marcar(i, valor) {
+  const f = filas[i];
+  if (valor === "si" && !f.palabra.trim()) {
+    $("guardado").textContent = "Escribe la palabra antes de aprobar esa seña.";
+    const o = filaDom(i) && filaDom(i).querySelector('input[data-c="palabra"]');
+    if (o) o.focus();
+    return false;
+  }
+  f.aprobada = f.aprobada === valor ? "" : valor;   // tocar otra vez = deshacer
+  cambio(i);
+  return true;
+}
+
+function siguienteVisible(desde, paso) {
+  for (let k = desde + paso; k >= 0 && k < filas.length; k += paso) {
+    if (visible(filas[k])) return k;
+  }
+  return -1;
+}
+
+function siguientePendiente(desde) {
+  for (let k = desde + 1; k < filas.length; k++) {
+    if (filas[k].aprobada === "" && visible(filas[k])) return k;
+  }
+  return -1;
+}
+
+/* ------------------------------------------------------------ el visor */
+
+function pintarVisor() {
+  const f = filas[sel];
+  if (!f) { $("visorPalabra").textContent = "—"; $("visorTiempo").textContent = "Elige una fila de la tabla."; return; }
+  $("visorPalabra").textContent = f.palabra.trim() || "(sin palabra)";
+  $("visorTiempo").textContent =
+    `Seña ${f.n || sel + 1} de ${filas.length} · ${f.inicio.toFixed(2)}s a ${f.fin.toFixed(2)}s`
+    + ` (${(f.fin - f.inicio).toFixed(1)}s)`;
+}
+
+function asegurarVideo() {
+  const v = $("reproductor");
+  if (videoCargado !== videoActual) {
+    v.src = videoActual ? `/api/video?ruta=${encodeURIComponent(videoActual)}` : "";
+    videoCargado = videoActual;
+  }
+  return v;
+}
+
+function seleccionar(i, tocar) {
+  const antes = sel;
+  sel = i;
+  if (antes >= 0 && filaDom(antes)) pintarFila(filaDom(antes), antes);
+  const tr = filaDom(i);
+  if (tr) {
+    pintarFila(tr, i);
+    tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  pintarVisor();
+  if (tocar) reproducir(i);
+}
+
+function reproducir(i) {
+  const f = filas[i];
+  if (!f) return;
+  const v = asegurarVideo();
+  v.playbackRate = +$("velocidad").value;
+  const ir = () => { v.currentTime = f.inicio; v.play().catch(() => {}); vigilar(); };
+  if (v.readyState >= 1) ir();
+  else v.addEventListener("loadedmetadata", ir, { once: true });
+}
+
+/* timeupdate solo dispara ~4 veces por segundo: para cortar justo en el
+   fin del tramo hay que mirar el reloj en cada cuadro. */
+function vigilar() {
+  cancelAnimationFrame(raf);
+  const v = $("reproductor");
+  const paso = () => {
+    const f = filas[sel];
+    if (!f) return;
+    if (v.currentTime >= f.fin - 0.03) {
+      if ($("repetirSolo").checked) { v.currentTime = f.inicio; }
+      else { v.pause(); return; }
+    }
+    if (!v.paused) raf = requestAnimationFrame(paso);
+  };
+  raf = requestAnimationFrame(paso);
+}
+$("reproductor").addEventListener("play", vigilar);
+$("velocidad").onchange = () => { $("reproductor").playbackRate = +$("velocidad").value; };
+
+function irA(paso) {
+  const base = sel >= 0 ? sel : (paso > 0 ? -1 : filas.length);
+  const k = siguienteVisible(base, paso);
+  if (k >= 0) seleccionar(k, true);
+}
+
+function decidir(valor) {
+  if (sel < 0) { const k = siguienteVisible(-1, 1); if (k >= 0) seleccionar(k, true); return; }
+  const actual = sel;
+  if (!marcar(actual, valor)) return;
+  // Si lo acabo de aprobar/descartar, paso a la siguiente por revisar.
+  if (filas[actual].aprobada !== "") {
+    const k = siguientePendiente(actual);
+    if (k >= 0) seleccionar(k, true);
+  }
+}
+
+$("btnAnterior").onclick = () => irA(-1);
+$("btnSiguiente").onclick = () => irA(1);
+$("btnRepetir").onclick = () => { if (sel >= 0) reproducir(sel); };
+$("btnAprobar").onclick = () => decidir("si");
+$("btnDescartar").onclick = () => decidir("no");
+$("btnIniAhora").onclick = () => ponerTiempo("inicio");
+$("btnFinAhora").onclick = () => ponerTiempo("fin");
+
+function ponerTiempo(cual) {
+  const f = filas[sel];
+  if (!f) return;
+  const t = Math.round($("reproductor").currentTime * 100) / 100;
+  if (cual === "inicio" && t < f.fin) f.inicio = t;
+  else if (cual === "fin" && t > f.inicio) f.fin = t;
+  else return;
+  const tr = filaDom(sel);
+  if (tr) {
+    tr.querySelector('input[data-c="inicio"]').value = f.inicio.toFixed(2);
+    tr.querySelector('input[data-c="fin"]').value = f.fin.toFixed(2);
+  }
+  cambio(sel);
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (!ev.altKey || ev.ctrlKey || ev.metaKey) return;
+  const k = ev.key.toLowerCase();
+  if (k === "a") { ev.preventDefault(); decidir("si"); }
+  else if (k === "d") { ev.preventDefault(); decidir("no"); }
+  else if (k === "r") { ev.preventDefault(); if (sel >= 0) reproducir(sel); }
+});
+
+$("filtros").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-f]");
+  if (!b) return;
+  filtro = b.dataset.f;
+  document.querySelectorAll("#filtros button[data-f]").forEach(x => x.classList.toggle("on", x === b));
+  render();
+});
+
+$("btnAprobarBuenas").onclick = () => {
+  let n = 0;
+  for (const f of filas) {
+    const d = f.fin - f.inicio;
+    if (f.aprobada === "" && f.palabra.trim() && d >= DUR_MIN && d <= DUR_MAX
+        && (f.confianza === "" || +f.confianza >= CONF_MIN)) { f.aprobada = "si"; n++; }
+  }
+  render();
+  $("guardado").textContent = n ? `${n} aprobadas de golpe — revísalas igual viendo los clips.` : "No había ninguna que cumpliera.";
+  if (n) { clearTimeout(guardarEn); guardarEn = setTimeout(guardar, 400); }
+};
+
+/* ------------------------------------------------------ cargar / guardar */
+
+async function cargarSegmentos() {
+  if (!videoActual) return;
+  let datos;
+  try {
+    datos = await pedir(`/api/segmentos?video=${encodeURIComponent(videoActual)}`);
+  } catch (e) { return; }
+
+  imagen($("imgContactos"), datos.salidas.contactos, "Hoja de contactos");
+  imagen($("imgPerfil"), datos.salidas.perfil, "Perfil de la señal");
+  $("detalleHoja").classList.toggle("oculto", !datos.salidas.contactos);
+
+  filas = datos.filas.map((r, i) => {
+    const ini = num(r.inicio_s, 0);
+    const fin = num(r.fin_s, ini + 1);
+    return {
+      n: r.n || String(i + 1),
+      inicio: ini, fin: fin > ini ? fin : ini + 1,
+      palabra: r.palabra || "",
+      categoria: r.categoria || "",
+      fuente: r.fuente || "",
+      confianza: (r.confianza === undefined || r.confianza === null) ? "" : r.confianza,
+      aprobada: (r.aprobada || "").toLowerCase() === "si" ? "si"
+              : (r.aprobada || "").toLowerCase() === "no" ? "no" : "",
+    };
+  });
+  sel = -1;
+  render();
+  $("guardado").textContent = filas.length ? "Se guarda solo al editar." : "";
+  if (filas.length) { asegurarVideo(); }
+}
+
+async function guardar() {
+  clearTimeout(guardarEn);
+  if (!videoActual || !filas.length) return true;
+  $("guardado").textContent = "guardando…";
+  try {
+    await pedir("/api/segmentos", {
+      video: videoActual,
+      filas: filas.map((f, i) => ({
+        n: i + 1,
+        inicio_s: f.inicio.toFixed(2),
+        fin_s: f.fin.toFixed(2),
+        duracion_s: (f.fin - f.inicio).toFixed(2),
+        palabra: f.palabra.trim(),
+        categoria: f.categoria,
+        fuente: f.fuente,
+        confianza: f.confianza,
+        aprobada: f.aprobada,
+      })),
+    });
+    const c = contar();
+    $("guardado").textContent = `guardado ✓ · se subirán ${c.aprobadas} de ${c.total}`;
+    return true;
+  } catch (e) {
+    $("guardado").textContent = "no se pudo guardar: " + e.message;
+    return false;
+  }
+}
+$("btnGuardar").onclick = guardar;
+
+function opcionesSegmentar(extra) {
+  return Object.assign({
+    video: videoActual,
+    roi: $("roi").value,
+    senal: $("senal").value,
+    categoria: $("categoria").value,
+    n_esperado: $("nEsperado").value || null,
+    mascara_sep: $("mascaraSep").checked,
+  }, extra || {});
+}
+
+function opcionesIngesta(extra) {
+  return Object.assign({
+    video: videoActual,
+    mascara_sep: $("mascaraSep").checked,
+    signer: $("signer").value,
+    categoria: $("categoria").value,
+    manos: $("manos").value,
+    espejo: $("espejo").checked,
+    es_estatica: $("estatica").checked,
+    generar_espejo: $("genEspejo").checked,
+    aprobar: $("aprobar").checked,
+    solo_aprobadas: true,
+  }, extra || {});
+}
+
+/* ---- el botón grande ---- */
+
+function avisarSiBorra(que) {
+  const c = contar();
+  const trabajo = filas.filter(f => f.palabra.trim() || f.aprobada).length;
+  if (!trabajo) return true;
+  return confirm(`Esta tabla ya tiene trabajo hecho (${c.conPalabra} palabra(s), `
+    + `${c.aprobadas} aprobada(s)).\n\n${que} vuelve a empezar y BORRA todo eso. ¿Seguimos?`);
+}
+
+function alTerminarPreparar(d, est) {
+  listarVideos();
+  if (d.video) { videoActual = d.video; $("videos").value = d.video; }
+  // La zona que uso el lector de texto se dibuja sobre el video.
+  ponerZona(d.zona || null);
+  cargarSegmentos().then(() => {
+    const c = contar();
+    const largas = filas.filter(f => f.fin - f.inicio > DUR_MAX).length;
+    if (est !== "ok") {
+      banner("No pude preparar este video con esa fuente. Mira el detalle de abajo: "
+           + "dice qué falló y qué instalar. También puedes probar otra fuente, o los "
+           + "<strong>Ajustes manuales</strong> abajo.", "ojo");
+    } else if (d.via === "subtitulos") {
+      banner(`Listo: <strong>${c.conPalabra} señas con su texto</strong>, sacadas de `
+           + `los subtítulos del video. Si eran automáticos vienen de reconocimiento `
+           + `de voz y a veces confunden palabras. Revisa cada clip y aprueba.`, "bien");
+    } else if (d.via === "texto") {
+      banner(`Listo: <strong>${c.conPalabra} señas</strong> leídas del texto escrito `
+           + `dentro del video. El lector de texto se equivoca con acentos y letras `
+           + `raras: revisa cada palabra viendo el clip.`, "bien");
+    } else if (d.via === "voz") {
+      banner(`Listo: <strong>${c.conPalabra} señas</strong> escuchadas en el audio. `
+           + `La voz no siempre cae justo encima de la seña: ajusta inicio y fin `
+           + `viendo el clip (botones «Inicio = aquí» y «Fin = aquí»).`, "bien");
+    } else if (d.cortes_rotulo) {
+      banner(`Encontré <strong>${c.total} señas</strong> siguiendo los rótulos del video, `
+           + `pero el lector de texto no logró leer las letras. Los cortes sí son buenos: `
+           + `escribe la palabra de cada una viendo su clip. (Si la zona amarilla sobre el `
+           + `video no es la de la letra, márcala tú con «Marcar dónde sale la letra».)`, "ojo");
+    } else {
+      banner(`Detecté <strong>${c.total} señas</strong> por imagen, pero sin palabras: `
+           + `escribe la de cada una viendo su clip.`, "ojo");
+    }
+    if (largas && est === "ok") {
+      banner($("banner").innerHTML + `<br><strong>${largas}</strong> tramo(s) duran más de ${DUR_MAX} s: `
+           + `casi seguro están mal cortados (usa el filtro «Con alerta»).`,
+             $("banner").classList.contains("bien") ? "bien" : "ojo");
+    }
+    $("seccionSegmentos").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+$("btnPreparar").onclick = () => {
+  const url = $("url").value.trim();
+  if (!url && !videoActual) {
+    logLineas(["Pega un link, o elige un video de la lista."], true);
+    return;
+  }
+  // Preparar reescribe el CSV. Si ya hay trabajo hecho para ESTE video,
+  // avisar: perder una tabla revisada es el error caro.
+  if ((!url || videoActual) && !avisarSiBorra("Preparar")) return;
+  banner("", "");
+  correr("/api/preparar",
+    { url, video: url ? "" : videoActual, categoria: $("categoria").value,
+      esperado: $("nEsperado").value || null, fuente: $("fuente").value },
+    alTerminarPreparar);
+};
+
+$("btnRecargar").onclick = listarVideos;
+$("videos").onchange = (e) => { banner("", ""); ponerVideo(e.target.value); };
+
+/* ---- ajustes manuales ---- */
+
+const ROI_POR_MODO = { tinta: "0.50,0.18,0.655,0.60", caja: "0.10,0.80,0.90,0.92" };
+let roiTocada = false;
+$("roi").addEventListener("input", () => { roiTocada = true; });
+$("senal").onchange = (e) => { if (!roiTocada) $("roi").value = ROI_POR_MODO[e.target.value]; };
+
+function aplicarEncuadre(e) {
+  $("roi").value = e.roi;
+  $("senal").value = e.senal;
+  $("mascaraSep").checked = !!e.mascara_sep;
+  roiTocada = true;
+}
+
+function mostrarOpciones(ops) {
+  const caja = $("opciones");
+  if (!ops || ops.length < 2) { caja.classList.add("oculto"); return; }
+  caja.innerHTML = '<p style="font-size:13px;color:var(--gris);margin:0 0 8px">'
+    + 'Otros encuadres que también funcionan:</p>';
+  for (const o of ops) {
+    const b = document.createElement("button");
+    b.className = "sec";
+    b.style.margin = "0 8px 8px 0";
+    b.textContent = `${o.segmentos_estimados} segmentos · ${o.senal}`
+      + (o.mascara_sep ? " · con máscara" : "");
+    b.onclick = () => aplicarEncuadre(o);
+    caja.appendChild(b);
+  }
+  caja.classList.remove("oculto");
+}
+
+$("btnAuto").onclick = () => {
+  correr("/api/autoencuadre",
+    { video: videoActual, esperado: $("nEsperado").value || null },
+    (d) => { if (d.encuadre) { aplicarEncuadre(d.encuadre); mostrarOpciones(d.encuadre.opciones); } });
+};
+
+$("btnRoi").onclick = () => {
+  correr("/api/segmentar", opcionesSegmentar({ solo_roi: true }), (d) => {
+    const roi = (d.salidas || {}).roi;
+    if (roi) { imagen($("imgRoi"), roi, "Vista de la ROI"); $("previaRoi").classList.remove("oculto"); }
+  });
+};
+
+$("btnSegmentar").onclick = () => {
+  if (!avisarSiBorra("Detectar")) return;
+  correr("/api/segmentar", opcionesSegmentar(), () => cargarSegmentos());
+};
+
+$("btnSubs").onclick = () => {
+  if (!avisarSiBorra("Buscar subtítulos")) return;
+  correr("/api/subtitulos",
+    { video: videoActual, url: $("url").value.trim(),
+      categoria: $("categoria").value, aceptar_automaticos: true },
+    () => cargarSegmentos());
+};
+
+/* ---- subir ---- */
+
+$("btnSeco").onclick = async () => {
+  if (!(await guardar())) return;
+  correr("/api/ingestar", opcionesIngesta({ seco: true }));
+};
+
+$("btnSubir").onclick = async () => {
+  const { aprobadas } = contar();
+  if (!aprobadas) { logLineas(["No hay ninguna seña aprobada: no habría nada que subir."], true); return; }
+  if (!confirm(`Se van a subir ${aprobadas} seña(s) APROBADA(S) a la base. ¿Seguimos?`)) return;
+  // Se guarda primero: lo que se sube es lo que está en el archivo, y debe
+  // ser lo que se ve en pantalla.
+  if (!(await guardar())) return;
+  correr("/api/ingestar", opcionesIngesta());
+};
+
+listarVideos();
+mostrarHerramientas();
+render();
+</script>
+</body>
+</html>

@@ -66,6 +66,13 @@ class LandmarkPlugin(
     private var ultimoTimestamp = 0L
     private var ultimoPoseEnviadoNs = 0L
 
+    // Tamano real (ya rotado) del bitmap que ven los modelos. Los landmarks de
+    // imagen salen divididos por el ancho y el alto por separado, asi que Dart
+    // necesita la relacion ancho/alto para no estirar la mano al comparar (ver
+    // isotropizarSecuencia en sign_norm.dart). No cambia durante la sesion.
+    @Volatile private var anchoAnalisis = 0
+    @Volatile private var altoAnalisis = 0
+
     // Cache de la matriz de rotacion: los grados no cambian frame a frame.
     private var gradosCacheados: Int? = null
     private var matrizCacheada: Matrix? = null
@@ -185,6 +192,8 @@ class LandmarkPlugin(
 
             val rotacion = proxy.imageInfo.rotationDegrees
             val bitmap = rotar(proxy.toBitmap(), rotacion)
+            anchoAnalisis = bitmap.width
+            altoAnalisis = bitmap.height
             var t = proxy.imageInfo.timestamp / 1_000_000
             if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
             ultimoTimestamp = t
@@ -221,7 +230,7 @@ class LandmarkPlugin(
     }
 
     private fun aMapa(f: LandmarkEngine.FrameResult): HashMap<String, Any?> {
-        val payload = HashMap<String, Any?>(13)
+        val payload = HashMap<String, Any?>(16)
         payload["t"] = f.timestampMs
         payload["pose"] = f.pose
         // Esqueleto metrico en 3D: es el unico con el que se puede
@@ -236,6 +245,10 @@ class LandmarkPlugin(
         payload["source_skew_ms"] = f.sourceSkewMs
         payload["association"] = f.association
         payload["errors"] = f.errors
+        if (anchoAnalisis > 0 && altoAnalisis > 0) {
+            payload["iw"] = anchoAnalisis
+            payload["ih"] = altoAnalisis
+        }
         return payload
     }
     private fun detener() {

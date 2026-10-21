@@ -83,8 +83,8 @@ void main() {
     expect(html, contains('mano.parent.getWorldQuaternion'));
     expect(html, contains('usarMuneca: true'));
     expect(html, contains('function ponerMunecaReposo'));
-    expect(html, contains('id="sMuneca"'));
-    expect(html, contains("cal.usarMuneca = \$('sMuneca').checked"));
+    // El checkbox sMuneca (panel de calibración) se quitó del visor junto con
+    // el editor de pose; cal.usarMuneca sigue existiendo (línea de arriba).
     expect(html, contains('function calcularCalidadFrameWeb'));
     expect(html, contains('lastValidAt'));
     expect(html, contains('kFrameStaleMs'));

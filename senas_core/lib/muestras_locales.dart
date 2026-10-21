@@ -17,6 +17,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'camera_bridge.dart';
 import 'controlador_captura.dart' show CapturaMovimiento;
+import 'dtw.dart' show kMaxDistanceDefault, kMinMarginDefault;
 import 'motion_contract.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 import 'supabase_api.dart' show PlantillaRemota;
@@ -30,10 +31,19 @@ const String kDirectorioRaw = 'motion_raw';
 /// distintos y asi una no se pierde si se corrompe la otra.
 const String kNombreArchivoSync = 'plantillas_sync.json';
 
+/// Version de la ESCALA de los umbrales de reconocimiento. Subio a 2 cuando
+/// cambio la distancia del DTW (presencia de mano, ver kWPres en dtw.dart): un
+/// maxDistance/minMargin guardado con la escala 1 ya no significa lo mismo, asi
+/// que al leerlo se reemplaza por los valores por defecto nuevos. Si la
+/// distancia vuelve a cambiar, se sube este numero. Subio a 3 (2026-10-10):
+/// forma isotropica, ubicacion sin posicion absoluta, cuerpo sin peso y
+/// umbrales 0.50 / 0.32 (ver dtw.dart).
+const int kVersionUmbrales = 3;
+
 /// Umbrales y correcciones del reconocedor, que el usuario puede calibrar
-/// sin recompilar. Los valores por defecto son los del README, calibrados
-/// contra datos sinteticos -- se esperan cambios cuando haya grabaciones
-/// reales.
+/// sin recompilar. Los valores por defecto (kMaxDistanceDefault /
+/// kMinMarginDefault en dtw.dart) se calibraron contra las plantillas reales
+/// del diccionario; conviene revisarlos cuando haya mas gente grabando.
 class Ajustes {
   double maxDistance;
   double minMargin;
@@ -46,8 +56,9 @@ class Ajustes {
   /// espejo, pero obliga a que alguien mas sostenga el telefono.
   bool camaraFrontal;
 
-  /// Agrega al reconocedor la version espejada de cada muestra local. Cubre
-  /// a quien sena con la otra mano sin tener que grabar de nuevo.
+  /// Agrega al reconocedor la version espejada de CADA plantilla (las del
+  /// paquete, las sincronizadas y las locales). Cubre a quien sena con la
+  /// otra mano sin tener que grabar de nuevo.
   bool espejoAutomatico;
 
   /// Decir en voz alta (TTS) la seña reconocida apenas se acepta. Se puede
@@ -57,8 +68,8 @@ class Ajustes {
   bool rigDiagnosticMode;
 
   Ajustes({
-    this.maxDistance = 0.55,
-    this.minMargin = 0.12,
+    this.maxDistance = kMaxDistanceDefault,
+    this.minMargin = kMinMarginDefault,
     this.cruzarManos = false,
     this.camaraFrontal = true,
     this.espejoAutomatico = true,
@@ -79,6 +90,7 @@ class Ajustes {
       );
 
   Map<String, dynamic> toJson() => {
+        'version_umbrales': kVersionUmbrales,
         'max_distance': maxDistance,
         'min_margin': minMargin,
         'cruzar_manos': cruzarManos,
@@ -89,18 +101,29 @@ class Ajustes {
         'rig_diagnostic_mode': rigDiagnosticMode,
       };
 
-  factory Ajustes.fromJson(Map<String, dynamic> j) => Ajustes(
-        maxDistance: (j['max_distance'] as num?)?.toDouble() ?? 0.55,
-        minMargin: (j['min_margin'] as num?)?.toDouble() ?? 0.12,
-        cruzarManos: j['cruzar_manos'] as bool? ?? false,
-        camaraFrontal: j['camara_frontal'] as bool? ?? true,
-        espejoAutomatico: j['espejo_automatico'] as bool? ?? true,
-        hablarResultado: j['hablar_resultado'] as bool? ?? true,
-        rigCalibration: RigCalibration.fromJson(
-            (j['rig_calibration'] as Map?)?.cast<String, dynamic>() ??
-                const {}),
-        rigDiagnosticMode: j['rig_diagnostic_mode'] as bool? ?? false,
-      );
+  factory Ajustes.fromJson(Map<String, dynamic> j) {
+    // Umbrales guardados con otra escala de distancia (o sin version, que es
+    // lo que escribian las versiones anteriores): se descartan y entran los
+    // valores por defecto nuevos. El resto de los ajustes se conserva.
+    final escalaActual =
+        (j['version_umbrales'] as num?)?.toInt() == kVersionUmbrales;
+    return Ajustes(
+      maxDistance: escalaActual
+          ? ((j['max_distance'] as num?)?.toDouble() ?? kMaxDistanceDefault)
+          : kMaxDistanceDefault,
+      minMargin: escalaActual
+          ? ((j['min_margin'] as num?)?.toDouble() ?? kMinMarginDefault)
+          : kMinMarginDefault,
+      cruzarManos: j['cruzar_manos'] as bool? ?? false,
+      camaraFrontal: j['camara_frontal'] as bool? ?? true,
+      espejoAutomatico: j['espejo_automatico'] as bool? ?? true,
+      hablarResultado: j['hablar_resultado'] as bool? ?? true,
+      rigCalibration: RigCalibration.fromJson(
+          (j['rig_calibration'] as Map?)?.cast<String, dynamic>() ??
+              const {}),
+      rigDiagnosticMode: j['rig_diagnostic_mode'] as bool? ?? false,
+    );
+  }
 }
 
 class MuestraLocal {
@@ -136,6 +159,12 @@ class MuestraLocal {
   final String? subidaEn;
   final String? rawSubidaEn;
 
+  /// Relacion ancho / alto de la imagen con que se grabo. La secuencia se
+  /// guarda sin corregir (norm 2.0.0); con este dato se corrige al cargar el
+  /// diccionario. Null en las grabadas antes de que existiera: se asume el
+  /// aspecto del bitmap de analisis de la app (kAspectoAnalisisApp).
+  final double? aspecto;
+
   const MuestraLocal({
     required this.id,
     required this.gloss,
@@ -154,6 +183,7 @@ class MuestraLocal {
     this.visibilidadMin,
     this.qualityScore,
     this.checksumSha256,
+    this.aspecto,
   });
 
   bool get subida => subidaEn != null;
@@ -176,6 +206,7 @@ class MuestraLocal {
         visibilidadMin: visibilidadMin,
         qualityScore: qualityScore,
         checksumSha256: checksumSha256,
+        aspecto: aspecto,
       );
 
   Map<String, dynamic> toJson() => {
@@ -195,6 +226,7 @@ class MuestraLocal {
         if (visibilidadMin != null) 'visibilidad_min': visibilidadMin,
         if (qualityScore != null) 'quality_score': qualityScore,
         if (checksumSha256 != null) 'checksum_sha256': checksumSha256,
+        if (aspecto != null) 'aspecto': aspecto,
         'creada': creada,
         // 5 decimales: el dato termina guardado en float16 del lado de la
         // base igual, asi que mas precision solo infla el archivo.
@@ -231,6 +263,7 @@ class MuestraLocal {
       visibilidadMin: (j['visibilidad_min'] as num?)?.toDouble(),
       qualityScore: (j['quality_score'] as num?)?.toDouble(),
       checksumSha256: j['checksum_sha256'] as String?,
+      aspecto: (j['aspecto'] as num?)?.toDouble(),
       seq: seq,
     );
   }
@@ -465,6 +498,7 @@ class AlmacenMuestras extends ChangeNotifier {
       visibilidadMin: m.visibilidadMin,
       qualityScore: m.qualityScore,
       checksumSha256: m.checksumSha256,
+      aspecto: m.aspecto,
     );
     await _guardar();
     notifyListeners();
@@ -521,6 +555,7 @@ class AlmacenMuestras extends ChangeNotifier {
       visibilidadMin: captura?.visibilidadMin,
       qualityScore: captura?.qualityScore,
       checksumSha256: captura?.checksumSha256,
+      aspecto: captura?.aspecto,
     );
     _muestras.add(m);
     await _guardar();

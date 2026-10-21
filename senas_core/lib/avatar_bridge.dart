@@ -29,15 +29,26 @@ import 'package:flutter/material.dart' show Color;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'frase_a_senas.dart' show SegmentoFrase;
 import 'motion_contract.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 
-// Modelo actual: VRM 0.0 exportado de VRoid Studio 1.22.1. Tiene el mapa
-// humanoide completo (54 huesos, 15 por mano) y los blendshapes de
-// parpadeo y vocales, que es lo minimo que pide LSM.
-const String _kRutaAvatar = 'assets/avatar/univozM.vrm';
+// Modelo actual: MODELO_UNIVOZ_v0.vrm, VRM 0.0 exportado de VRoid Studio
+// 2.14.0 (es el mismo modelo que MODELO_UNIVOZ.vrm, que es VRM 1.0). Tiene el
+// mapa humanoide completo (54 huesos, 15 por mano) y los blendshapes de
+// parpadeo y vocales, que es lo minimo que pide LSM. Se usa 0.0 porque es el
+// formato con el que se escribio y verifico el rig del visor.
+//
+// Siguen en assets/avatar/ por si hay que volver: MODELO_UNIVOZ.vrm (el mismo
+// modelo en VRM 1.0, que el visor acomoda al marco de 0.0 al cargarlo) y
+// univozM.vrm (el modelo anterior). Basta cambiar esta ruta.
+const String _kRutaAvatar = 'assets/avatar/MODELO_UNIVOZ_v0.vrm';
 
 class AvatarBridge {
+  /// Encuadres de la camara del visor (ver encuadrar()).
+  static const String encuadreCintura = 'cintura';
+  static const String encuadreCodos = 'codos';
+
   late final WebViewController controller;
 
   /// Se llama cuando el visor termina de reproducir la ultima secuencia
@@ -54,6 +65,7 @@ class AvatarBridge {
   bool _jsListo = false;
   bool _diagnostico = false;
   bool _calibracionPendiente = false;
+  String _encuadre = encuadreCintura;
 
   AvatarBridge() {
     controller = WebViewController()
@@ -106,12 +118,26 @@ class AvatarBridge {
     await controller.runJavaScript("window.cargarAvatarBase64('$b64')");
     await controller.runJavaScript(
         "window.configurarRig('${_escapar(jsonEncode(_calibracion.toJson()))}')");
+    if (_encuadre != encuadreCintura) {
+      await controller.runJavaScript("window.encuadrarCamara('$_encuadre')");
+    }
     await controller
         .runJavaScript('window.configurarDiagnostico($_diagnostico)');
     if (_calibracionPendiente) {
       _calibracionPendiente = false;
       await controller.runJavaScript('window.iniciarCalibracionPulgares()');
     }
+  }
+
+  /// Elige el encuadre de la camara del visor:
+  ///   [encuadreCintura] -- el de siempre (espejo y pantalla del avatar).
+  ///   [encuadreCodos]   -- de los codos para arriba y mas cerca; es el de
+  ///                        Aprender, que muestra al avatar en una tarjeta chica.
+  /// Se puede llamar antes de que el visor este listo: se aplica al cargar.
+  Future<void> encuadrar(String modo) async {
+    _encuadre = modo == encuadreCodos ? encuadreCodos : encuadreCintura;
+    if (!_jsListo) return;
+    await controller.runJavaScript("window.encuadrarCamara('$_encuadre')");
   }
 
   /// Configura adaptación del espacio normalizado al esqueleto VRM.
@@ -158,6 +184,28 @@ class AvatarBridge {
     // Validación ocurre antes de cruzar WebView; evita mezclar formatos legacy.
     assert(contrato.tFrames == kTFrames &&
         contrato.frames.first.length == kFrameDim);
+  }
+
+  /// Reproduce varias señas SEGUIDAS (una frase), sin volver a reposo entre
+  /// una y otra: el visor las une con una transicion corta. Cada segmento es
+  /// una seña de 32 cuadros con su propia velocidad. Avisa con [onTerminado]
+  /// al acabar la frase completa.
+  Future<void> reproducirFrase(List<SegmentoFrase> segmentos) async {
+    if (segmentos.isEmpty) return;
+    for (final s in segmentos) {
+      // Misma validacion que reproducir(): 32 cuadros de 152 valores.
+      final contrato = MotionSequenceV2.fromFrames(s.frames, fps: s.fps);
+      if (contrato.tFrames != kTFrames ||
+          contrato.frames.first.length != kFrameDim) {
+        throw ArgumentError('Cada seña de la frase debe tener $kTFrames '
+            'cuadros de $kFrameDim valores.');
+      }
+    }
+    final json = jsonEncode([
+      for (final s in segmentos) {'frames': s.frames, 'fps': s.fps}
+    ]);
+    await controller.runJavaScript(
+        "window.reproducirFrase('${_escapar(json)}','$kNormVersion')");
   }
 
   /// Aplica UN frame al instante, sin cola ni interpolacion. Es lo que usa

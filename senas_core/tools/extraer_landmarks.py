@@ -28,72 +28,6 @@ def _punto_pose_mundo(p):
     return [p.x, p.y, p.z]
 
 
-def tapar(frame, mascara):
-    """Rellena de blanco un rectangulo del frame (x0,y0,x1,y1 en fracciones).
-
-    Para los videos de diccionario que traen un recuadro chico con un
-    segundo plano de la misma persona: si no se tapa, el detector (que corre
-    con num_hands=2) encuentra tambien la mano de ESE recuadro, y una mano
-    que no es la de la sena entra a la muestra.
-
-    Se TAPA, no se recorta: recortar cambiaria la relacion de aspecto, y
-    como MediaPipe normaliza x por el ancho e y por el alto, eso estiraria
-    la forma de la mano en un eje y no en el otro. La forma se guarda en
-    coordenadas de imagen, asi que esa deformacion si cambiaria el vector.
-    """
-    alto, ancho = frame.shape[:2]
-    x0, y0, x1, y1 = mascara
-    frame[int(y0 * alto):int(y1 * alto), int(x0 * ancho):int(x1 * ancho)] = 255
-    return frame
-
-
-def asignar_manos(manos, pose, l_wrist=15, r_wrist=16):
-    """Decide cual mano detectada es la izquierda y cual la derecha.
-
-    Compara cada mano contra las munecas que devuelve el modelo de POSE, y
-    se queda con el emparejamiento de menor distancia total. La etiqueta de
-    MediaPipe ("Left"/"Right") NO se usa: su convencion supone una imagen
-    espejada, asi que en un video grabado con camara trasera sale al reves,
-    y no hay forma de saberlo mirando solo la mano.
-
-    Esto es lo mismo que ya hace el lado nativo de la app
-    (HandTrackCoordinator.kt), que trata la cadena del brazo como la
-    autoridad y la etiqueta como mucho como evidencia secundaria. Mientras
-    el Python use la etiqueta y la app use la anatomia, una misma sena
-    ingerida por video y capturada en vivo puede quedar con las manos
-    cruzadas entre si -- y el reconocimiento compara justamente una contra
-    la otra.
-
-    `manos` es una lista de listas de 21 puntos [x, y, z].
-    Devuelve (izquierda, derecha), cualquiera de las dos puede ser None.
-    """
-    if not manos:
-        return None, None
-    if pose is None or len(pose) <= max(l_wrist, r_wrist):
-        # Sin pose no hay con que comparar. Con una sola mano no se puede
-        # inventar el lado, asi que se descarta antes que arriesgar una
-        # muestra con la mano cambiada.
-        return (None, None) if len(manos) == 1 else (manos[0], manos[1])
-
-    mi, md = pose[l_wrist], pose[r_wrist]
-
-    def dist(mano, muneca):
-        p = mano[0]  # la muneca de la propia mano
-        return (p[0] - muneca[0]) ** 2 + (p[1] - muneca[1]) ** 2
-
-    if len(manos) == 1:
-        m = manos[0]
-        return (m, None) if dist(m, mi) <= dist(m, md) else (None, m)
-
-    # Con dos manos se elige el emparejamiento completo mas barato, no la
-    # mejor para cada una por separado: si las dos caen cerca de la misma
-    # muneca, decidir de a una las asignaria al mismo lado.
-    a, b = manos[0], manos[1]
-    recto = dist(a, mi) + dist(b, md)
-    cruzado = dist(b, mi) + dist(a, md)
-    return (a, b) if recto <= cruzado else (b, a)
-
-
 class ExtractorLandmarks:
     def __init__(
         self,
@@ -133,11 +67,16 @@ class ExtractorLandmarks:
         # termino el video anterior, en vez de repetir desde 0.
         self._proximo_t_ms = 0
 
+        # Relacion ancho / alto del ULTIMO video leido (la llena extraer()). Los landmarks de imagen
+        # vienen divididos por el ancho y el alto por separado, asi que esta cifra es lo que permite
+        # corregir despues la forma de la mano (sign_norm.isotropizar_secuencia).
+        self.aspecto = None
+
     def cerrar(self):
         self.pose.close()
         self.hands.close()
 
-    def extraer(self, video_path, mascara=None):
+    def extraer(self, video_path):
         """Devuelve (raw_frames, fps, n_frames).
 
         raw_frames: lista de (pose, pose_mundo, left, right) por cada frame leido del
@@ -159,6 +98,7 @@ class ExtractorLandmarks:
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         t_base = self._proximo_t_ms
+        self.aspecto = None
 
         raw_frames = []
         idx = 0
@@ -168,9 +108,8 @@ class ExtractorLandmarks:
             if not ok:
                 break
 
-            if mascara:
-                frame_bgr = tapar(frame_bgr.copy(), mascara)
-
+            if self.aspecto is None and frame_bgr.shape[0] > 0:
+                self.aspecto = frame_bgr.shape[1] / frame_bgr.shape[0]
             rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             t_ms = t_base + int(idx * 1000 / fps)
@@ -187,9 +126,14 @@ class ExtractorLandmarks:
                 pose_mundo = [_punto_pose_mundo(p)
                               for p in pose_res.pose_world_landmarks[0]]
 
-            manos = [[_punto_mano(p) for p in lm]
-                     for lm in hand_res.hand_landmarks]
-            left, right = asignar_manos(manos, pose)
+            left = right = None
+            for lm, handed in zip(hand_res.hand_landmarks, hand_res.handedness):
+                etiqueta = handed[0].category_name if handed else None
+                pts = [_punto_mano(p) for p in lm]
+                if etiqueta == "Left":
+                    left = pts
+                else:
+                    right = pts
 
             raw_frames.append((pose, pose_mundo, left, right))
             idx += 1
