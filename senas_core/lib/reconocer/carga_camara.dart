@@ -49,8 +49,9 @@ class _CargaCamaraState extends State<CargaCamara> {
       color:
           widget.compacta ? colores.surfaceContainerHighest : colores.surface,
       child: Semantics(
+        // Sin label: los Text de dentro son lo que se lee (con label
+        // TalkBack lo decia dos veces).
         liveRegion: true,
-        label: 'Preparando la cámara',
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(12),

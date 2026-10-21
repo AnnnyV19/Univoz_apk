@@ -167,14 +167,13 @@ class _PantallaSyncState extends State<PantallaSync> {
       if (actual > 0 &&
           plantillas.length < actual * kFraccionMinimaSync &&
           !await _confirmarDiccionarioMasChico(plantillas.length, actual)) {
-        _mostrar('No se cambió el diccionario.');
+        _mostrar('Se conservó tu última descarga.');
         return;
       }
       await _almacen.guardarSincronizadas(plantillas);
       final senas = plantillas.map((p) => p.gloss).toSet().length;
-      _mostrar('Se guardaron ${plantillas.length} plantillas de $senas señas '
-          'de la base. Las señas que ya trae la app se quedan como están: '
-          'solo se suman las que no tiene. Ya funcionan sin internet.');
+      _mostrar('Se guardaron ${plantillas.length} plantillas ($senas señas). '
+          'Solo se suman las señas que la app no trae.');
     } catch (e) {
       _mostrar(_textoError(e), error: true);
     }
@@ -185,7 +184,7 @@ class _PantallaSyncState extends State<PantallaSync> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('¿Reemplazar el diccionario?'),
+        title: const Text('¿Reemplazar tu última descarga?'),
         content: Text(
           'El servidor mandó solo $nuevas plantillas y tu última descarga '
           'tenía $actuales. Puede ser un error del servidor. Si reemplazas, '
@@ -195,7 +194,7 @@ class _PantallaSyncState extends State<PantallaSync> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Conservar el actual'),
+            child: const Text('Conservar la anterior'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),

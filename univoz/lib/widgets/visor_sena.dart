@@ -19,8 +19,10 @@ class ControladorVisor extends ChangeNotifier {
   static const double velocidadMin = 0.5;
   static const double velocidadMax = 2.0;
 
-  /// El diccionario se lee una sola vez por sesión: son 5 MB de JSON.
-  static Future<Map<String, List<List<double>>>>? _cacheSecuencias;
+  /// Las secuencias se arman una vez por versión del diccionario: grabar,
+  /// borrar o sincronizar la sube y la siguiente pantalla ve lo nuevo (y
+  /// suelta las `seq` del diccionario anterior).
+  static (int, Future<Map<String, List<List<double>>>>)? _cacheSecuencias;
 
   Map<String, List<List<double>>> _secuencias = const {};
   double _velocidad = _ultimaVelocidad;
@@ -52,7 +54,10 @@ class ControladorVisor extends ChangeNotifier {
   bool tiene(String glosa) => _secuencias.containsKey(glosa);
 
   static Future<Map<String, List<List<double>>>> _leerSecuencias() {
-    return _cacheSecuencias ??= () async {
+    final version = AlmacenMuestras.instancia.versionDiccionario;
+    final previo = _cacheSecuencias;
+    if (previo != null && previo.$1 == version) return previo.$2;
+    final futuro = () async {
       final d = await cargarDiccionario();
       final out = <String, List<List<double>>>{};
       for (final t in d.clasificador.templates) {
@@ -62,6 +67,8 @@ class ControladorVisor extends ChangeNotifier {
       }
       return out;
     }();
+    _cacheSecuencias = (version, futuro);
+    return futuro;
   }
 
   Future<void> iniciar() async {

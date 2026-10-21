@@ -154,6 +154,15 @@ class LandmarkPlugin(
             // aplicarNivel ya crea motores en este mismo hilo.
             try {
                 ejecutor.execute {
+                    // Una sesion cancelada mientras esperaba en la cola no
+                    // construye motor: ~1 s de modelos y GPU para tirarlo, y
+                    // dos motores a la vez en la GPU de un equipo bajo.
+                    if (requestedSession != sessionToken) {
+                        principal.post {
+                            result.error("camera_start_cancelled", null, null)
+                        }
+                        return@execute
+                    }
                     val motor = try {
                         crearMotor(false)
                     } catch (e: Throwable) {
@@ -190,6 +199,9 @@ class LandmarkPlugin(
             result.error("camera_start_cancelled", null, null)
             return
         }
+        // Dos inicios con el mismo token: el segundo no pisa sin cerrar el
+        // motor y la textura del primero.
+        if (engine != null || entry != null) limpiarRecursos()
         // Desde aqui limpiarRecursos() cierra el motor si algo falla.
         engine = motor
         try {
@@ -318,12 +330,20 @@ class LandmarkPlugin(
             if (sesion != sessionToken || motor == null ||
                 motor.forzadoSeparado == separado) return@execute
             motor.cerrar()
-            engine = try {
+            engine = null
+            val nuevo = try {
                 crearMotor(separado).also { it.conCara = cfg.cara }
             } catch (e: Throwable) {
                 // Sin motor no hay frames: el vigilante de Dart muestra el error.
                 principal.post { sink?.error("mediapipe", e.toString(), null) }
-                null
+                return@execute
+            }
+            // Se asigna en el hilo principal, donde detener/enlazar cambian la
+            // sesion: si se detuvo mientras se creaba (~1 s) o ya hay otro
+            // motor, este se cierra en vez de quedar huerfano.
+            principal.post {
+                if (sesion == sessionToken && engine == null) engine = nuevo
+                else nuevo.cerrar()
             }
         }
         val resolucion = Size(cfg.analisisAncho, cfg.analisisAlto)

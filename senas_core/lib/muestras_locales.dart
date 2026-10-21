@@ -576,10 +576,15 @@ class AlmacenMuestras extends ChangeNotifier {
     sincronizadas
       ..clear()
       ..addAll(plantillas);
-    await escribirAtomico(
-        f, construirPaqueteSync(plantillas, DateTime.parse(sincronizadoEn!)));
+    // La memoria ya cambio: la version sube aunque la escritura falle (disco
+    // lleno), si no el diccionario compartido seguiria con las viejas.
     _versionDiccionario++;
-    notifyListeners();
+    try {
+      await escribirAtomico(f,
+          construirPaqueteSync(plantillas, DateTime.parse(sincronizadoEn!)));
+    } finally {
+      notifyListeners();
+    }
   }
 
   Future<void> marcarSubida(String id) async {

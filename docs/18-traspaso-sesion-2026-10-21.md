@@ -2,6 +2,8 @@
 
 Estado al cerrar la sesión para retomarlo en la siguiente.
 
+**Regla de ramas (decisión del usuario):** todo el trabajo va en `integracion-anny`, rama de convergencia para ir sumando lo de los colaboradores y retirar ramas poco a poco. No se borra ninguna rama por ahora y nada se manda a `main`.
+
 ## Ramas
 
 | Rama | Commit | Qué tiene |
@@ -26,7 +28,7 @@ Para converger: la dueña debe trabajar sobre `integracion-anny` (o lo que se fu
 
 - **Medir en el teléfono** la memoria con la versión nueva (antes: 1.4 GB PSS con Reconocer abierto, `adb shell dumpsys meminfo com.univoz.app`). Recorrido: Comunicarse → Traducir señas → señas → atrás → volver a entrar (verifica el arreglo 7).
 - Instalar la build con los arreglos 7 y 8 (la del teléfono, 06:20, aún no los tiene): build release con la llave de prueba y `adb -s RFCT60VQ0QZ install -r`.
-- Minor de la revisión (`review-carga.md`, local): motor construido para sesión ya cancelada (M1), `enlazar` no libera engine/entry previos (M2), motor huérfano en `aplicarNivel` (M3), versión del diccionario subida tras escritura fallida (M4), hora de intento en el futuro (M5), ~200 MB retenidos todo el proceso (M6), caché estática de `visor_sena` sin invalidar (M7), etiqueta de carga leída dos veces por lector de pantalla (M8), texto "el diccionario" en diálogo de sync (M9).
+- ~~Minor de la revisión M1–M9~~ **hechos** (2ª sesión del 2026-10-21, en `integracion-anny`): M1 no se crea motor para sesión cancelada; M2 `enlazar` cierra motor/textura previos; M3 motor de `aplicarNivel` se asigna en el hilo principal o se cierra; M4 versión del diccionario sube antes de escribir; M5 marcas futuras se descartan antes de comparar (prueba nueva); M6 diccionario ya armado con `WeakReference` (volver a Reconocer tras liberarse lo rearma); M7 caché de `visor_sena` por versión; M8 sin `label` duplicado; M9 textos "tu última descarga". `univoz.sh test` verde. Falta comprobar M1–M3/M6 en el teléfono.
 - Probar umbrales nuevos (0.50 / 0.32) en el teléfono con Reconocer; Aprender/Lección/Acerca usan violetas propios, no el tema (contraste sin revisar); falta botón "reiniciar mi progreso".
 - Piezas del visor de la dueña apagadas: separadores cuerpo/manos (tabla medida sobre su VRM), `replay_estable`, ManoIK sin conectar.
 - Remoto: Supabase tiene ~146 plantillas vs 541 del paquete; aplicar `senas_core/sql/006_beta_limites.sql` y `007_video_url.sql`; verificar insert anónimo de `sign_samples` con `curl`.

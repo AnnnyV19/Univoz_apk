@@ -325,10 +325,16 @@ Diccionario armarClasificador({
 /// Diccionario compartido por todas las pantallas (reconocer, traducir,
 /// avatar, Comunicarse, visor): cada uno pesa cientos de MB, asi que se arma
 /// una sola vez y se reutiliza mientras no cambie nada de lo que lo compone.
+///
+/// Mientras se arma se guarda el [Future] (las llamadas simultaneas lo
+/// comparten); ya armado, solo una referencia debil: lo retienen las
+/// pantallas que lo usan y, cuando ninguna lo tiene, el GC lo suelta (~200 MB
+/// que si no quedaban ocupados todo el proceso tras pasar por Reconocer).
 class _DiccionarioCompartido {
   final (String, int, bool, double, double) clave;
-  final Future<Diccionario> futuro;
-  const _DiccionarioCompartido(this.clave, this.futuro);
+  Future<Diccionario>? enCurso;
+  WeakReference<Diccionario>? listo;
+  _DiccionarioCompartido(this.clave, this.enCurso);
 }
 
 _DiccionarioCompartido? _compartido;
@@ -368,7 +374,12 @@ Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
     ajustes.minMargin,
   );
   final previo = _compartido;
-  if (previo != null && previo.clave == clave) return previo.futuro;
+  if (previo != null && previo.clave == clave) {
+    final enCurso = previo.enCurso;
+    if (enCurso != null) return enCurso;
+    final listo = previo.listo?.target;
+    if (listo != null) return listo;
+  }
 
   // Sin ningun await entre calcular la clave y arrancar esto: la foto de las
   // muestras que arma _cargarSinCompartir corresponde a la clave.
@@ -379,10 +390,13 @@ Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
   // Tampoco un diccionario sin paquete cuando se pidio el paquete: leer
   // 51 MB puede fallar con poca memoria y no debe quedar asi hasta reiniciar.
   futuro.then<void>((d) {
-    if (ruta == kRutaPaquete &&
-        d.resumen.delPaquete == 0 &&
-        identical(_compartido, nuevo)) {
+    if (!identical(_compartido, nuevo)) return;
+    if (ruta == kRutaPaquete && d.resumen.delPaquete == 0) {
       _compartido = null;
+    } else {
+      nuevo
+        ..enCurso = null
+        ..listo = WeakReference(d);
     }
   }, onError: (Object _) {
     if (identical(_compartido, nuevo)) _compartido = null;

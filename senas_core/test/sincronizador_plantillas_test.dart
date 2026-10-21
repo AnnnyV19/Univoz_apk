@@ -254,6 +254,24 @@ void main() {
         expect(r3, ResultadoSync.actualizado);
         expect(pedidos, 2);
       });
+
+      test('un intento con hora futura (reloj atrasado despues) no tapa una '
+          'sincronizacion valida reciente', () async {
+        final ahora = DateTime(2026, 10, 20, 12);
+        escribirViejo(ahora.subtract(const Duration(hours: 2)), p: viejas(10));
+        // Intento anotado con el reloj 3 dias adelantado.
+        final r1 = await correr(
+            api(() async => http.Response(jsonEncode(filas(3)), 200)),
+            ahora: ahora.add(const Duration(days: 3)));
+        expect(r1, ResultadoSync.invalido);
+        expect(pedidos, 1);
+
+        final r2 = await correr(
+            api(() async => http.Response(jsonEncode(filas(10)), 200)),
+            ahora: ahora);
+        expect(r2, ResultadoSync.omitido);
+        expect(pedidos, 1);
+      });
     });
 
     test('descarga invalida sin archivo previo: tampoco se repite en cada '

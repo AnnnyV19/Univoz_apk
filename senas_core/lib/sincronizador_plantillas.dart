@@ -85,15 +85,19 @@ class SincronizadorPlantillas {
         cantidadActual = meta?.cantidad;
         ultima = meta?.cuando;
       }
-      final ultimoIntento = await _leerIntento(intento);
+      // Una hora en el futuro (reloj movido) no cuenta como reciente; se
+      // descarta antes de comparar, para que un intento "futuro" no tape una
+      // sincronizacion valida de hace poco.
+      if (ultima != null && ultima.isAfter(ahoraReal)) ultima = null;
+      var ultimoIntento = await _leerIntento(intento);
+      if (ultimoIntento != null && ultimoIntento.isAfter(ahoraReal)) {
+        ultimoIntento = null;
+      }
       if (ultimoIntento != null &&
           (ultima == null || ultimoIntento.isAfter(ultima))) {
         ultima = ultimoIntento;
       }
-      // Una hora en el futuro (reloj movido) no cuenta como reciente.
-      if (ultima != null &&
-          !ultima.isAfter(ahoraReal) &&
-          ahoraReal.difference(ultima) < vigencia) {
+      if (ultima != null && ahoraReal.difference(ultima) < vigencia) {
         return ResultadoSync.omitido;
       }
 
