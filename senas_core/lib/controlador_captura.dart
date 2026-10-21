@@ -564,30 +564,49 @@ class FuenteMovimientoAuto {
 
   bool _activa = false;
   bool _visorListo = false;
+
+  /// Lo ultimo que dijo el visor. Si llega en mitad de una sena se aplica
+  /// al volver el detector a `quieto`: cambiar de fuente lo reiniciaria en
+  /// silencio (la barra seguiria en "Grabando..." sin que nadie la cierre).
+  bool _visorDeseado = false;
   Stream<LandmarkFrame>? _preview;
 
   /// True si el movimiento viene del visor (y los frames no se escuchan).
   bool get usaVisor => _activa && _visorListo;
   bool get activa => _activa;
 
+  /// True si hay un cambio de fuente esperando a que termine la sena.
+  bool get cambioDiferido => _activa && _visorDeseado != _visorListo;
+
   Future<void> iniciar(Stream<LandmarkFrame> preview,
       {required bool visorListo}) async {
     _activa = true;
     _preview = preview;
     _visorListo = visorListo;
+    _visorDeseado = visorListo;
+    detector.alVolverAQuieto = () => unawaited(_aplicarVisor());
     await _reiniciarDetector();
   }
 
-  /// El visor cambio de estado: solo se re-engancha si la fuente cambia.
+  /// El visor cambio de estado: solo se re-engancha si la fuente cambia, y
+  /// no en mitad de una sena (grabando, reconociendo o en pausa).
   Future<void> visorCambio({required bool listo}) async {
-    if (_visorListo == listo) return;
-    _visorListo = listo;
+    _visorDeseado = listo;
+    await _aplicarVisor();
+  }
+
+  Future<void> _aplicarVisor() async {
+    if (_visorListo == _visorDeseado) return;
+    if (_activa && detector.estado != EstadoAuto.quieto) return;
+    _visorListo = _visorDeseado;
     if (_activa) await _reiniciarDetector();
   }
 
   Future<void> detener() async {
     _activa = false;
     _preview = null;
+    _visorDeseado = _visorListo;
+    detector.alVolverAQuieto = null;
     await detector.detener();
   }
 
@@ -671,6 +690,10 @@ class DetectorAutomatico {
   void Function()? onInicioDetectado;
   void Function()? onFinDetectado;
   void Function(EstadoAuto)? onCambioEstado;
+
+  /// Se llama cada vez que el detector vuelve a `quieto` por su propio
+  /// camino (fin de la pausa), nunca por [detener].
+  void Function()? alVolverAQuieto;
 
   void iniciar(Stream<LandmarkFrame> preview) {
     _sub?.cancel();
@@ -777,6 +800,7 @@ class DetectorAutomatico {
     Future.delayed(duracion, () {
       _resetContadores();
       _cambiarEstado(EstadoAuto.quieto);
+      alVolverAQuieto?.call();
       alVolver();
     });
   }

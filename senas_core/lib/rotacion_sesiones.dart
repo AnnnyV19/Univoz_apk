@@ -51,3 +51,32 @@ Future<int> podarSesiones(
   } catch (_) {}
   return borrados;
 }
+
+final RegExp _nombreSesion = RegExp(r'^(.+?)(?:\.part(\d+))?\.jsonl$');
+
+/// Id de sesion y numero de parte (1 = sin sufijo) de un archivo
+/// `<id>.jsonl` o `<id>.partNNN.jsonl`, o null si no es de sesion.
+({String id, int parte})? nombreDeSesion(String nombreArchivo) {
+  final m = _nombreSesion.firstMatch(nombreArchivo);
+  if (m == null) return null;
+  return (id: m.group(1)!, parte: int.tryParse(m.group(2) ?? '') ?? 1);
+}
+
+/// Todos los archivos de la sesion mas reciente de [dir], en orden de parte
+/// (`<id>.jsonl`, `<id>.part002.jsonl`...). Vacio si no hay sesiones. Una
+/// sesion larga se parte en varios archivos (ver sumideroArchivo): para
+/// analizarla hacen falta todos.
+Future<List<File>> partesDeUltimaSesion(Directory dir) async {
+  if (!await dir.exists()) return const [];
+  final porId = <String, List<(int, File)>>{};
+  await for (final e in dir.list()) {
+    if (e is! File) continue;
+    final n = nombreDeSesion(e.uri.pathSegments.last);
+    if (n == null) continue;
+    porId.putIfAbsent(n.id, () => []).add((n.parte, e));
+  }
+  if (porId.isEmpty) return const [];
+  final ultimo = (porId.keys.toList()..sort()).last;
+  final partes = porId[ultimo]!..sort((a, b) => a.$1.compareTo(b.$1));
+  return [for (final p in partes) p.$2];
+}

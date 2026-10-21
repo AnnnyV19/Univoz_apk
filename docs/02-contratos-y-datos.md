@@ -180,6 +180,14 @@ nunca video ni imágenes. Web: `senas_core/sesiones/` vía
 `tools/servidor_visor.py`; Android: `<documentos>/sesiones/`. Se analiza con
 `tools/analizar_sesion.py`.
 
+En Android una sesión larga se parte en archivos de 8 MB: `<id>.jsonl`,
+`<id>.part002.jsonl`, `<id>.part003.jsonl`... Cada parte posterior empieza con
+una línea `{"kind":"session_part","schema":"SessionLogV1","session_id":…,
+"part":N}` (sin `seq`; las lecturas la ignoran) y el `seq` sigue contando entre
+partes. "Compartir última sesión" envía todas las partes; `analizar_sesion.py`
+y `paridad/replay_sesion.mjs` leen la sesión completa a partir de cualquiera
+de ellas.
+
 - Desde 2026-10-20 el `frame` de Android usa el esquema web:
   - `hands`: `candidates` (`lm` a 4 cifras, `conf` a 3), `accepted`,
     `unanchored`, `rejected` (`{index, code}`), `passed`, `assignment` y

@@ -2,7 +2,8 @@
 // paridad de manos. Convierte los landmarks compactados ([x, y, z, vis?],
 // rig_session.compactLandmarks) de vuelta a objetos {x, y, z, visibility}:
 // la captura web lee `pose[15].visibility` y con arrays caeria a 1.
-import {readFileSync} from 'node:fs';
+import {existsSync, readdirSync, readFileSync} from 'node:fs';
+import {basename, dirname, join} from 'node:path';
 import {gunzipSync} from 'node:zlib';
 
 export function leerJsonl(ruta) {
@@ -11,6 +12,35 @@ export function leerJsonl(ruta) {
     : crudo.toString('utf8');
   return texto.split('\n').filter((linea) => linea.trim())
     .map((linea) => JSON.parse(linea));
+}
+
+const NOMBRE_PARTE = /^(.+?)(?:\.part(\d+))?\.jsonl(\.gz)?$/;
+
+/**
+ * Archivos de la sesion a la que pertenece `ruta`, en orden de parte. El
+ * telefono parte una sesion larga en `<id>.jsonl`, `<id>.part002.jsonl`...:
+ * cualquiera de ellos nombra la sesion completa. Una ruta con otro nombre
+ * (o que no existe) se devuelve sola.
+ */
+export function partesDeSesion(ruta) {
+  const m = NOMBRE_PARTE.exec(basename(ruta));
+  if (!m) return [ruta];
+  const carpeta = dirname(ruta);
+  const partes = [];
+  for (const otro of existsSync(carpeta) ? readdirSync(carpeta) : []) {
+    const o = NOMBRE_PARTE.exec(otro);
+    if (o && o[1] === m[1] && o[3] === m[3]) {
+      partes.push([Number(o[2] ?? 1), join(carpeta, otro)]);
+    }
+  }
+  if (!partes.length) return [ruta];
+  return partes.sort((a, b) => a[0] - b[0]).map(([, f]) => f);
+}
+
+/** Registros de la sesion completa (todas sus partes, sin cabeceras de parte). */
+export function leerSesion(ruta) {
+  return partesDeSesion(ruta).flatMap((parte) => leerJsonl(parte))
+    .filter((r) => r.kind !== 'session_part');
 }
 
 export function punto(p) {

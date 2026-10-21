@@ -93,10 +93,9 @@ class LectorVoz {
     if (t.isEmpty) return null;
     try {
       await _preparar();
-      // Si algun boton "Leer en voz alta" estaba leyendo, se corta aqui.
-      TtsCompartido.instancia.tomar(() {});
-      await _tts.stop();
-      final res = await _tts.speak(t);
+      // Si algo estaba hablando (p. ej. un boton "Leer en voz alta") se
+      // corta y se le avisa; la ranura pasa a esta lectura.
+      final res = await TtsCompartido.instancia.hablar(t, () {});
       if (res == 0) {
         return 'El motor TTS de Android devolvió error. Verifica el volumen multimedia y los servicios de voz de Google.';
       }

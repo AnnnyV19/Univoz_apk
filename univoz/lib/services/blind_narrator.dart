@@ -129,8 +129,7 @@ class BlindNarrator {
   /// Habla tomando la ranura del motor: si un "Leer en voz alta" estaba
   /// leyendo, se entera de que lo cortaron.
   static Future<dynamic> _hablarTts(String texto) {
-    TtsCompartido.instancia.tomar(() {});
-    return _tts.speak(texto);
+    return TtsCompartido.instancia.hablar(texto, () {});
   }
 
   /// Pide (si hace falta) el permiso de micrófono y prepara el

@@ -16,12 +16,17 @@ class TtsCompartido {
 
   /// Solo para pruebas: reinicia el estado (el motor sigue siendo uno).
   @visibleForTesting
-  static void reiniciarParaPruebas() => instancia._alTerminar = null;
+  static void reiniciarParaPruebas() {
+    instancia._alTerminar = null;
+    instancia._generacion = 0;
+    instancia._inicioEsperado = 0;
+  }
 
   TtsCompartido._() {
-    tts.setCompletionHandler(_fin);
-    tts.setCancelHandler(_fin);
-    tts.setErrorHandler((_) => _fin());
+    tts.setStartHandler(_inicio);
+    tts.setCompletionHandler(_terminoVoz);
+    tts.setCancelHandler(_cancelado);
+    tts.setErrorHandler((_) => _terminoVoz());
   }
 
   /// El único FlutterTts de la app.
@@ -30,14 +35,69 @@ class TtsCompartido {
   VoidCallback? _alTerminar;
   Future<void>? _esperaFin;
 
+  /// Número de la lectura que tiene la ranura. Cada [tomar] lo sube: un
+  /// aviso tardío de la lectura anterior no puede cerrar la nueva.
+  int _generacion = 0;
+
+  /// Generación cuyo arranque se espera tras haber cortado a otra lectura
+  /// (0 = ninguna). Mientras tanto, un "se cortó" que llegue es de la
+  /// lectura anterior (el motor lo manda después del stop) y se ignora.
+  int _inicioEsperado = 0;
+
   /// Quien va a hablar toma la ranura. Si otro estaba leyendo, su lectura
   /// se corta: se le avisa ya para que no siga mostrando "Detener".
   /// [alTerminar] se llama una vez, al terminar, cortarse o fallar.
-  void tomar(VoidCallback alTerminar) {
+  /// Devuelve la generación de esta lectura.
+  int tomar(VoidCallback alTerminar) {
     final previo = _alTerminar;
     _alTerminar = alTerminar;
-    // El mismo lector retomando la ranura no se avisa a si mismo.
-    if (previo != null && previo != alTerminar) previo();
+    final gen = ++_generacion;
+    if (previo != null) {
+      // Habia voz en curso: su "se cortó" llegará tarde, ya con esta
+      // lectura dueña de la ranura.
+      _inicioEsperado = gen;
+      // El mismo lector retomando la ranura no se avisa a si mismo.
+      if (previo != alTerminar) previo();
+    }
+    return gen;
+  }
+
+  /// Habla [texto] como dueño de la ranura. Si algo estaba hablando (el
+  /// narrador, el reconocedor u otro botón de lectura) lo corta primero:
+  /// con el fin de voz esperado, `speak()` devuelve 0 sin hablar mientras
+  /// el motor está ocupado. Devuelve lo que `speak()` (1 = habló) o 0 si
+  /// otra lectura tomó la ranura mientras tanto.
+  Future<dynamic> hablar(String texto, VoidCallback alTerminar) async {
+    final habiaVoz = _alTerminar != null;
+    final gen = tomar(alTerminar);
+    if (habiaVoz) {
+      try {
+        await tts.stop();
+      } catch (_) {}
+    }
+    if (gen != _generacion) return 0;
+    return tts.speak(texto);
+  }
+
+  /// Corta la voz a petición de quien la tiene: el "se cortó" que llegue
+  /// cierra su lectura.
+  Future<void> detener() async {
+    _inicioEsperado = 0;
+    await tts.stop();
+  }
+
+  void _inicio() {
+    if (_inicioEsperado == _generacion) _inicioEsperado = 0;
+  }
+
+  void _cancelado() {
+    if (_inicioEsperado != 0 && _inicioEsperado == _generacion) return;
+    _fin();
+  }
+
+  void _terminoVoz() {
+    _inicioEsperado = 0;
+    _fin();
   }
 
   void _fin() {

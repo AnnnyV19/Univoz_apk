@@ -115,4 +115,87 @@ void main() {
     expect(inicios, 0);
     expect(fuente.activa, isFalse);
   });
+
+  group('cambio de fuente en mitad de una sena', () {
+    test('el visor listo a media sena espera a que vuelva a quieto',
+        () async {
+      final estados = <EstadoAuto>[];
+      detector.onCambioEstado = estados.add;
+      await fuente.iniciar(preview.stream, visorListo: false);
+      moverPreview();
+      expect(detector.estado, EstadoAuto.grabando);
+
+      await fuente.visorCambio(listo: true);
+      // Sigue la fuente de la sena en curso: sin reinicio silencioso.
+      expect(detector.estado, EstadoAuto.grabando);
+      expect(estados, [EstadoAuto.grabando]);
+      expect(fuente.usaVisor, isFalse);
+      expect(fuente.cambioDiferido, isTrue);
+      expect(preview.hasListener, isTrue);
+      // Y el motion del visor no se cuela en la sena en curso.
+      moverVisor();
+      expect(detector.estado, EstadoAuto.grabando);
+
+      // La sena termina por sus frames: quieto de preview.
+      var cortes = 0;
+      detector.onFinDetectado = () => cortes++;
+      for (var i = 6; i < 20; i++) {
+        preview.add(_mano(i * 33, .2 + 5 * .06));
+      }
+      expect(cortes, 1);
+      expect(detector.estado, EstadoAuto.reconociendo);
+      // Reconociendo tampoco cambia la fuente.
+      expect(fuente.usaVisor, isFalse);
+
+      detector.entrarPausa(const Duration(milliseconds: 10), () {});
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(detector.estado, EstadoAuto.quieto);
+      expect(fuente.usaVisor, isTrue);
+      expect(fuente.cambioDiferido, isFalse);
+      expect(preview.hasListener, isFalse);
+      // Ahora si cuenta el visor.
+      moverVisor();
+      expect(inicios, 2);
+    });
+
+    test('si el avatar falla a media sena tambien espera', () async {
+      await fuente.iniciar(preview.stream, visorListo: true);
+      moverVisor();
+      expect(detector.estado, EstadoAuto.grabando);
+      await fuente.visorCambio(listo: false);
+      expect(detector.estado, EstadoAuto.grabando);
+      expect(fuente.usaVisor, isTrue);
+      expect(preview.hasListener, isFalse);
+      var cortes = 0;
+      detector.onFinDetectado = () => cortes++;
+      for (var i = 6; i < 20; i++) {
+        fuente.alMovimientoVisor(hayMovimiento: false, timestampMs: i * 33);
+      }
+      expect(cortes, 1);
+      detector.entrarPausa(const Duration(milliseconds: 10), () {});
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(fuente.usaVisor, isFalse);
+      expect(preview.hasListener, isTrue);
+    });
+
+    test('un cambio y su contrario durante la sena no reinician nada',
+        () async {
+      await fuente.iniciar(preview.stream, visorListo: false);
+      moverPreview();
+      await fuente.visorCambio(listo: true);
+      await fuente.visorCambio(listo: false);
+      expect(fuente.cambioDiferido, isFalse);
+      expect(detector.estado, EstadoAuto.grabando);
+      expect(preview.hasListener, isTrue);
+    });
+
+    test('detener() descarta el cambio pendiente', () async {
+      await fuente.iniciar(preview.stream, visorListo: false);
+      moverPreview();
+      await fuente.visorCambio(listo: true);
+      await fuente.detener();
+      expect(fuente.cambioDiferido, isFalse);
+      expect(detector.alVolverAQuieto, isNull);
+    });
+  });
 }

@@ -12,7 +12,7 @@ Univoz es una app para comunicarte con señas. Aquí te contamos, sin letra chiq
 
 - Solo si lo permites, la app guarda en tu teléfono sesiones con esos puntos (nunca video) para mejorar el reconocimiento.
 - Si dices que no, no se guarda nada, y tu respuesta se recuerda para no volver a preguntarte a cada rato. Puedes cambiarla cuando quieras en Configuración, Ajustes de reconocimiento.
-- Las sesiones se quedan en tu teléfono y no se envían solas. Para no llenar tu almacenamiento, las más viejas se borran solas y, en total, las sesiones guardadas nunca pasan de 50 MB.
+- Las sesiones se quedan en tu teléfono y no se envían solas. Para no llenar tu almacenamiento, las más viejas se borran solas y, en total, las sesiones guardadas ocupan unos 50 MB como máximo.
 
 ## Diccionario y muestras (Sincronizar)
 

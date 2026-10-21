@@ -34,7 +34,7 @@ const List<SeccionPrivacidad> kSeccionesPrivacidad = [
         'cuando quieras en Configuración, Ajustes de reconocimiento.',
     'Las sesiones se quedan en tu teléfono y no se envían solas. Para'
         ' no llenar tu almacenamiento, las más viejas se borran solas '
-        'y, en total, las sesiones guardadas nunca pasan de 50 MB.',
+        'y, en total, las sesiones guardadas ocupan unos 50 MB como máximo.',
   ]),
   SeccionPrivacidad('Diccionario y muestras (Sincronizar)', [
     'Al abrir la app, como máximo una vez al día, se descarga en '

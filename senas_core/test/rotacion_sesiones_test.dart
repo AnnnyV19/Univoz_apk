@@ -100,4 +100,42 @@ void main() {
     expect(poda, isNonNegative);
     expect(abre, greaterThan(poda));
   });
+
+  group('partesDeUltimaSesion', () {
+    File archivo(String nombre) =>
+        File('${dir.path}/$nombre')..writeAsStringSync('x');
+
+    List<String> nombres(List<File> fs) =>
+        [for (final f in fs) f.uri.pathSegments.last];
+
+    test('devuelve todas las partes de la ultima sesion en orden', () async {
+      archivo('20260101T000000Z-aaaaaa.jsonl');
+      archivo('20260102T000000Z-bbbbbb.part003.jsonl');
+      archivo('20260102T000000Z-bbbbbb.jsonl');
+      archivo('20260102T000000Z-bbbbbb.part002.jsonl');
+      archivo('nota.txt');
+      expect(nombres(await partesDeUltimaSesion(dir)), [
+        '20260102T000000Z-bbbbbb.jsonl',
+        '20260102T000000Z-bbbbbb.part002.jsonl',
+        '20260102T000000Z-bbbbbb.part003.jsonl',
+      ]);
+    });
+
+    test('una sesion sin partes es solo su archivo', () async {
+      archivo('20260101T000000Z-aaaaaa.jsonl');
+      expect(nombres(await partesDeUltimaSesion(dir)),
+          ['20260101T000000Z-aaaaaa.jsonl']);
+    });
+
+    test('sin sesiones o sin carpeta devuelve vacio', () async {
+      expect(await partesDeUltimaSesion(dir), isEmpty);
+      expect(await partesDeUltimaSesion(Directory('${dir.path}/no')), isEmpty);
+    });
+
+    test('nombreDeSesion separa id y parte', () {
+      expect(nombreDeSesion('a-b.jsonl'), (id: 'a-b', parte: 1));
+      expect(nombreDeSesion('a-b.part012.jsonl'), (id: 'a-b', parte: 12));
+      expect(nombreDeSesion('nota.txt'), isNull);
+    });
+  });
 }

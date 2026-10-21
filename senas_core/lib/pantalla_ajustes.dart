@@ -17,6 +17,7 @@ import 'motion_contract.dart';
 import 'muestras_locales.dart';
 import 'pantalla_espejo.dart';
 import 'registro_errores.dart';
+import 'rotacion_sesiones.dart';
 import 'voz.dart';
 
 class PantallaAjustes extends StatefulWidget {
@@ -60,19 +61,17 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
       Directory('${(await getApplicationDocumentsDirectory()).path}/sesiones');
 
   Future<void> _compartirUltimaSesion() async {
-    final dir = await _dirSesiones();
-    final archivos = await dir.exists()
-        ? (await dir.list().where((e) => e.path.endsWith('.jsonl')).toList())
-        : <FileSystemEntity>[];
-    if (archivos.isEmpty) {
+    // Una sesion larga son varios archivos (`.part002`...): se comparten
+    // todos juntos, no solo el ultimo (sin la cabecera de la sesion).
+    final partes = await partesDeUltimaSesion(await _dirSesiones());
+    if (partes.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Todavía no hay sesiones.')));
       return;
     }
-    archivos.sort((a, b) => a.path.compareTo(b.path)); // id ordenable
     await Share.shareXFiles(
-      [XFile(archivos.last.path, mimeType: 'application/x-ndjson')],
+      [for (final f in partes) XFile(f.path, mimeType: 'application/x-ndjson')],
       text: 'Sesión Univoz (solo puntos, sin video)',
     );
   }

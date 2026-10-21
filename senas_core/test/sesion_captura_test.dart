@@ -81,9 +81,9 @@ void main() {
       () async {
     final dir = await Directory.systemTemp.createTemp('sesion');
     final sesiones = Directory('${dir.path}/sesiones');
-    final sink = sumideroArchivo(sesiones, maxBytesArchivo: 100);
+    final sink = sumideroArchivo(sesiones, maxBytesArchivo: 200);
     final linea = 'x' * 40; // 41 bytes con el salto de linea
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 8; i++) {
       await sink('abc', [linea]);
     }
     final nombres = sesiones
@@ -91,11 +91,56 @@ void main() {
         .map((e) => e.uri.pathSegments.last)
         .toList()
       ..sort();
-    // 2 lineas (82 B) por archivo: la tercera no cabe en 100.
-    expect(nombres, ['abc.jsonl', 'abc.part002.jsonl', 'abc.part003.jsonl']);
+    expect(nombres.first, 'abc.jsonl');
+    expect(nombres.length, greaterThanOrEqualTo(3));
+    expect(nombres[1], 'abc.part002.jsonl');
     for (final f in sesiones.listSync().whereType<File>()) {
-      expect(f.lengthSync(), lessThanOrEqualTo(100));
+      expect(f.lengthSync(), lessThanOrEqualTo(200));
     }
+    await dir.delete(recursive: true);
+  });
+
+  test('cada parte empieza con su cabecera y la sesion se reconstruye',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('sesion');
+    final sesiones = Directory('${dir.path}/sesiones');
+    final sink = sumideroArchivo(sesiones, maxBytesArchivo: 600);
+    var t = 0;
+    final s = SesionCaptura(
+        sessionId: '20261021T000000Z-abc123',
+        sumidero: sink,
+        flushEvery: 3,
+        ahora: () => t++);
+    for (var i = 0; i < 20; i++) {
+      s.frame({'t': i * 33, 'relleno': 'y' * 40});
+      if (i % 3 == 2) await s.flush();
+    }
+    await s.cerrar();
+
+    final archivos = sesiones.listSync().whereType<File>().toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+    expect(archivos.length, greaterThan(2));
+    final todos = <Map<String, dynamic>>[];
+    for (var i = 0; i < archivos.length; i++) {
+      final lineas = archivos[i].readAsLinesSync();
+      final primera = jsonDecode(lineas.first) as Map<String, dynamic>;
+      if (i == 0) {
+        expect(primera['kind'], 'session_start');
+      } else {
+        expect(primera['kind'], 'session_part');
+        expect(primera['session_id'], '20261021T000000Z-abc123');
+        expect(primera['part'], i + 1);
+        expect(archivos[i].path,
+            endsWith('.part${(i + 1).toString().padLeft(3, '0')}.jsonl'));
+      }
+      todos.addAll([for (final l in lineas) jsonDecode(l)]);
+    }
+    // Sumadas las partes, la sesion esta completa y en orden.
+    final reales = todos.where((r) => r['kind'] != 'session_part').toList();
+    expect([for (final r in reales) r['seq']],
+        List.generate(reales.length, (i) => i));
+    expect(reales.last['kind'], 'session_end');
+    expect(reales.where((r) => r['kind'] == 'frame').length, 20);
     await dir.delete(recursive: true);
   });
 

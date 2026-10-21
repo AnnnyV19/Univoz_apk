@@ -149,7 +149,10 @@ const int kMaxBytesArchivoSesion = 8 * 1024 * 1024;
 ///
 /// Si el archivo actual pasaria de [maxBytesArchivo], sigue en
 /// `<id>.part002.jsonl`, `.part003`... (el relleno a tres cifras mantiene el
-/// orden por nombre) y poda los archivos ya cerrados mas viejos hasta que el
+/// orden por nombre). Cada parte nueva empieza con una linea `session_part`
+/// (id de sesion y numero de parte), para que se pueda reconocer a que sesion
+/// pertenece sin depender del nombre; la sesion completa es la suma de sus
+/// partes en orden. Poda los archivos ya cerrados mas viejos hasta que el
 /// total quede dentro de [maxBytesTotal] y [maxArchivos]. Nunca borra el
 /// archivo abierto.
 SumideroSesion sumideroArchivo(
@@ -165,8 +168,7 @@ SumideroSesion sumideroArchivo(
       : '$id.part${parte.toString().padLeft(3, '0')}.jsonl';
   return (id, lineas) async {
     await dir.create(recursive: true);
-    final texto = '${lineas.join('\n')}\n';
-    final bytes = utf8.encode(texto).length;
+    var texto = '${lineas.join('\n')}\n';
     var parte = partes[id] ?? 1;
     var usado = tamanos[id];
     if (usado == null) {
@@ -175,11 +177,18 @@ SumideroSesion sumideroArchivo(
     }
     var roto = false;
     // Un lote suelto mayor que el tope va entero a un archivo propio.
-    if (usado > 0 && usado + bytes > maxBytesArchivo) {
+    if (usado > 0 && usado + utf8.encode(texto).length > maxBytesArchivo) {
       parte++;
       usado = 0;
       roto = true;
+      texto = '${jsonEncode({
+            'kind': 'session_part',
+            'schema': kSessionSchema,
+            'session_id': id,
+            'part': parte,
+          })}\n$texto';
     }
+    final bytes = utf8.encode(texto).length;
     await File('${dir.path}/${nombre(id, parte)}')
         .writeAsString(texto, mode: FileMode.append, flush: true);
     partes[id] = parte;

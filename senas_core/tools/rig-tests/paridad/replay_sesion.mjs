@@ -7,11 +7,14 @@
 //
 //   node tools/rig-tests/paridad/replay_sesion.mjs <sesion.jsonl[.gz]>
 //
+// Una sesion larga del telefono son varios archivos (<id>.jsonl,
+// <id>.part002.jsonl...): pasar cualquiera de ellos lee todos.
+//
 // La sesion guarda landmarks a 4 cifras (como la web): un valor pegado a un
 // umbral puede decidir distinto que en el telefono, que vio el valor
 // completo. Por eso informa la coincidencia por campo y los primeros
 // desajustes en vez de exigir 100 %.
-import {framesDeSesion, leerJsonl} from './sesion_jsonl.mjs';
+import {framesDeSesion, leerSesion} from './sesion_jsonl.mjs';
 import {crearCaptura as capturaActual} from './captura_actual.mjs';
 
 const CAMPOS = [
@@ -106,7 +109,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.error('uso: node replay_sesion.mjs <sesion.jsonl[.gz]>');
     process.exit(2);
   }
-  const r = compararSesion(leerJsonl(ruta));
+  const r = compararSesion(leerSesion(ruta));
   console.log(`frames reproducidos: ${r.frames}`);
   for (const [campo, c] of Object.entries(r.porCampo)) {
     if (!c.total) continue;

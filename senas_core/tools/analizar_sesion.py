@@ -1,6 +1,8 @@
 """Resume una sesion grabada por el visor (SessionLogV1, JSONL).
 
 Uso:  python3 tools/analizar_sesion.py [sesiones/<id>.jsonl ...]
+      (una sesion larga del telefono son varios archivos <id>.jsonl,
+      <id>.part002.jsonl...: pasar cualquiera de ellos lee todos juntos)
       (sin argumentos analiza la sesion mas reciente de senas_core/sesiones)
       python3 tools/analizar_sesion.py --baseline [sesion.jsonl]
       (guarda docs/evidence/baseline/<id>-<plataforma>.json, Fase 0)
@@ -18,6 +20,7 @@ import glob
 import json
 import math
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,16 +37,46 @@ def pct(xs, p):
     return xs[min(len(xs) - 1, int(p * (len(xs) - 1) + 0.5))]
 
 
+_PARTE = re.compile(r"^(?P<id>.+?)(?:\.part(?P<n>\d+))?\.jsonl$")
+
+
+def partes_de_sesion(ruta):
+    """Archivos de la sesion a la que pertenece `ruta`, en orden de parte.
+
+    El telefono parte una sesion larga en `<id>.jsonl`, `<id>.part002.jsonl`,
+    `<id>.part003.jsonl`...; cualquiera de ellos nombra la sesion completa.
+    Una ruta que no sigue ese patron (p. ej. una sesion web) se lee tal cual.
+    """
+    carpeta, nombre = os.path.split(ruta)
+    m = _PARTE.match(nombre)
+    if not m:
+        return [ruta]
+    encontradas = []
+    for otro in os.listdir(carpeta or "."):
+        o = _PARTE.match(otro)
+        if o and o.group("id") == m.group("id"):
+            encontradas.append((int(o.group("n") or 1), otro))
+    if not encontradas:
+        return [ruta]
+    return [os.path.join(carpeta, n) for _, n in sorted(encontradas)]
+
+
 def leer(ruta):
-    """Lee el JSONL y quita duplicados por `seq` (al cerrar la pagina un
-    bloque puede llegar dos veces)."""
-    with open(ruta, encoding="utf-8") as fh:
-        return leer_registros(json.loads(l) for l in fh if l.strip())
+    """Lee el JSONL (todas las partes de la sesion) y quita duplicados por
+    `seq` (al cerrar la pagina un bloque puede llegar dos veces)."""
+    registros = []
+    for parte in partes_de_sesion(ruta):
+        with open(parte, encoding="utf-8") as fh:
+            registros.extend(json.loads(l) for l in fh if l.strip())
+    return leer_registros(registros)
 
 
 def leer_registros(registros):
     vistos, out = set(), []
     for r in registros:
+        # Cabecera de una parte posterior: solo identifica el archivo.
+        if r.get("kind") == "session_part":
+            continue
         if "seq" in r:
             if r["seq"] in vistos:
                 continue
@@ -738,6 +771,12 @@ if __name__ == "__main__":
             json.dump(b, fh, indent=1, ensure_ascii=False)
         print("baseline:", destino)
         sys.exit(0)
+    vistas = set()
     for ruta in args or [_ultima()]:
+        # Varias partes de la misma sesion se resumen una sola vez.
+        clave = tuple(partes_de_sesion(ruta))
+        if clave in vistas:
+            continue
+        vistas.add(clave)
         print("==", ruta)
         imprimir(resumir(leer(ruta)))

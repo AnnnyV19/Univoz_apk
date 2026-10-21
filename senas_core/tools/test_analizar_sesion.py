@@ -1,5 +1,6 @@
 """Pruebas del resumen de sesiones."""
 
+import json
 import math
 import os
 import sys
@@ -57,6 +58,78 @@ def test_leer_quita_duplicados_por_seq(tmp_path):
     regs = an.leer(str(ruta))
     assert [r["seq"] for r in regs] == [0, 1, 2, 3]
     assert an.resumir(regs)["frames"] == 2
+
+
+def _sesion_en_partes(carpeta, sid="20261021T000000Z-abc123"):
+    """Sesion del telefono partida en tres archivos (ver sumideroArchivo)."""
+    def linea(d):
+        return json.dumps(d)
+    (carpeta / (sid + ".jsonl")).write_text("\n".join([
+        linea({"seq": 0, "kind": "session_start", "session_id": sid,
+               "meta": {"platform": "android"}}),
+        linea({"seq": 1, "kind": "frame", "t": 0}),
+        linea({"seq": 2, "kind": "frame", "t": 33}),
+    ]) + "\n")
+    (carpeta / (sid + ".part002.jsonl")).write_text("\n".join([
+        linea({"kind": "session_part", "session_id": sid, "part": 2}),
+        linea({"seq": 3, "kind": "frame", "t": 66}),
+        linea({"seq": 4, "kind": "frame", "t": 99}),
+    ]) + "\n")
+    (carpeta / (sid + ".part003.jsonl")).write_text("\n".join([
+        linea({"kind": "session_part", "session_id": sid, "part": 3}),
+        linea({"seq": 5, "kind": "frame", "t": 132}),
+        linea({"seq": 6, "kind": "session_end", "frames": 5}),
+    ]) + "\n")
+    # Otra sesion en la misma carpeta: no se mezcla.
+    (carpeta / "20260101T000000Z-zzzzzz.jsonl").write_text(
+        linea({"seq": 0, "kind": "session_start", "session_id": "otra"}) + "\n")
+    return sid
+
+
+def test_sesion_en_partes_se_lee_completa_desde_cualquier_parte(tmp_path):
+    sid = _sesion_en_partes(tmp_path)
+    for nombre in (sid + ".jsonl", sid + ".part002.jsonl",
+                   sid + ".part003.jsonl"):
+        regs = an.leer(str(tmp_path / nombre))
+        r = an.resumir(regs)
+        assert r["session_id"] == sid, nombre
+        assert r["frames"] == 5, nombre
+        assert r["closed"] is True, nombre
+        assert [x["seq"] for x in regs] == [0, 1, 2, 3, 4, 5, 6], nombre
+        assert not any(x["kind"] == "session_part" for x in regs)
+
+
+def test_partes_de_sesion_en_orden_y_sin_mezclar_otras(tmp_path):
+    sid = _sesion_en_partes(tmp_path)
+    partes = an.partes_de_sesion(str(tmp_path / (sid + ".part002.jsonl")))
+    assert [os.path.basename(p) for p in partes] == [
+        sid + ".jsonl", sid + ".part002.jsonl", sid + ".part003.jsonl"]
+
+
+def test_ruta_que_no_es_de_parte_se_lee_tal_cual(tmp_path):
+    ruta = tmp_path / "web.log"
+    ruta.write_text("")
+    assert an.partes_de_sesion(str(ruta)) == [str(ruta)]
+    assert an.partes_de_sesion(str(tmp_path / "ausente.jsonl")) == [
+        str(tmp_path / "ausente.jsonl")]
+
+
+def test_gates_de_sesion_en_partes_igual_que_en_un_archivo(tmp_path):
+    sid = _sesion_en_partes(tmp_path)
+    unida = tmp_path / "unida" / "u.jsonl"
+    unida.parent.mkdir()
+    lineas = []
+    for nombre in (sid + ".jsonl", sid + ".part002.jsonl",
+                   sid + ".part003.jsonl"):
+        lineas += [l for l in (tmp_path / nombre).read_text().splitlines()
+                   if '"session_part"' not in l]
+    unida.write_text("\n".join(lineas) + "\n")
+    g_partes = an.gates(an.leer(str(tmp_path / (sid + ".part003.jsonl"))))
+    g_unida = an.gates(an.leer(str(unida)))
+    assert {k: v["veredicto"] for k, v in g_partes.items()
+            if k.startswith("fase_")} == \
+        {k: v["veredicto"] for k, v in g_unida.items()
+         if k.startswith("fase_")}
 
 
 def test_sesion_android_lee_asignacion_y_rechazos():

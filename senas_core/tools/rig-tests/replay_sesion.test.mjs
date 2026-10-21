@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {leerJsonl} from './paridad/sesion_jsonl.mjs';
+import {mkdtempSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {basename, join} from 'node:path';
+
+import {leerJsonl, leerSesion, partesDeSesion} from './paridad/sesion_jsonl.mjs';
 import {compararSesion} from './paridad/replay_sesion.mjs';
 import {crearCaptura} from './paridad/captura_actual.mjs';
 
@@ -49,4 +53,29 @@ test('a phone session that diverges from the web is reported by field', () => {
   assert.ok(campos.has('tracked.left_state'));
   assert.ok(campos.has('assignment.mode'));
   assert.equal(r.desajustes[0].seq, 5);
+});
+
+test('a session split in parts is read whole from any part', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sesion-partes-'));
+  const sid = '20261021T000000Z-abc123';
+  const escribe = (nombre, regs) => writeFileSync(join(dir, nombre),
+    regs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  escribe(`${sid}.jsonl`, [
+    {seq: 0, kind: 'session_start', session_id: sid, meta: {}},
+    {seq: 1, kind: 'frame', t: 0}]);
+  escribe(`${sid}.part002.jsonl`, [
+    {kind: 'session_part', session_id: sid, part: 2},
+    {seq: 2, kind: 'frame', t: 33}]);
+  escribe(`${sid}.part003.jsonl`, [
+    {kind: 'session_part', session_id: sid, part: 3},
+    {seq: 3, kind: 'frame', t: 66}, {seq: 4, kind: 'session_end'}]);
+  escribe('20260101T000000Z-zzzzzz.jsonl', [{seq: 0, kind: 'session_start'}]);
+  for (const nombre of [`${sid}.jsonl`, `${sid}.part003.jsonl`]) {
+    const regs = leerSesion(join(dir, nombre));
+    assert.deepEqual(regs.map((r) => r.seq), [0, 1, 2, 3, 4], nombre);
+  }
+  assert.deepEqual(
+    partesDeSesion(join(dir, `${sid}.part002.jsonl`)).map((f) => basename(f)),
+    [`${sid}.jsonl`, `${sid}.part002.jsonl`, `${sid}.part003.jsonl`]);
+  assert.deepEqual(partesDeSesion(join(dir, 'otro.log')), [join(dir, 'otro.log')]);
 });

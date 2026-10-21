@@ -58,12 +58,12 @@ class _MotorFlutterTts implements MotorTts {
   Future<bool> hablar(String texto) async {
     // Con el fin de voz esperado, speak() vuelve cuando acaba: 1 = habló,
     // 0 = ocupado o cortado. LectorVozTts cierra la lectura en ambos casos.
-    _compartido.tomar(_alTerminar ?? () {});
-    return await _compartido.tts.speak(texto) == 1;
+    // Si el narrador o el reconocedor estaban hablando, se les corta antes.
+    return await _compartido.hablar(texto, _alTerminar ?? () {}) == 1;
   }
 
   @override
-  Future<void> detener() async => _compartido.tts.stop();
+  Future<void> detener() => _compartido.detener();
 }
 
 /// [LectorVoz] real, con flutter_tts. La configuración es la misma que usa
