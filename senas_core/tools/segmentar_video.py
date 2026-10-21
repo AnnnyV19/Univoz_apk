@@ -94,7 +94,7 @@ def hhmmss(s):
     return f"{int(s // 60)}:{s % 60:05.2f}"
 
 
-def medir(video, roi, mascara, escala=64):
+def medir(video, roi, mascara, escala=64, senal="tinta"):
     """Recorre el video y devuelve (fps, n_frames, tinta, dif).
 
     tinta[i]: cuanta "tinta" (pixeles que se salen del fondo) hay en la ROI
@@ -135,12 +135,25 @@ def medir(video, roi, mascara, escala=64):
         gris = cv2.cvtColor(recorte, cv2.COLOR_BGR2GRAY)
         chica = cv2.resize(gris, (escala, escala)).astype(np.float32) / 255.0
 
-        # "Tinta": que tan lejos esta cada pixel del tono de fondo. El fondo
-        # de estos videos es claro, asi que se mide contra el percentil alto
-        # del propio recorte -- asi funciona igual con fondo blanco, crema o
-        # gris, sin tener que configurar el color.
-        fondo = np.percentile(chica, 90)
-        tinta.append(float(np.mean(np.abs(chica - fondo) > 0.15)))
+        if senal == "caja":
+            # Subtitulos en cajita negra SOBRE la persona (no un rotulo en
+            # una franja limpia). Medir oscuridad no sirve: la ropa oscura
+            # cuenta igual que la caja. Lo que si los separa es la
+            # saturacion -- la caja es negro neutro y la ropa tiene color,
+            # aunque sea oscura. Asi que se cuentan los pixeles que son a la
+            # vez muy oscuros Y casi grises.
+            hsv = cv2.cvtColor(
+                cv2.resize(recorte, (escala, escala)), cv2.COLOR_BGR2HSV)
+            sat = hsv[..., 1].astype(np.float32)
+            val = hsv[..., 2].astype(np.float32)
+            tinta.append(float(np.mean((val < 45) & (sat < 70))))
+        else:
+            # "Tinta": que tan lejos esta cada pixel del tono de fondo. El
+            # fondo de estos videos es claro, asi que se mide contra el
+            # percentil alto del propio recorte -- asi funciona igual con
+            # fondo blanco, crema o gris, sin tener que configurar el color.
+            fondo = np.percentile(chica, 90)
+            tinta.append(float(np.mean(np.abs(chica - fondo) > 0.15)))
 
         dif.append(0.0 if previa is None else float(np.mean(np.abs(chica - previa))))
         previa = chica
@@ -430,6 +443,15 @@ def main():
                     help="no achicar cada segmento a la parte con movimiento")
     ap.add_argument("--solo-roi", action="store_true",
                     help="solo guarda una imagen con la ROI y la mascara dibujadas, y termina")
+    ap.add_argument(
+        "--senal", choices=["tinta", "caja"], default="tinta",
+        help="que se mide en la ROI para decidir si hay rotulo. "
+             "'tinta' (default): el rotulo es texto oscuro sobre una franja "
+             "de fondo claro, como el alfabeto de la SEP. "
+             "'caja': el subtitulo viene en una cajita negra encima de la "
+             "persona; ahi medir oscuridad confunde la ropa con la caja, asi "
+             "que se cuentan los pixeles oscuros Y desaturados (la caja es "
+             "negro neutro, la ropa tiene color).")
     ap.add_argument("--salida", help="prefijo de los archivos de salida (default: el del video)")
     ap.add_argument("--categoria", help="categoria que se escribe en todas las filas del CSV")
     ap.add_argument(
@@ -490,7 +512,7 @@ def main():
         return
 
     print("Midiendo el video ...")
-    fps, n_frames, tinta, dif = medir(args.video, roi, mascara)
+    fps, n_frames, tinta, dif = medir(args.video, roi, mascara, senal=args.senal)
     print(f"  {n_frames} frames a {fps:.1f} fps ({n_frames / fps:.1f}s)")
 
     if args.saltos:

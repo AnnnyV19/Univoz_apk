@@ -555,6 +555,74 @@ List<double> mirrorFrame(List<double> v) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// FORMA ISOTROPICA (2026-10-10). Espejo exacto de sign_norm.isotropizar_* en
+// tools/sign_norm.py; ver alla la explicacion completa.
+//
+// Los landmarks de mano de MediaPipe vienen divididos por el ANCHO y el ALTO
+// de la imagen por separado, asi que la mano sale aplastada o estirada segun el
+// aspecto de la camara (16:9 comprime x y z a 0.56 de y; el bitmap de analisis
+// de la app, 360x480, los estira 1.33). El formato guardado (norm 2.0.0) NO
+// cambia: la correccion se aplica donde se COMPARA, a una secuencia ya
+// normalizada y remuestreada, y es una funcion pura de (forma, aspecto).
+// ---------------------------------------------------------------------------
+
+/// Marca del paquete de plantillas ya corregido (campo "forma" del JSON).
+const String kFormaIso = 'iso1';
+
+/// Aspecto (ancho / alto) que se asume para un video o una plantilla de la que
+/// no se sabe nada: casi todos los de la base son 16:9.
+const double kAspectoVideo = 16.0 / 9.0;
+
+/// Aspecto del bitmap de analisis de la app (360x480, vertical 3:4). Se usa
+/// cuando el lado nativo no informa el tamano real de la imagen.
+const double kAspectoAnalisisApp = 0.75;
+
+/// Distancia muneca -> MCP del indice, medio, anular y menique, en las
+/// unidades de la forma 2.0.0 (escala 2D muneca->MCP9 = 1).
+const List<double> kRefPalma = [1.07, 1.01, 0.92, 0.84];
+
+/// Posicion de MCP5, 9, 13 y 17 dentro de los 20 puntos guardados.
+const List<int> kIdxPalma = [4, 8, 12, 16];
+
+/// Corrige la forma de UNA mano presente (20 puntos x,y,z desde [off]) en una
+/// copia del frame: x y z por el aspecto, y escala por la mediana de las
+/// distancias 3D muneca->MCP5,9,13,17 sobre su largo de referencia.
+void _isotropizarMano(List<double> v, int off, double aspecto) {
+  final r = <double>[];
+  for (var i = 0; i < kIdxPalma.length; i++) {
+    final k = off + kIdxPalma[i] * 3;
+    final x = v[k] * aspecto;
+    final y = v[k + 1];
+    final z = v[k + 2] * aspecto;
+    r.add(math.sqrt(x * x + y * y + z * z) / kRefPalma[i]);
+  }
+  r.sort();
+  var hs = (r[1] + r[2]) / 2.0; // mediana de 4
+  if (hs < 1e-6) hs = 1.0;
+  for (var j = 0; j < kNHandPts; j++) {
+    final k = off + j * 3;
+    final x = v[k] * aspecto;
+    final y = v[k + 1];
+    final z = v[k + 2] * aspecto;
+    v[k] = x / hs;
+    v[k + 1] = y / hs;
+    v[k + 2] = z / hs;
+  }
+}
+
+/// Frame de 152 con la forma de cada mano PRESENTE corregida. Devuelve copia.
+List<double> isotropizarFrame(List<double> v, double aspecto) {
+  final out = List<double>.from(v);
+  if (v[kOffPresL] >= 0.5) _isotropizarMano(out, kOffShapeL, aspecto);
+  if (v[kOffPresR] >= 0.5) _isotropizarMano(out, kOffShapeR, aspecto);
+  return out;
+}
+
+List<List<double>> isotropizarSecuencia(
+        List<List<double>> seq, double aspecto) =>
+    seq.map((f) => isotropizarFrame(f, aspecto)).toList();
+
 /// Empaqueta la secuencia a float16 para mandarla al servidor / BYTEA.
 Uint8List packF16(List<List<double>> seq) {
   final flat = <double>[];

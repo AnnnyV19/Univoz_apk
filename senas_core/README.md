@@ -210,7 +210,8 @@ para parecerse a otra.
 Un DTW completo contra 500 plantillas son ~20 millones de operaciones. El
 prefiltro compara primero el vector promedio de la secuencia (152
 operaciones por plantilla) y solo corre el DTW completo sobre las 40 mejores
-candidatas. En los tests da el mismo resultado que la búsqueda exhaustiva.
+candidatas (80 cuando el espejo automático duplica la biblioteca). En los
+tests da el mismo resultado que la búsqueda exhaustiva.
 Además hay abandono temprano: una plantilla cuya fila acumulada ya supera
 1.5× la mejor distancia hasta el momento se descarta sin terminar.
 
@@ -222,9 +223,25 @@ la distancia está por debajo de `maxDistance` **y** el margen supera
 `minMargin`. Sin el margen, cualquier gesto aleatorio se clasificaría como
 la seña menos lejana.
 
-Los umbrales por defecto (0.55 y 0.12) están calibrados contra datos
-sintéticos. **Vas a tener que recalibrarlos con grabaciones reales** — es lo
-primero que hay que ajustar cuando tengas las primeras 20 señas grabadas.
+Los umbrales por defecto (`maxDistance` 0.50 y `minMargin` 0.32, constantes
+`DEFAULT_MAX_DISTANCE` / `DEFAULT_MIN_MARGIN` en `tools/dtw.py` y
+`kMaxDistanceDefault` / `kMinMarginDefault` en `lib/dtw.dart`) se calibraron
+contra las 146 plantillas reales del diccionario (44 señas), con pocas
+personas: **conviene recalibrarlos cuando graben más.** Viven en la misma
+escala que la distancia: si cambian los pesos de `dtw.py` hay que volver a
+calibrarlos y regenerar `test/golden/golden_cases.json` con
+`tools/gen_golden.py`. Los ajustes guardados en el teléfono llevan una
+`version_umbrales`; si no coincide con la del código, se descartan los
+umbrales guardados y entran los nuevos por defecto.
+
+**Presencia de mano.** La cámara pierde una mano unos frames incluso en
+grabaciones buenas. Los pesos de presencia (`W_PRES` 0.25 y `SHAPE_PENALTY`
+0.15) están bajos a propósito: con los anteriores (2.0 y 1.0) cada frame
+suelto dominaba la distancia entre dos tomas de la misma seña.
+
+**Espejo.** Con el ajuste "espejo automático" (activo por defecto), cada
+plantilla — del paquete, sincronizada o local — entra también espejada, de
+modo que quien seña con la otra mano se reconoce sin grabar de nuevo.
 
 ## Estructura del proyecto completo
 

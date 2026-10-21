@@ -58,6 +58,9 @@ def main():
     clf = D.DtwClassifier(max_distance=args.max_distance, min_margin=args.min_margin)
     for sign_id, gloss, espanol, blob, t_frames, frame_dim in filas:
         seq = sn.unpack_f16(bytes(blob), dim=frame_dim)
+        # la base guarda la forma de la mano cruda (norm 2.0.0) y no el aspecto con que se filmo:
+        # se asume 16:9, que es el de casi todos los videos
+        seq = sn.isotropizar_secuencia(seq, sn.ASPECTO_VIDEO)
         clf.add(sign_id, gloss, seq, espanol=espanol)
     n_senas = len(set(f[0] for f in filas))
     print(f"  {len(filas)} plantillas cargadas ({n_senas} senas distintas)")
@@ -66,6 +69,7 @@ def main():
     extractor = ExtractorLandmarks(args.pose_model, args.hand_model)
     try:
         raw_frames, fps, n_frames = extractor.extraer(args.video)
+        aspecto = extractor.aspecto or sn.ASPECTO_VIDEO
     finally:
         extractor.cerrar()
 
@@ -75,6 +79,8 @@ def main():
     seq = sn.normalize_sequence(raw_frames, t=sn.T_FRAMES)
     if seq is None:
         sys.exit("no se pudo extraer una sena utilizable de ese video (revisa que se vea el torso).")
+    # misma correccion que a las plantillas, con el aspecto REAL de este video
+    seq = sn.isotropizar_secuencia(seq, aspecto)
 
     ranking = clf.rank(seq)
     print()

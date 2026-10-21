@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 
@@ -55,5 +56,48 @@ void main() {
     expect(d.resumen.espejadas, 0);
     expect(d.clasificador.maxDistance, .4);
     expect(d.clasificador.minMargin, .2);
+  });
+
+  test('adicionales: lo sincronizado solo suma, no duplica, y el paquete manda', () {
+    final seq = _seq();
+    final d = armarClasificador(
+      base: [PlantillaFuente('p1', 'HOLA', 'hola', seq)],
+      origenBase: OrigenPlantillas.paquete,
+      // La glosa NUEVA de la base de datos entra; el paquete decide HOLA.
+      adicionales: [PlantillaFuente('db-nueva', 'GRACIAS', 'gracias', seq)],
+      locales: const [],
+      espejar: true,
+    );
+    final ids = d.clasificador.templates.map((t) => t.signId).toList();
+    expect(ids, ['p1', 'p1#espejo', 'db-nueva', 'db-nueva#espejo']);
+    expect(d.resumen.delPaquete, 1);
+    expect(d.resumen.sincronizadas, 1);
+    expect(d.resumen.espejadas, 2);
+    expect(d.resumen.senasDistintas, 2);
+  });
+
+  test('los umbrales por defecto son los nuevos (0.50 / 0.32) y el prefiltro '
+      'sube a 80 con espejo', () {
+    final con = armarClasificador(
+        base: const [], origenBase: OrigenPlantillas.paquete, locales: const [],
+        espejar: true);
+    final sin = armarClasificador(
+        base: const [], origenBase: OrigenPlantillas.paquete, locales: const [],
+        espejar: false);
+    expect(con.clasificador.maxDistance, 0.50);
+    expect(con.clasificador.minMargin, 0.32);
+    expect(con.clasificador.prefilter, 80);
+    expect(sin.clasificador.prefilter, 40);
+  });
+
+  test('Template guarda las secuencias compactas (Float64List)', () {
+    final seq = _seq();
+    final d = armarClasificador(
+        base: [PlantillaFuente('p1', 'HOLA', 'hola', seq)],
+        origenBase: OrigenPlantillas.paquete, locales: const [], espejar: false);
+    final t = d.clasificador.templates.single;
+    expect(t.seq.every((f) => f is Float64List), isTrue);
+    expect(t.cseq.every((f) => f is Float64List), isTrue);
+    expect(t.seq.first, seq.first);
   });
 }

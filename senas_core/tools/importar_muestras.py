@@ -107,6 +107,7 @@ def main():
     estado = "aprobada" if args.aprobar else "pendiente"
     insertadas = 0
     espejadas = 0
+    ids_nuevos = []      # solo las muestras de ESTA importacion (para aprobarlas sin tocar las demas)
 
     conn = db.conectar()
     try:
@@ -132,7 +133,6 @@ def main():
                 frames_invalidos=0,
                 visibilidad_min=None,
                 quality_score=None,
-                checksum_sha256=m.get("checksum_sha256"),
                 signer_id=signer_uuid(signer) if signer else None,
                 mano_dominante=args.mano_dominante,
                 estado=estado,
@@ -140,6 +140,7 @@ def main():
             db.insertar_landmarks(
                 conn, sample_id, sn.NORM_VERSION, sn.T_FRAMES, sn.FRAME_DIM, packed)
             insertadas += 1
+            ids_nuevos.append(str(sample_id))
 
             if args.generar_espejo:
                 seq_espejo = sn.mirror_sequence(seq)
@@ -162,6 +163,7 @@ def main():
                     conn, sample_id_espejo, sn.NORM_VERSION, sn.T_FRAMES,
                     sn.FRAME_DIM, sn.pack_f16(seq_espejo))
                 espejadas += 1
+                ids_nuevos.append(str(sample_id_espejo))
 
         conn.commit()
     except Exception:
@@ -173,9 +175,19 @@ def main():
     print()
     print(f"Listo: {insertadas} muestras importadas como '{estado}'"
           + (f" (+{espejadas} espejadas)" if espejadas else ""))
-    if not args.aprobar:
-        print("Quedaron pendientes. Para aprobarlas todas, en el SQL Editor de Supabase:")
-        print("  UPDATE sign_samples SET estado='aprobada' WHERE estado='pendiente';")
+    if not args.aprobar and ids_nuevos:
+        # OJO: NO uses  UPDATE sign_samples SET estado='aprobada' WHERE estado='pendiente'  a secas: en la base hay
+        # miles de muestras pendientes de datasets (Wikisigns, ITESO, UAEMex...) y se aprobarian todas de golpe
+        # (asi paso la aprobacion masiva de 4,409 muestras del 11-oct). Este .sql solo toca las de esta importacion.
+        ruta_sql = os.path.splitext(os.path.abspath(args.archivo))[0] + "_aprobar_estas.sql"
+        with open(ruta_sql, "w", encoding="utf-8") as fh:
+            fh.write("-- Aprueba SOLO las %d muestras importadas desde %s\n"
+                     "UPDATE sign_samples SET estado = 'aprobada'\nWHERE estado = 'pendiente' AND id IN (\n  %s\n);\n"
+                     % (len(ids_nuevos), os.path.basename(args.archivo),
+                        ",\n  ".join("'%s'" % i for i in ids_nuevos)))
+        print("Quedaron pendientes. Para aprobar SOLO estas (no las de datasets), corre este archivo en el SQL Editor")
+        print(f"o con psql:  {ruta_sql}")
+        print("(o vuelve a importar con --aprobar). NO aprobes con 'WHERE estado=pendiente' a secas.")
     print("Despues corre 'python tools/exportar_paquete.py' para que entren al paquete de la app.")
 
 

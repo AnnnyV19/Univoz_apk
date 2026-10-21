@@ -71,13 +71,19 @@ class PistaTemporal {
 class SkeletonPainter extends CustomPainter {
   final LandmarkFrame? frame;
 
+  /// Dibuja los puntos volteados de izquierda a derecha, como en un espejo.
+  /// Va junto con voltear la imagen de la camara (ver PantallaDeTranslacion):
+  /// si solo se volteara uno de los dos, el esqueleto no caeria sobre la
+  /// persona. Las etiquetas I/D siguen siendo el lado real de la persona.
+  final bool espejo;
+
   static const double _minVisibility = 0.5;
 
   static const _colorCuerpo = Color(0xFF4A90E2);
   static const _colorIzquierda = Color(0xFFFFA726);
   static const _colorDerecha = Color(0xFF42A5F5);
 
-  SkeletonPainter({this.frame});
+  SkeletonPainter({this.frame, this.espejo = false});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -296,14 +302,15 @@ class SkeletonPainter extends CustomPainter {
       p[1] <= 1;
 
   Offset _punto(List<double> p, Size size) {
-    return Offset(p[0] * size.width, p[1] * size.height);
+    final x = espejo ? 1.0 - p[0] : p[0];
+    return Offset(x * size.width, p[1] * size.height);
   }
 
   Offset _punto3d(List<double> p, Size size) => _punto(p, size);
 
   @override
   bool shouldRepaint(SkeletonPainter old) =>
-      old.frame?.timestampMs != frame?.timestampMs;
+      old.frame?.timestampMs != frame?.timestampMs || old.espejo != espejo;
 }
 
 /// Camara en vivo + reconocimiento contra el diccionario local. El avatar
@@ -955,11 +962,18 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Texture(textureId: camara.textureId),
+          // Camara frontal = vista de espejo: se voltea la imagen y, con ella,
+          // los puntos del esqueleto (solo presentacion; el reconocimiento
+          // y el avatar siguen sin voltear).
+          Transform.flip(
+            flipX: camara.frontal,
+            child: Texture(textureId: camara.textureId),
+          ),
           ValueListenableBuilder<LandmarkFrame?>(
             valueListenable: _ctrl.frame,
             builder: (_, frame, __) => CustomPaint(
-              painter: SkeletonPainter(frame: frame),
+              painter:
+                  SkeletonPainter(frame: frame, espejo: camara.frontal),
               size: Size.infinite,
             ),
           ),

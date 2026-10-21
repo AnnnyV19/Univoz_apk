@@ -30,6 +30,10 @@ Univoz es una app para comunicarte con señas. Aquí te contamos, sin letra chiq
 - El nombre y el número de tu contacto de emergencia se guardan solo en tu teléfono. Univoz no los recibe ni los sube.
 - El botón SOS abre el marcador o la app de mensajes de tu teléfono con ese número ya puesto. Nada se llama ni se envía solo: tú confirmas en esa app.
 
+## Tu avance en Aprender
+
+- Las lecciones que terminas y tu racha de días se guardan solo en tu teléfono, en un archivo aparte. Univoz no los sube ni los comparte.
+
 ## Registro de errores
 
 - Si la app falla, anota el error en un archivo dentro de tu teléfono para poder arreglarlo. No usa servicios externos y solo sale de tu teléfono si tú lo compartes a mano.
@@ -44,5 +48,6 @@ Univoz es una app para comunicarte con señas. Aquí te contamos, sin letra chiq
 - Sesiones, consentimiento y perfil corporal: Configuración, Ajustes de reconocimiento, Borrar mis datos.
 - Contacto de emergencia: Configuración, Contacto de emergencia, Quitar contacto.
 - Muestras que grabaste: bórralas desde la lista de muestras de la app.
+- Tu avance en Aprender: se borra con Borrar datos de los ajustes de Android (abajo) o al desinstalar la app.
 - Todo de una vez: en los ajustes de Android, Apps, Univoz, Almacenamiento, Borrar datos; o desinstala la app.
 - Si ya subiste muestras a nuestro servidor y quieres que las borremos, escríbenos al correo de contacto de la ficha de la app y las quitamos.

@@ -133,6 +133,64 @@ void main() {
     });
   }
 
+  group('forma isotropica', () {
+    final iso = data['iso'] as Map<String, dynamic>;
+    final casos = data['cases'] as List;
+
+    test('constantes coinciden con Python', () {
+      expect(iso['forma'], kFormaIso);
+      expect((iso['ref_palma'] as List).map((v) => (v as num).toDouble()).toList(),
+          kRefPalma);
+      expect((iso['idx_palma'] as List).map((v) => (v as num).toInt()).toList(),
+          kIdxPalma);
+    });
+
+    (iso['aspectos'] as Map<String, dynamic>).forEach((clave, esperadoRaw) {
+      test('isotropizarSecuencia con aspecto $clave coincide con Python', () {
+        final origen = (((clave == '0.75' ? casos[0] : casos[1])
+                as Map<String, dynamic>)['expected_frames'] as List)
+            .map(_parseVector)
+            .toList();
+        final got = isotropizarSecuencia(origen, double.parse(clave));
+        final esperado = (esperadoRaw as List).map(_parseVector).toList();
+        for (var i = 0; i < got.length; i++) {
+          expect(_maxDiff(got[i], esperado[i]), lessThan(tol),
+              reason: 'aspecto $clave frame $i');
+        }
+      });
+    });
+
+    test('solo cambia la forma de las manos presentes', () {
+      final v = List<double>.filled(kFrameDim, 0.0);
+      for (var i = 0; i < kOffLocL; i++) {
+        v[i] = 0.1 * i;
+      }
+      v[kOffPresR] = 1.0;
+      for (var i = 0; i < 60; i++) {
+        v[kOffShapeR + i] = 0.3 + 0.01 * i;
+      }
+      final w = isotropizarFrame(v, 0.75);
+      for (var i = 0; i < kOffShapeL; i++) {
+        expect(w[i], v[i], reason: 'dim $i (cuerpo/ubicacion/presencia)');
+      }
+      for (var i = kOffShapeL; i < kOffShapeR; i++) {
+        expect(w[i], v[i], reason: 'mano ausente dim $i');
+      }
+      expect(_maxDiff(w.sublist(kOffShapeR), v.sublist(kOffShapeR)),
+          greaterThan(1e-3));
+    });
+
+    test('una forma vacia no explota', () {
+      final v = List<double>.filled(kFrameDim, 0.0);
+      v[kOffPresL] = 1.0;
+      final w = isotropizarFrame(v, 0.75);
+      // La presencia (dim 30) sigue en 1.0; lo que no debe pasar es que la
+      // forma vacia se vuelva NaN o deje de ser cero.
+      expect(w.every((x) => x.isFinite), isTrue);
+      expect(w.sublist(kOffShapeL).every((x) => x == 0.0), isTrue);
+    });
+  });
+
   test('doble espejo devuelve el original', () {
     final f = (data['cases'] as List).first as Map<String, dynamic>;
     final v = _parseVector((f['expected_frames'] as List).first);

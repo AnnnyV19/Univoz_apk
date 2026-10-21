@@ -207,6 +207,9 @@ class LandmarkFrame {
     this.poseRan,
   });
 
+  /// El aspecto a usar para corregir la forma de la mano.
+  double get aspectoEfectivo => imageAspect ?? kAspectoAnalisisApp;
+
   /// Decodifica desde el mapa que llega por el canal del lado nativo.
   /// [swapHands] cruza izquierda y derecha -- ver CameraBridge.cruzarManos.
   factory LandmarkFrame.fromMap(Map<Object?, Object?> map,
@@ -438,6 +441,12 @@ class CamaraIniciada {
   /// vivo ya no se espeja y el valor nuevo siempre es false.
   final bool espejo;
 
+  /// Si la camara que arranco es la frontal. Las pantallas lo usan para
+  /// mostrar la vista como un espejo (imagen y landmarks volteados de
+  /// izquierda a derecha): solo es presentacion, los datos que van al
+  /// reconocimiento y al avatar nunca se voltean.
+  final bool frontal;
+
   /// Resolucion real del preview, ya corregida por rotacion. 0 si el lado
   /// nativo todavia no la informa (versiones viejas de LandmarkPlugin.kt).
   final int ancho;
@@ -448,6 +457,7 @@ class CamaraIniciada {
     this.espejo, {
     this.ancho = 0,
     this.alto = 0,
+    this.frontal = false,
   });
 
   /// Relacion de aspecto (ancho/alto) para usar en un widget AspectRatio.
@@ -496,6 +506,7 @@ class CameraBridge {
       r['espejo'] == true,
       ancho: (r['ancho'] as num?)?.toInt() ?? 0,
       alto: (r['alto'] as num?)?.toInt() ?? 0,
+      frontal: frontal,
     );
   }
 

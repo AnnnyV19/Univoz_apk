@@ -1,9 +1,10 @@
 /// Calibracion del reconocedor, sin recompilar.
 ///
-/// Los umbrales por defecto (0.55 / 0.12) estan calibrados contra datos
-/// sinteticos, no contra grabaciones reales -- el README ya avisaba que hay
-/// que ajustarlos con las primeras señas grabadas. Esta pantalla es para
-/// hacerlo probando, que es la unica forma honesta de calibrarlos.
+/// Los umbrales por defecto (kMaxDistanceDefault / kMinMarginDefault, en
+/// dtw.dart) se calibraron contra las plantillas reales del diccionario, pero
+/// con pocas personas: conviene ajustarlos cuando grabe mas gente. Esta
+/// pantalla es para hacerlo probando, que es la unica forma honesta de
+/// calibrarlos.
 library pantalla_ajustes;
 
 import 'dart:io';
@@ -13,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'modo_desarrollador.dart';
+import 'dtw.dart' show kMaxDistanceDefault, kMinMarginDefault;
 import 'motion_contract.dart';
 import 'muestras_locales.dart';
 import 'pantalla_espejo.dart';
@@ -165,10 +167,11 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
           ),
           TextButton(
             onPressed: () => setState(() {
-              _a.maxDistance = 0.55;
-              _a.minMargin = 0.12;
+              _a.maxDistance = kMaxDistanceDefault;
+              _a.minMargin = kMinMarginDefault;
             }),
-            child: const Text('Volver a los valores por defecto (0.55 / 0.12)'),
+            child: Text(
+                'Volver a los valores por defecto (${kMaxDistanceDefault.toStringAsFixed(2)} / ${kMinMarginDefault.toStringAsFixed(2)})'),
           ),
           const Divider(height: 32),
           // Calibración del avatar: solo para quien desarrolla (modo

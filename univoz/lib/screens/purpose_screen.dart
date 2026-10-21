@@ -6,6 +6,7 @@ import 'other_person_profile_screen.dart';
 import 'main_shell_screen.dart';
 import 'traducir_senas_screen.dart';
 import 'univoz_shared_widgets.dart';
+import 'acerca_screen.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
@@ -331,7 +332,18 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 4),
+              Center(
+                child: TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AcercaScreen()),
+                  ),
+                  icon: const Icon(Icons.info_outline, size: 18),
+                  label: const Text('Acerca de y créditos'),
+                  style: TextButton.styleFrom(foregroundColor: _grayText),
+                ),
+              ),
+              const SizedBox(height: 8),
             ],
           ),
         ),

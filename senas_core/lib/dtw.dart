@@ -2,9 +2,14 @@
 ///
 /// Espejo exacto de tools/dtw.py. Corre en el dispositivo: las plantillas
 /// llegan en el paquete que sincroniza PostgreSQL.
+///
+/// Lo que se compara NO es la secuencia guardada tal cual: la forma de la mano
+/// debe haber pasado antes por isotropizarSecuencia (sign_norm.dart), y el
+/// clasificador le resta a cada mano su posicion media (centrarUbicacion).
 library dtw;
 
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'sign_norm.dart';
 
@@ -33,13 +38,48 @@ const List<int> kBodyDistDims = [
 const int kNBody = 12;
 const int kNShape = 60;
 
-const double kWBody = 0.5;
-const double kWLoc = 1.5;
-const double kWPres = 2.0;
+/// Pesos por bloque. 2026-10-10, medidos con validacion cruzada por grabacion
+/// (620 consultas, 541 senas, las 29 letras incluidas); espejo exacto de
+/// tools/dtw.py, donde esta la explicacion completa:
+///  * kWBody 0.5 -> 0: el cuerpo (codos, munecas, caderas) depende de cuanto
+///    se separo cada persona y de la camara; con 0.15 el acierto en letras
+///    cae de 43.6 % a 27.7 %. Sigue en el vector (avatar y "Practicar"), solo
+///    no decide.
+///  * kWLoc 1.5 -> 0.75 y SIN posicion absoluta (centrarUbicacion): cada
+///    persona sena a otra altura; se compara la trayectoria, no la altura.
+///  * Junto con la forma isotropica (isotropizarSecuencia): todas 28.2 % ->
+///    34.0 %, letras 21.8 % -> 43.6 %.
+const double kWBody = 0.0;
+const double kWLoc = 0.75;
 const double kWShape = 1.0;
-const double kShapePenalty = 1.0;
+
+/// Presencia de mano. Eran 2.0 y 1.0; se bajaron a 0.25 y 0.15 midiendo contra
+/// las 146 plantillas reales (44 senas): la camara pierde una mano unos frames
+/// incluso en grabaciones buenas, y con los valores viejos cada frame suelto
+/// costaba ~1.7 contra ~0.2 de un frame que coincide, lo que dominaba la
+/// distancia entre dos tomas de la MISMA sena. Con estos, el acierto sube ~9
+/// puntos con 1 muestra por sena y ~6 con 3. Espejo exacto de tools/dtw.py: si
+/// se vuelven a mover hay que recalibrar kMaxDistanceDefault y
+/// kMinMarginDefault (viven en la misma escala) y regenerar
+/// test/golden/golden_cases.json con tools/gen_golden.py.
+const double kWPres = 0.25;
+const double kShapePenalty = 0.15;
+
+/// Umbrales de aceptacion por defecto, en la escala de la distancia de arriba.
+/// Eran 0.55 / 0.12 y luego 0.65 / 0.32. Recalibrados el 2026-10-10 con la
+/// distancia nueva (validacion cruzada por grabacion): antes acierta y acepta
+/// 15.3 %, acepta mal 4.5 %; ahora 17.4 % y 3.3 %, y acepta 7 % de las senas
+/// que NO estan en el diccionario. La distancia maxima casi no pesa; el que
+/// manda es el margen (0.40 deja 91 % de precision aceptando menos).
+const double kMaxDistanceDefault = 0.50;
+const double kMinMarginDefault = 0.32;
 
 const int kBand = 4;
+
+/// Tramos del prefiltro. Con UN vector promedio por plantilla y ~2 200
+/// plantillas (1 089 + espejos) la que habria ganado quedaba fuera de las 80
+/// candidatas 13 % de las veces; con 8 tramos, 0.6 %.
+const int kNSegmentos = 8;
 
 const List<List<int>> _handBlocks = [
   [kOffLocL, kOffPresL, kOffShapeL],
@@ -151,15 +191,101 @@ List<double> signature(List<List<double>> seq) {
   return sig;
 }
 
+const List<List<int>> _locPres = [
+  [kOffLocL, kOffPresL],
+  [kOffLocR, kOffPresR],
+];
+
+/// Copia de la secuencia sin la posicion media de cada mano.
+///
+/// A cada mano se le resta, en X e Y, el promedio de la posicion de su muneca
+/// sobre los frames en que esta presente. Queda solo la TRAYECTORIA: de donde
+/// a donde se movio, no a que altura sena esa persona. La Z no entra en la
+/// distancia y se deja igual. El original no se modifica: el avatar sigue
+/// dibujando la altura real de cada sena. Espejo de centrar_ubicacion (dtw.py).
+List<List<double>> centrarUbicacion(List<List<double>> seq) {
+  final out = seq.map((f) => List<double>.from(f)).toList();
+  for (final lp in _locPres) {
+    final offLoc = lp[0];
+    final offPres = lp[1];
+    final idx = <int>[
+      for (var t = 0; t < out.length; t++)
+        if (out[t][offPres] >= 0.5) t
+    ];
+    if (idx.isEmpty) continue;
+    var mx = 0.0;
+    var my = 0.0;
+    for (final t in idx) {
+      mx += out[t][offLoc];
+      my += out[t][offLoc + 1];
+    }
+    mx /= idx.length;
+    my /= idx.length;
+    for (final t in idx) {
+      out[t][offLoc] -= mx;
+      out[t][offLoc + 1] -= my;
+    }
+  }
+  return out;
+}
+
+/// [n] vectores promedio, uno por tramo consecutivo de la secuencia. Es el
+/// prefiltro del clasificador (ver kNSegmentos). Espejo de firma_segmentos.
+List<List<double>> firmaSegmentos(List<List<double>> seq,
+    [int n = kNSegmentos]) {
+  final m = seq.length;
+  if (m == 0) {
+    return List.generate(n, (_) => List<double>.filled(kFrameDim, 0.0));
+  }
+  final out = <List<double>>[];
+  for (var k = 0; k < n; k++) {
+    final lo = k * m ~/ n;
+    final hi = math.max(lo + 1, (k + 1) * m ~/ n);
+    out.add(signature(seq.sublist(lo, hi)));
+  }
+  return out;
+}
+
+double _distanciaFirmas(List<List<double>> fa, List<List<double>> fb) {
+  var s = 0.0;
+  for (var i = 0; i < fa.length; i++) {
+    s += frameDistance(fa[i], fb[i]);
+  }
+  return s / fa.length;
+}
+
 class Template {
   final String signId;
   final String gloss;
   final String espanol;
-  final List<List<double>> seq;
-  final List<double> sig;
 
-  Template(this.signId, this.gloss, this.seq, {this.espanol = ''})
-      : sig = signature(seq);
+  /// La secuencia tal cual llego, con la altura real de cada sena (la usa el
+  /// avatar).
+  final List<List<double>> seq;
+
+  /// La que se compara: sin la posicion absoluta de la mano.
+  final List<List<double>> cseq;
+
+  /// Su prefiltro (kNSegmentos vectores promedio).
+  final List<List<double>> segs;
+
+  Template._(this.signId, this.gloss, this.espanol, this.seq, this.cseq,
+      this.segs);
+
+  factory Template(String signId, String gloss, List<List<double>> seq,
+      {String espanol = ''}) {
+    final c = centrarUbicacion(seq);
+    // Float64List: 8 bytes por valor en vez de ~24 de una lista de doubles
+    // boxeados. Con el diccionario de ~2600 plantillas (con espejo) son tres
+    // copias de 32x152 por plantilla; en lista normal pasaban de 500 MB.
+    return Template._(
+        signId, gloss, espanol, _compacta(seq), _compacta(c), firmaSegmentos(c));
+  }
+
+  static List<List<double>> _compacta(List<List<double>> seq) =>
+      <List<double>>[
+        for (final f in seq) f is Float64List ? f : Float64List.fromList(f),
+      ].toList(growable: false);
 }
 
 class Prediction {
@@ -198,9 +324,9 @@ class DtwClassifier {
   final int band;
 
   DtwClassifier({
-    this.maxDistance = 0.55,
-    this.minMargin = 0.12,
-    this.prefilter = 40,
+    this.maxDistance = kMaxDistanceDefault,
+    this.minMargin = kMinMarginDefault,
+    this.prefilter = 80,
     this.band = kBand,
   });
 
@@ -209,23 +335,35 @@ class DtwClassifier {
     templates.add(Template(signId, gloss, seq, espanol: espanol));
   }
 
-  List<Template> _candidatos(List<double> sig) {
+  List<Template> _candidatos(List<List<double>> segs) {
     if (prefilter <= 0 || templates.length <= prefilter) return templates;
     final puntuadas = templates
-        .map((t) => MapEntry(frameDistance(sig, t.sig), t))
+        .map((t) => MapEntry(_distanciaFirmas(segs, t.segs), t))
         .toList()
       ..sort((x, y) => x.key.compareTo(y.key));
     return puntuadas.take(prefilter).map((e) => e.value).toList();
   }
 
+  /// Cuanto puede alejarse una plantilla de la mejor antes de abandonarla.
+  ///
+  /// Una plantilla de OTRA glosa solo puede cambiar la decision si queda a
+  /// menos de d1 / (1 - minMargin). Con un factor fijo de 1.5 el margen solo
+  /// era exacto hasta 0.333 (1 - 1/1.5): por encima, una plantilla abandonada
+  /// dejaba el margen en 1.0 y se aceptaba de mas. Con el margen por defecto
+  /// (0.32) el factor sigue siendo 1.5. Espejo de _factor_abandono en dtw.py.
+  double get _factorAbandono =>
+      math.max(1.5, 1.0 / (1.0 - math.min(minMargin, 0.95)));
+
   /// Todas las distancias, de menor a mayor.
   List<MapEntry<double, Template>> rank(List<List<double>> seq) {
-    final cands = _candidatos(signature(seq));
+    final q = centrarUbicacion(seq);
+    final cands = _candidatos(firmaSegmentos(q));
     final out = <MapEntry<double, Template>>[];
     double? mejor;
+    final factor = _factorAbandono;
     for (final t in cands) {
-      final d = dtwDistance(seq, t.seq,
-          band: band, ceiling: mejor == null ? null : mejor * 1.5);
+      final d = dtwDistance(q, t.cseq,
+          band: band, ceiling: mejor == null ? null : mejor * factor);
       if (d == double.infinity) continue;
       if (mejor == null || d < mejor) mejor = d;
       out.add(MapEntry(d, t));

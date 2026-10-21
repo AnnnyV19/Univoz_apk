@@ -32,14 +32,16 @@ import 'package:flutter/material.dart' show Color;
 import 'package:flutter/services.dart' show ByteData, rootBundle;
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'frase_a_senas.dart' show SegmentoFrase;
 import 'motion_contract.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 import 'sign_space.dart' show SignSpaceFrame;
 import 'avatar_web_bridge.dart';
 
-// Modelo actual: VRM 0.0 exportado de VRoid Studio 1.22.1. Tiene el mapa
-// humanoide completo (54 huesos, 15 por mano) y los blendshapes de
-// parpadeo y vocales, que es lo minimo que pide LSM.
+// Modelo del avatar: univozM.vrm (el que usa el rig afinado y todos los
+// gates). MODELO_UNIVOZ_v0.vrm (VRM 0.0 de VRoid Studio 2.14, propuesto por la
+// dueña en app-limpia) vive en assets/avatar/ como opcion pero NO se empaqueta
+// ni es el defecto hasta validar rig y gates con el (docs/17).
 const String _kRutaAvatar = 'assets/avatar/univozM.vrm';
 
 /// Evento `perf` del visor embebido ('perf:<json>', ver rig_embedded_perf).
@@ -106,6 +108,7 @@ class ColaPuenteAvatar {
   bool _listo = false;
   String? _vista;
   String? _manos;
+  String? _encuadre;
 
   bool get listo => _listo;
   bool get aceptaFrames => _listo;
@@ -122,6 +125,11 @@ class ColaPuenteAvatar {
     return _listo ? _manos : null;
   }
 
+  String? encuadre(String modo) {
+    _encuadre = llamadaSegura('encuadrarCamara', "'$modo'");
+    return _listo ? _encuadre : null;
+  }
+
   void marcarListo() => _listo = true;
 
   /// Recarga de la pagina: se vuelve a esperar js_listo sin perder valores.
@@ -129,7 +137,11 @@ class ColaPuenteAvatar {
 
   /// Lo pedido antes de js_listo (el mas nuevo de cada uno), en orden.
   List<String> llamadasAlCargar() =>
-      [if (_vista != null) _vista!, if (_manos != null) _manos!];
+      [
+        if (_vista != null) _vista!,
+        if (_manos != null) _manos!,
+        if (_encuadre != null) _encuadre!,
+      ];
 }
 
 /// Estado visible del avatar para la UI (avatar_vista.dart).
@@ -147,10 +159,14 @@ String motivoErrorAvatar(String detalle) {
 }
 
 class AvatarBridge {
+  /// Encuadres de la camara del visor (ver encuadrar()).
+  static const String encuadreCintura = 'cintura';
+  static const String encuadreCodos = 'codos';
+
   late final WebViewController? controller;
 
   bool get disponible => controller != null;
-  bool get compatible => disponible || kIsWeb;
+  bool get compatible => disponible || kIsWeb || _ejecutarPrueba != null;
 
   /// Se llama cuando el visor termina de reproducir la ultima secuencia
   /// mandada. Util para encadenar varias palabras (una frase completa).
@@ -411,6 +427,23 @@ class AvatarBridge {
     await controller?.reload();
   }
 
+  /// Elige el encuadre de la camara del visor:
+  ///   [encuadreCintura] -- el de siempre (espejo y pantalla del avatar).
+  ///   [encuadreCodos]   -- de los codos para arriba y mas cerca; es el de
+  ///                        Aprender, que muestra al avatar en una tarjeta chica.
+  /// Se puede llamar antes de que el visor este listo: queda en la cola y se
+  /// aplica al cargar (igual que configurarVista / configurarManos).
+  Future<void> encuadrar(String modo) async {
+    final encuadre = modo == encuadreCodos ? encuadreCodos : encuadreCintura;
+    if (kIsWeb) {
+      postAvatarCommand({'action': 'encuadrar', 'modo': encuadre});
+      return;
+    }
+    final js = _cola.encuadre(encuadre);
+    if (js == null) return;
+    await _js(js);
+  }
+
   /// Configura adaptación del espacio normalizado al esqueleto VRM.
   Future<void> configurarRig(RigCalibration calibracion) async {
     _calibracion = calibracion;
@@ -522,16 +555,47 @@ class AvatarBridge {
       });
       return;
     }
-    final webView = controller;
-    if (webView == null) return;
+    if (controller == null && _ejecutarPrueba == null) return;
     final contrato = MotionSequenceV2.fromFrames(seq, fps: fps);
     final json = jsonEncode(seq);
     final pistaJs = pista == null ? 'null' : "'${_escapar(jsonEncode(pista))}'";
-    await webView.runJavaScript(llamadaSegura('reproducirSecuencia',
+    await _js(llamadaSegura('reproducirSecuencia',
         "'${_escapar(json)}',$fps,'$kNormVersion',$pistaJs"));
     // Validación ocurre antes de cruzar WebView; evita mezclar formatos legacy.
     assert(contrato.tFrames == kTFrames &&
         contrato.frames.first.length == kFrameDim);
+  }
+
+  /// Reproduce varias señas SEGUIDAS (una frase), sin volver a reposo entre
+  /// una y otra: el visor las une con una transicion corta. Cada segmento es
+  /// una seña de 32 cuadros con su propia velocidad. Avisa con [onTerminado]
+  /// al acabar la frase completa.
+  Future<void> reproducirFrase(List<SegmentoFrase> segmentos) async {
+    if (segmentos.isEmpty) return;
+    for (final s in segmentos) {
+      // Misma validacion que reproducir(): 32 cuadros de 152 valores.
+      final contrato = MotionSequenceV2.fromFrames(s.frames, fps: s.fps);
+      if (contrato.tFrames != kTFrames ||
+          contrato.frames.first.length != kFrameDim) {
+        throw ArgumentError('Cada seña de la frase debe tener $kTFrames '
+            'cuadros de $kFrameDim valores.');
+      }
+    }
+    if (kIsWeb) {
+      postAvatarCommand({
+        'action': 'reproducirFrase',
+        'segmentos': [
+          for (final s in segmentos) {'frames': s.frames, 'fps': s.fps}
+        ],
+        'normVersion': kNormVersion,
+      });
+      return;
+    }
+    final json = jsonEncode([
+      for (final s in segmentos) {'frames': s.frames, 'fps': s.fps}
+    ]);
+    await _js(llamadaSegura(
+        'reproducirFrase', "'${_escapar(json)}','$kNormVersion'"));
   }
 
   /// Aplica UN frame al instante, sin cola ni interpolacion. Es lo que usa

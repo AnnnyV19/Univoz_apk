@@ -104,3 +104,4 @@ medición.
 - [Publicar Univoz en Android (firma, APK, Play)](RELEASE.md)
 - [Privacidad (mismo texto que la pantalla Privacidad de la app)](PRIVACIDAD.md)
 - [iPhone, fase 2](16-ios-fase2.md)
+- [Integración del trabajo de la dueña (`app-limpia`) en la beta](17-integracion-app-limpia.md)

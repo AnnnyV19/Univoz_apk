@@ -65,6 +65,11 @@ const List<SeccionPrivacidad> kSeccionesPrivacidad = [
         'teléfono con ese número ya puesto. Nada se llama ni se envía '
         'solo: tú confirmas en esa app.',
   ]),
+  SeccionPrivacidad('Tu avance en Aprender', [
+    'Las lecciones que terminas y tu racha de días se guardan solo en '
+        'tu teléfono, en un archivo aparte. Univoz no los sube ni los '
+        'comparte.',
+  ]),
   SeccionPrivacidad('Registro de errores', [
     'Si la app falla, anota el error en un archivo dentro de tu '
         'teléfono para poder arreglarlo. No usa servicios externos y solo'
@@ -82,6 +87,8 @@ const List<SeccionPrivacidad> kSeccionesPrivacidad = [
         'Quitar contacto.',
     'Muestras que grabaste: bórralas desde la lista de muestras de la'
         ' app.',
+    'Tu avance en Aprender: se borra con Borrar datos de los ajustes '
+        'de Android (abajo) o al desinstalar la app.',
     'Todo de una vez: en los ajustes de Android, Apps, Univoz, '
         'Almacenamiento, Borrar datos; o desinstala la app.',
     'Si ya subiste muestras a nuestro servidor y quieres que las '

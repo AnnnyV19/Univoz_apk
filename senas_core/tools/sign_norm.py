@@ -448,6 +448,73 @@ def mirror_sequence(seq):
     return [mirror_frame(f) for f in seq]
 
 
+
+# ---------------------------------------------------------------------------
+# FORMA ISOTROPICA (2026-10-10)
+#
+# Los landmarks de mano que entrega MediaPipe vienen normalizados por el ANCHO
+# y el ALTO de la imagen por separado (x / W, y / H, y z en la escala de x). Si
+# la imagen no es cuadrada, la mano queda aplastada o estirada segun el
+# aspecto: un video 16:9 comprime x y z a 0.56 de y, y el bitmap de analisis de
+# la app (360x480, 3:4) los estira 1.33. Dos tomas de la MISMA mano en camaras
+# distintas quedaban 2.4 veces distintas en x. Medido con validacion cruzada
+# por grabacion (541 senas): sube el acierto de 28 % a 34 % en general y de
+# 22 % a 44 % en letras.
+#
+# El formato guardado (norm 2.0.0, en la base, en las muestras locales y en el
+# paquete crudo) NO cambia. La correccion es un paso aparte que se aplica donde
+# se COMPARA: al curar el paquete (tools/curar_plantillas.py) y en el telefono
+# justo antes de reconocer. Es una funcion pura de (forma, aspecto):
+#
+#   1. x y z se multiplican por el aspecto a = ancho / alto de la imagen.
+#   2. La escala de la mano pasa de la distancia 2D muneca->MCP9 (que se
+#      dispara cuando la palma se inclina hacia la camara: M, N, ñ...) a la
+#      mediana de las distancias 3D muneca->MCP5,9,13,17, cada una dividida
+#      por su largo de referencia.
+# ---------------------------------------------------------------------------
+FORMA_ISO = "iso1"
+ASPECTO_VIDEO = 16.0 / 9.0       # casi todos los videos de la base
+ASPECTO_ANALISIS_APP = 0.75      # bitmap de analisis de la app, vertical 3:4
+ASPECTOS_ESTANDAR = (16.0 / 9.0, 4.0 / 3.0, 1.0, 3.0 / 4.0, 9.0 / 16.0)
+
+# Distancia muneca -> MCP del indice, medio, anular y menique en las unidades
+# de la forma 2.0.0 (donde la escala 2D muneca->MCP9 vale 1).
+REF_PALMA = (1.07, 1.01, 0.92, 0.84)
+# Posicion de esos cuatro puntos dentro de los 20 guardados (la muneca no se
+# guarda: es el origen). MCP5 -> 4, MCP9 -> 8, MCP13 -> 12, MCP17 -> 16.
+IDX_PALMA = (4, 8, 12, 16)
+
+
+def isotropizar_forma(forma, aspecto):
+    """forma: 60 floats (20 puntos x,y,z) de UNA mano. Devuelve otra lista de 60."""
+    p = [list(forma[i * 3:i * 3 + 3]) for i in range(N_HAND_PTS)]
+    for q in p:
+        q[0] *= aspecto
+        q[2] *= aspecto
+    r = sorted(math.sqrt(p[j][0] ** 2 + p[j][1] ** 2 + p[j][2] ** 2) / ref
+               for j, ref in zip(IDX_PALMA, REF_PALMA))
+    hs = (r[1] + r[2]) / 2.0          # mediana de 4
+    if hs < 1e-6:
+        hs = 1.0
+    out = []
+    for q in p:
+        out.extend((q[0] / hs, q[1] / hs, q[2] / hs))
+    return out
+
+
+def isotropizar_frame(v, aspecto):
+    """Frame de 152 con la forma de cada mano PRESENTE corregida. Devuelve copia."""
+    out = list(v)
+    for off_pres, off_shape in ((OFF_PRES_L, OFF_SHAPE_L), (OFF_PRES_R, OFF_SHAPE_R)):
+        if v[off_pres] >= 0.5:
+            out[off_shape:off_shape + 60] = isotropizar_forma(v[off_shape:off_shape + 60], aspecto)
+    return out
+
+
+def isotropizar_secuencia(seq, aspecto):
+    return [isotropizar_frame(f, aspecto) for f in seq]
+
+
 def pack_f16(seq):
     """Empaqueta t x 152 floats a bytes float16, para la columna BYTEA.
     Una seña de 32 frames pesa ~8.8 KB."""

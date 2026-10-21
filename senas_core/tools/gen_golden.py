@@ -213,10 +213,55 @@ def build_cases():
             "pres": D.W_PRES, "shape": D.W_SHAPE,
             "shape_penalty": D.SHAPE_PENALTY, "band": D.BAND,
         },
+        # Umbrales de aceptacion por defecto: Dart debe usar los mismos
+        # (kMaxDistanceDefault / kMinMarginDefault en lib/dtw.dart).
+        "umbrales": {
+            "max_distance": D.DEFAULT_MAX_DISTANCE,
+            "min_margin": D.DEFAULT_MIN_MARGIN,
+        },
+    }
+
+    # --- 2026-10-10: forma isotropica, ubicacion sin posicion absoluta,
+    # prefiltro por segmentos. Dart debe dar lo mismo (test/dtw_test.dart y
+    # test/sign_norm_test.dart).
+    def _desplazada(seq, dx, dy):
+        out = [list(f) for f in seq]
+        for f in out:
+            for off_loc, off_pres in ((sn.OFF_LOC_L, sn.OFF_PRES_L),
+                                      (sn.OFF_LOC_R, sn.OFF_PRES_R)):
+                if f[off_pres] >= 0.5:
+                    f[off_loc] += dx
+                    f[off_loc + 1] += dy
+        return out
+
+    clf = D.DtwClassifier(prefilter=0)
+    clf.add("1", "CASA", a)
+    clf.add("2", "AGUA", b)
+    consulta = _desplazada(a, 0.4, -0.25)
+    p = clf.classify(consulta)
+    p_b = clf.classify(_desplazada(b, -0.3, 0.2))
+    dtw_block["centrado_a"] = D.centrar_ubicacion(a)
+    dtw_block["firma_segmentos_a"] = D.firma_segmentos(a)
+    dtw_block["clasificador"] = {
+        "consulta_a_desplazada": [list(f) for f in consulta],
+        "gloss": p.gloss, "distance": p.distance, "margin": p.margin,
+        "aceptada": p.aceptada,
+        "consulta_b_desplazada": [list(f) for f in _desplazada(b, -0.3, 0.2)],
+        "gloss_b": p_b.gloss, "distance_b": p_b.distance, "margin_b": p_b.margin,
+    }
+    dtw_block["n_segmentos"] = D.N_SEGMENTOS
+
+    iso_block = {
+        "forma": sn.FORMA_ISO,
+        "aspectos": {"0.75": sn.isotropizar_secuencia(a, 0.75),
+                     "1.7777777777777777": sn.isotropizar_secuencia(b, 16.0 / 9.0)},
+        "ref_palma": list(sn.REF_PALMA),
+        "idx_palma": list(sn.IDX_PALMA),
     }
 
     return {
         "norm_version": sn.NORM_VERSION,
+        "iso": iso_block,
         "frame_dim": sn.FRAME_DIM,
         "tolerance": 1e-5,
         "cases": cases,

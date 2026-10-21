@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart' show ByteData;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:senas_core/avatar_bridge.dart';
+import 'package:senas_core/frase_a_senas.dart' show SegmentoFrase;
 
 void main() {
   group('llamadaSegura', () {
@@ -54,6 +55,22 @@ void main() {
           'window.configurarManos && window.configurarManos(true, true)');
     });
 
+    test('el encuadre pedido antes de js_listo se reaplica al cargar', () {
+      final cola = ColaPuenteAvatar()
+        ..vista(espejo: false)
+        ..encuadre(AvatarBridge.encuadreCodos)
+        ..encuadre(AvatarBridge.encuadreCintura)
+        ..encuadre(AvatarBridge.encuadreCodos);
+      cola.marcarListo();
+      expect(cola.llamadasAlCargar(), [
+        "window.configurarVista && window.configurarVista('interlocutor')",
+        "window.encuadrarCamara && window.encuadrarCamara('codos')",
+      ]);
+      // Ya listo: produce su JS defensivo al instante.
+      expect(cola.encuadre(AvatarBridge.encuadreCintura),
+          "window.encuadrarCamara && window.encuadrarCamara('cintura')");
+    });
+
     test('al recargar vuelve a esperar y conserva los valores', () {
       final cola = ColaPuenteAvatar()
         ..marcarListo()
@@ -67,6 +84,49 @@ void main() {
         "window.configurarVista && window.configurarVista('espejo')",
         'window.configurarManos && window.configurarManos(false, false)',
       ]);
+    });
+  });
+
+  group('AvatarBridge.encuadrar y reproducirFrase (aporte de app-limpia)', () {
+    List<List<double>> seq() => [
+          for (var i = 0; i < 32; i++) List<double>.filled(152, 0.0),
+        ];
+
+    testWidgets('encuadrar se encola hasta js_listo y luego va directo',
+        (tester) async {
+      final js = <String>[];
+      final bridge = AvatarBridge.sinVisor(
+        ejecutar: (c) async => js.add(c),
+        modelo: () async => ByteData(4),
+      );
+      await bridge.encuadrar(AvatarBridge.encuadreCodos);
+      expect(js, isEmpty);
+      bridge.simularMensaje('js_listo');
+      await tester.pump();
+      const codos =
+          "window.encuadrarCamara && window.encuadrarCamara('codos')";
+      expect(js, contains(codos));
+      js.clear();
+      await bridge.encuadrar('cualquier-cosa'); // modo raro: cae a cintura
+      expect(js.single,
+          "window.encuadrarCamara && window.encuadrarCamara('cintura')");
+      bridge.dispose();
+    });
+
+    testWidgets('reproducirFrase valida 32x152 y manda JSON defensivo',
+        (tester) async {
+      final js = <String>[];
+      final bridge = AvatarBridge.sinVisor(ejecutar: (c) async => js.add(c));
+      await bridge.reproducirFrase([SegmentoFrase(seq(), 30)]);
+      expect(js.single, startsWith('window.reproducirFrase && '));
+      expect(js.single, contains("'2.0.0'"));
+      await expectLater(
+        bridge.reproducirFrase([SegmentoFrase(seq().sublist(1), 30)]),
+        throwsA(anything),
+      );
+      await bridge.reproducirFrase(const []); // vacia: no hace nada
+      expect(js, hasLength(1));
+      bridge.dispose();
     });
   });
 

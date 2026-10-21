@@ -5,6 +5,7 @@ test_invariancia     -> mover, alejar o inclinar a la persona no cambia el vecto
 test_espejo_doble    -> espejear dos veces devuelve el original
 test_empaquetado     -> el round trip float16 conserva precision suficiente
 test_validaciones    -> motivos de rechazo y munecas de render (golden)
+test_isotropica      -> la correccion de aspecto deja la misma forma en cualquier camara
 """
 
 import json
@@ -54,6 +55,16 @@ def test_golden():
         rs = sn.resample(got, 5)
         d = max(max_diff(g, e) for g, e in zip(rs, c["expected_resample_5"]))
         check(d < TOL, "%s: remuestreo (max diff %.2e)" % (c["name"], d))
+    iso = data.get("iso")
+    if iso:
+        check(iso["forma"] == sn.FORMA_ISO, "forma isotropica %s coincide" % iso["forma"])
+        check(tuple(iso["ref_palma"]) == sn.REF_PALMA and tuple(iso["idx_palma"]) == sn.IDX_PALMA,
+              "referencias de la palma coinciden")
+        for clave, esperado in iso["aspectos"].items():
+            origen = data["cases"][0]["expected_frames"] if clave == "0.75" else data["cases"][1]["expected_frames"]
+            got = sn.isotropizar_secuencia(origen, float(clave))
+            d = max(max_diff(g, e) for g, e in zip(got, esperado))
+            check(d < TOL, "isotropica a=%s (max diff %.2e)" % (clave[:6], d))
 
 
 def test_validaciones():
@@ -165,12 +176,78 @@ def test_empaquetado():
     print("       peso de una seña: %.1f KB" % (len(blob) / 1024))
 
 
+def _mano_realista(rng):
+    """Forma 3D plausible, ya con la escala de la palma en 1 (palma3d)."""
+    base = [(-0.00, 0.00, 0.00)]
+    pts = []
+    refs = [0.41, 0.31, 0.24, 0.43, 0.25, 0.20, 0.45, 0.26, 0.20,
+            0.42, 0.24, 0.18, 0.33, 0.19, 0.15]
+    # cuatro dedos largos + pulgar, cada nudillo a REF_PALMA de la muneca
+    dirs = [(-0.55, 0.78), (-0.15, 0.97), (0.22, 0.93), (0.55, 0.78)]
+    for (dx, dy), ref in zip(dirs, sn.REF_PALMA):
+        n = math.hypot(dx, dy)
+        pts.append((dx / n * ref * 0.97, dy / n * ref * 0.97, rng.uniform(-0.15, 0.15) * ref))
+    out = [(0.0, 0.0, 0.0)] * 20
+    out = list(out)
+    # posiciones de MCP5,9,13,17 -> 4, 8, 12, 16; el resto, aleatorio y estable
+    for i in range(20):
+        out[i] = (rng.uniform(-0.8, 0.8), rng.uniform(0.0, 1.8), rng.uniform(-0.3, 0.3))
+    for j, p in zip(sn.IDX_PALMA, pts):
+        out[j] = p
+    flat = [c for q in out for c in q]
+    return sn.isotropizar_forma(flat, 1.0)       # canonica: escala de palma exactamente 1
+
+
+def test_isotropica():
+    print("test_isotropica")
+    rng = random.Random(21)
+    for a in (16.0 / 9.0, 4.0 / 3.0, 0.75, 9.0 / 16.0):
+        s0 = _mano_realista(rng)
+        # Lo que guardaria la version 2.0.0 de la MISMA mano filmada con un
+        # aspecto a: x y z divididos por a, y todo por la escala 2D muneca->MCP9.
+        aniso = [list(s0[i * 3:i * 3 + 3]) for i in range(20)]
+        for q in aniso:
+            q[0] /= a
+            q[2] /= a
+        h2d = math.hypot(aniso[8][0], aniso[8][1])
+        flat = [c / h2d for q in aniso for c in q]
+        back = sn.isotropizar_forma(flat, a)
+        d = max_diff(back, s0)
+        check(d < 1e-9, "aspecto %.3f: vuelve a la forma original (max diff %.1e)" % (a, d))
+
+    # dos camaras con aspecto distinto dan la misma forma tras corregir
+    s0 = _mano_realista(random.Random(4))
+    vistas = []
+    for a in (16.0 / 9.0, 0.75):
+        aniso = [list(s0[i * 3:i * 3 + 3]) for i in range(20)]
+        for q in aniso:
+            q[0] /= a
+            q[2] /= a
+        h2d = math.hypot(aniso[8][0], aniso[8][1])
+        vistas.append(sn.isotropizar_forma([c / h2d for q in aniso for c in q], a))
+    check(max_diff(vistas[0], vistas[1]) < 1e-9, "16:9 y 3:4 coinciden despues de corregir")
+
+    # el frame: solo cambia la forma de las manos presentes
+    v = [0.0] * sn.FRAME_DIM
+    for i in range(sn.OFF_LOC_L):
+        v[i] = 0.1 * i
+    v[sn.OFF_PRES_R] = 1.0
+    v[sn.OFF_SHAPE_R:sn.OFF_SHAPE_R + 60] = s0
+    w = sn.isotropizar_frame(v, 0.75)
+    check(w[:sn.OFF_SHAPE_L] == v[:sn.OFF_SHAPE_L], "cuerpo, ubicacion y presencia no cambian")
+    check(w[sn.OFF_SHAPE_L:sn.OFF_SHAPE_R] == v[sn.OFF_SHAPE_L:sn.OFF_SHAPE_R],
+          "una mano ausente queda intacta")
+    check(max_diff(w[sn.OFF_SHAPE_R:], v[sn.OFF_SHAPE_R:]) > 1e-3, "la mano presente si cambia")
+    check(sn.isotropizar_forma([0.0] * 60, 0.75) == [0.0] * 60, "forma vacia no explota")
+
+
 if __name__ == "__main__":
     test_golden()
     test_invariancia()
     test_espejo_doble()
     test_empaquetado()
     test_validaciones()
+    test_isotropica()
     print()
     if fallos:
         print("FALLARON %d comprobaciones" % len(fallos))

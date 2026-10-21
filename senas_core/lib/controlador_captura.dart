@@ -20,7 +20,14 @@ import 'frame_derivados.dart';
 import 'body_profile.dart';
 import 'motion_contract.dart';
 import 'sesion_captura.dart';
-import 'sign_norm.dart' show fillGaps, kTFrames, resample;
+import 'sign_norm.dart'
+    show
+        fillGaps,
+        isotropizarSecuencia,
+        kAspectoAnalisisApp,
+        kTFrames,
+        resample;
+import 'suavizado_landmarks.dart';
 
 /// Observable camera lifecycle. [lista] alone cannot distinguish a native
 /// camera that bound successfully from one that never emits its first frame.
@@ -39,6 +46,11 @@ class CapturaMovimiento {
   final double qualityScore;
   final String checksumSha256;
 
+  /// Relacion ancho / alto de la imagen con la que se grabo. La secuencia
+  /// guardada sigue en el formato 2.0.0 (sin corregir): este dato es lo que
+  /// permite corregirla despues, al comparar.
+  final double aspecto;
+
   CapturaMovimiento({
     required this.secuencia,
     required List<LandmarkFrame> framesCrudos,
@@ -48,6 +60,7 @@ class CapturaMovimiento {
     required this.visibilidadMin,
     required this.qualityScore,
     required this.checksumSha256,
+    this.aspecto = kAspectoAnalisisApp,
   }) : framesCrudos = List<LandmarkFrame>.unmodifiable(framesCrudos);
 
   Map<String, dynamic> toJson() => {
@@ -60,6 +73,7 @@ class CapturaMovimiento {
         if (visibilidadMin != null) 'visibilidad_min': visibilidadMin,
         'quality_score': qualityScore,
         'checksum_sha256': checksumSha256,
+        'aspecto': aspecto,
       };
 }
 
@@ -173,6 +187,14 @@ class ControladorCaptura extends ChangeNotifier {
   final ValueNotifier<LandmarkFrame?> frame =
       ValueNotifier<LandmarkFrame?>(null);
 
+  /// Calma el temblor de los puntos que se dibujan. Solo afecta a [frame]
+  /// (lo que se pinta): la grabacion y el reconocimiento leen los frames
+  /// fusionados sin filtrar (camara.vectores / camara.frames).
+  final SuavizadorLandmarks _suavizador = SuavizadorLandmarks();
+
+  /// Para comparar o depurar: con false se pintan los puntos crudos.
+  bool suavizarPreview = true;
+
   CamaraIniciada? iniciada;
   EstadoCamara estado = EstadoCamara.detenida;
   String? error;
@@ -264,6 +286,7 @@ class ControladorCaptura extends ChangeNotifier {
     _primerFrameRecibido = false;
     frame.value = null;
     _vigilante.frameValido();
+    _suavizador.reiniciar();
     _notificar();
 
     // Subscribe before binding CameraX so the first preview event cannot be
@@ -271,7 +294,7 @@ class ControladorCaptura extends ChangeNotifier {
     _subPreview = camara.framesPreview.listen(
       (f) {
         if (_apagado || inicio != _inicioActual) return;
-        frame.value = f;
+        frame.value = suavizarPreview ? _suavizador.filtrar(f) : f;
         _vigilante.frameValido();
         _estancamiento.frame();
         _registrarSesion(f);
@@ -472,7 +495,15 @@ class ControladorCaptura extends ChangeNotifier {
     final rawJson =
         jsonEncode(_framesCrudos.map((frame) => frame.toJson()).toList());
     final checksum = sha256.convert(utf8.encode(rawJson)).toString();
+    final aspectos = _framesCrudos
+        .map((frame) => frame.imageAspect)
+        .whereType<double>()
+        .toList()
+      ..sort();
+    final aspecto =
+        aspectos.isEmpty ? kAspectoAnalisisApp : aspectos[aspectos.length ~/ 2];
     return CapturaMovimiento(
+      aspecto: aspecto,
       secuencia: secuencia,
       framesCrudos: _framesCrudos,
       framesInvalidos: _framesInvalidos,
@@ -484,13 +515,18 @@ class ControladorCaptura extends ChangeNotifier {
     );
   }
 
-  /// Compatibilidad para reconocimiento: devuelve solo secuencia.
+  /// Para reconocimiento: devuelve solo la secuencia, con la forma de la mano
+  /// ya corregida por el aspecto de la imagen (isotropizarSecuencia), que es
+  /// como estan las plantillas del diccionario. Lo que se GUARDA (muestras
+  /// locales, subida a la base) sale de [terminarCaptura], sin corregir: ese
+  /// es el formato 2.0.0 y la correccion se aplica siempre al comparar.
   Future<List<List<double>>?> terminar({int? hastaMs}) async {
-    return (await terminarCaptura(hastaMs: hastaMs))
-        ?.secuencia
-        .frames
-        .map((frame) => List<double>.from(frame))
-        .toList();
+    final c = await terminarCaptura(hastaMs: hastaMs);
+    if (c == null) return null;
+    return isotropizarSecuencia(
+      c.secuencia.frames.map((frame) => List<double>.from(frame)).toList(),
+      c.aspecto,
+    );
   }
 
   Future<void> reiniciar(

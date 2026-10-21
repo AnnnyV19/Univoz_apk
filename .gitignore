@@ -9,3 +9,48 @@ build/
 key.properties
 *.jks
 *.keystore
+
+# --- Integrado desde app-limpia (Anny) ---
+# Secretos: NUNCA subir
+*.env
+!.env.example
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+**/ephemeral/
+*.g.dart
+
+# Android / iOS
+**/android/.gradle/
+**/android/.kotlin/
+**/android/app/.cxx/
+**/android/local.properties
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+**/ios/Flutter/.last_build_id
+
+# Python
+venv/
+
+# Datos pesados y locales (cada quien los tiene en su PC)
+**/datasets_lsm/
+**/videos/
+
+# Respaldos y salidas
+_respaldo*
+_staging*
+.armado.ok
+*.bak
+*.log
+salida_*.txt
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
