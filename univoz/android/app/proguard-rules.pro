@@ -5,6 +5,12 @@
 -keep class com.google.mediapipe.** { *; }
 -dontwarn com.google.mediapipe.**
 
+# Flogger (logger de MediaPipe): busca a quien lo llama recorriendo la pila
+# por nombre de clase. Con R8 renombrado/inlined, Graph.<clinit> fallaba con
+# "no caller found on the stack" y la app se cerraba al abrir la camara.
+-keep class com.google.common.flogger.** { *; }
+-dontwarn com.google.common.flogger.**
+
 # Protobuf (protobuf-java 4.x): los mensajes de MediaPipe usan reflexión
 # sobre sus campos.
 -keep class com.google.protobuf.** { *; }

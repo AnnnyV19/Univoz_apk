@@ -176,9 +176,11 @@ double dtwDistance(
   return d == inf ? inf : d / norm;
 }
 
-/// Vector promedio de la secuencia, usado como prefiltro barato.
+/// Vector promedio de la secuencia, usado como prefiltro barato. Es un
+/// Float64List (8 bytes por valor): con ~2600 plantillas x 8 tramos, una lista
+/// normal de doubles en caja pesaba 3 veces mas.
 List<double> signature(List<List<double>> seq) {
-  final sig = List<double>.filled(kFrameDim, 0.0);
+  final sig = Float64List(kFrameDim);
   for (final f in seq) {
     for (var i = 0; i < kFrameDim; i++) {
       sig[i] += f[i];
@@ -235,7 +237,8 @@ List<List<double>> firmaSegmentos(List<List<double>> seq,
     [int n = kNSegmentos]) {
   final m = seq.length;
   if (m == 0) {
-    return List.generate(n, (_) => List<double>.filled(kFrameDim, 0.0));
+    return List<List<double>>.generate(n, (_) => Float64List(kFrameDim),
+        growable: false);
   }
   final out = <List<double>>[];
   for (var k = 0; k < n; k++) {
@@ -243,7 +246,7 @@ List<List<double>> firmaSegmentos(List<List<double>> seq,
     final hi = math.max(lo + 1, (k + 1) * m ~/ n);
     out.add(signature(seq.sublist(lo, hi)));
   }
-  return out;
+  return out.toList(growable: false);
 }
 
 double _distanciaFirmas(List<List<double>> fa, List<List<double>> fb) {
@@ -259,18 +262,22 @@ class Template {
   final String gloss;
   final String espanol;
 
-  /// La secuencia tal cual llego, con la altura real de cada sena (la usa el
-  /// avatar).
-  final List<List<double>> seq;
-
-  /// La que se compara: sin la posicion absoluta de la mano.
+  /// La que se compara: sin la posicion absoluta de la mano. Vacia en las
+  /// plantillas [Template.soloReproduccion].
   final List<List<double>> cseq;
 
-  /// Su prefiltro (kNSegmentos vectores promedio).
+  /// Su prefiltro (kNSegmentos vectores promedio). Vacio en las plantillas
+  /// [Template.soloReproduccion].
   final List<List<double>> segs;
 
-  Template._(this.signId, this.gloss, this.espanol, this.seq, this.cseq,
-      this.segs);
+  final List<List<double>>? _seq;
+
+  /// Si es el espejo de otra plantilla, esa plantilla: el espejo no guarda su
+  /// propia `seq` (ocuparia lo mismo que la original), la recalcula al pedirla.
+  final Template? _origenEspejo;
+
+  Template._(this.signId, this.gloss, this.espanol, this._seq, this.cseq,
+      this.segs, this._origenEspejo);
 
   factory Template(String signId, String gloss, List<List<double>> seq,
       {String espanol = ''}) {
@@ -278,9 +285,44 @@ class Template {
     // Float64List: 8 bytes por valor en vez de ~24 de una lista de doubles
     // boxeados. Con el diccionario de ~2600 plantillas (con espejo) son tres
     // copias de 32x152 por plantilla; en lista normal pasaban de 500 MB.
-    return Template._(
-        signId, gloss, espanol, _compacta(seq), _compacta(c), firmaSegmentos(c));
+    return Template._(signId, gloss, espanol, _compacta(seq), _compacta(c),
+        firmaSegmentos(c), null);
   }
+
+  /// Plantilla que solo se reproduce en el avatar (senas de aprendizaje): no
+  /// entra al clasificador, asi que no se calculan ni guardan `cseq` ni
+  /// `segs` (dos tercios de la memoria de una plantilla normal).
+  factory Template.soloReproduccion(
+      String signId, String gloss, List<List<double>> seq,
+      {String espanol = ''}) {
+    return Template._(signId, gloss, espanol, _compacta(seq), const [],
+        const [], null);
+  }
+
+  /// El espejo de [original] (mano izquierda <-> derecha, [mirrorFrame]) listo
+  /// para el clasificador. Guarda `cseq` y `segs`; su `seq` se calcula de la
+  /// original cuando alguien la pide (ver [seq]), con los mismos valores que
+  /// si se hubiera guardado.
+  factory Template.espejoDe(String signId, Template original) {
+    final espejada = original.seq.map(mirrorFrame).toList();
+    final c = centrarUbicacion(espejada);
+    return Template._(signId, original.gloss, original.espanol, null,
+        _compacta(c), firmaSegmentos(c), original);
+  }
+
+  /// La secuencia tal cual llego, con la altura real de cada sena (la usa el
+  /// avatar). En un espejo se recalcula en cada llamada: guardala si la vas a
+  /// usar mas de una vez.
+  List<List<double>> get seq {
+    final guardada = _seq;
+    if (guardada != null) return guardada;
+    final origen = _origenEspejo;
+    if (origen == null) return const [];
+    return _compacta(origen.seq.map(mirrorFrame).toList());
+  }
+
+  /// Si esta plantilla guarda su propia `seq` (todas menos los espejos).
+  bool get guardaSeq => _seq != null;
 
   static List<List<double>> _compacta(List<List<double>> seq) =>
       <List<double>>[
@@ -330,9 +372,19 @@ class DtwClassifier {
     this.band = kBand,
   });
 
-  void add(String signId, String gloss, List<List<double>> seq,
+  Template add(String signId, String gloss, List<List<double>> seq,
       {String espanol = ''}) {
-    templates.add(Template(signId, gloss, seq, espanol: espanol));
+    final t = Template(signId, gloss, seq, espanol: espanol);
+    templates.add(t);
+    return t;
+  }
+
+  /// Suma el espejo de [original] sin guardar su `seq` (ver
+  /// [Template.espejoDe]).
+  Template addEspejo(String signId, Template original) {
+    final t = Template.espejoDe(signId, original);
+    templates.add(t);
+    return t;
   }
 
   List<Template> _candidatos(List<List<double>> segs) {

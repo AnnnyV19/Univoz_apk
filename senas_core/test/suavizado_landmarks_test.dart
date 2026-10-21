@@ -96,6 +96,61 @@ void main() {
       expect(salida.pose![5][3], 0.9); // visibilidad pasa sin tocar
     });
 
+    test('conserva cada campo que no es landmark de imagen (aspecto, cara, '
+        'mundo de manos, nivel, metadatos)', () {
+      final s = SuavizadorLandmarks();
+      final entrada = LandmarkFrame(
+        timestampMs: 100,
+        pose: _pose(0.5, 0.4),
+        poseMundo: [
+          [0.1, 0.2, 0.3]
+        ],
+        left: _mano(0.3, 0.6),
+        right: _mano(0.7, 0.6),
+        renderLeft: _mano(0.31, 0.6),
+        renderRight: _mano(0.71, 0.6),
+        poseTimestampMs: 90,
+        handsTimestampMs: 100,
+        sourceSkewMs: 10,
+        association: const {'left_state': 'TRACKING'},
+        errors: const [
+          {'code': 'x'}
+        ],
+        face: [
+          [0.5, 0.2, 0.0]
+        ],
+        leftWorld: [
+          [0.01, 0.02, 0.03]
+        ],
+        rightWorld: [
+          [0.04, 0.05, 0.06]
+        ],
+        captureMode: 'holistic',
+        imageAspect: 1.78,
+        tier: 'bajo',
+        inferMs: 12.5,
+        thermal: 3,
+        handsIn: const {'candidatas': 2},
+        track: const {'left': 'TRACKING'},
+        poseRan: true,
+      );
+      final salida = s.filtrar(entrada);
+      expect(salida.imageAspect, 1.78);
+      expect(salida.face, entrada.face);
+      expect(salida.leftWorld, entrada.leftWorld);
+      expect(salida.rightWorld, entrada.rightWorld);
+      expect(salida.renderRight, entrada.renderRight);
+      expect(salida.captureMode, 'holistic');
+      expect(salida.tier, 'bajo');
+      expect(salida.inferMs, 12.5);
+      expect(salida.thermal, 3);
+      expect(salida.handsIn, entrada.handsIn);
+      expect(salida.track, entrada.track);
+      expect(salida.poseRan, isTrue);
+      expect(salida.errors, entrada.errors);
+      expect(salida.aspectoEfectivo, 1.78);
+    });
+
     test('suaviza el temblor de la mano y de la pose', () {
       final s = SuavizadorLandmarks();
       double maxEntrada = 0, maxSalida = 0;

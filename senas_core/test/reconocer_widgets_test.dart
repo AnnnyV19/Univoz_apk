@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:senas_core/camera_bridge.dart';
 import 'package:senas_core/dtw.dart';
 import 'package:senas_core/plantillas.dart';
+import 'package:senas_core/reconocer/carga_camara.dart';
 import 'package:senas_core/reconocer/encabezado_reconocer.dart';
 import 'package:senas_core/reconocer/guia_encuadre.dart';
 import 'package:senas_core/reconocer/guia_inicial.dart';
@@ -333,6 +334,31 @@ void main() {
       await tester.pumpAndSettle();
       expect(opacidad(), 0);
       notificador.dispose();
+    });
+  });
+
+  group('CargaCamara', () {
+    testWidgets('muestra que prepara la cámara y luego la pista lenta',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: temaUnivoz(),
+        home: const Scaffold(body: CargaCamara()),
+      ));
+      expect(find.text('Preparando la cámara…'), findsOneWidget);
+      expect(find.textContaining('puede tardar'), findsNothing);
+
+      await tester.pump(kPistaCargaLenta);
+      expect(find.textContaining('puede tardar'), findsOneWidget);
+    });
+
+    testWidgets('compacta no muestra la pista larga', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: temaUnivoz(),
+        home: const Scaffold(body: CargaCamara(compacta: true)),
+      ));
+      await tester.pump(kPistaCargaLenta);
+      expect(find.text('Preparando la cámara…'), findsOneWidget);
+      expect(find.textContaining('puede tardar'), findsNothing);
     });
   });
 }

@@ -17,6 +17,7 @@ import 'dtw.dart';
 import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
+import 'reconocer/carga_camara.dart';
 import 'reconocer/disposicion_reconocer.dart';
 import 'reconocer/encabezado_reconocer.dart';
 import 'reconocer/guia_encuadre.dart';
@@ -949,14 +950,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   /// Camara con esqueleto, guia de encuadre e indicador de grabacion.
   /// [compacta]: la ventanita del telefono vertical (ya recortada).
   Widget _vistaCamara(bool dev, {bool compacta = false}) {
-    final colores = Theme.of(context).colorScheme;
     final camara = _ctrl.iniciada;
-    if (camara == null) {
-      return ColoredBox(
-        color: compacta ? colores.surfaceContainerHighest : colores.surface,
-        child: const Center(child: CircularProgressIndicator()),
-      );
-    }
+    if (camara == null) return CargaCamara(compacta: compacta);
     final vista = AspectRatio(
       aspectRatio: camara.relacionAspecto,
       child: Stack(

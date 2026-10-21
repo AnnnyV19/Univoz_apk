@@ -31,7 +31,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'dtw.dart';
@@ -45,8 +45,7 @@ import 'sign_norm.dart'
         kFormaIso,
         kFrameDim,
         kNormVersion,
-        kTFrames,
-        mirrorFrame;
+        kTFrames;
 
 const String kRutaPaquete = 'assets/plantillas.json';
 
@@ -80,7 +79,8 @@ class Diccionario {
   final ResumenDiccionario resumen;
 
   /// Señas solo de aprendizaje (avatar y Diccionario), fuera del
-  /// clasificador. Vacio si no hay assets/aprendizaje.json.
+  /// clasificador: [Template.soloReproduccion], solo con `seq`. Vacio si no
+  /// hay assets/aprendizaje.json.
   final List<Template> aprendizaje;
 
   const Diccionario(this.clasificador, this.resumen,
@@ -156,7 +156,10 @@ List<Template> leerAprendizaje(String texto) {
         seq = isotropizarSecuencia(
             seq, (m['aspecto'] as num?)?.toDouble() ?? kAspectoVideo);
       }
-      out.add(Template(m['sign_id'] as String, m['gloss'] as String, seq,
+      // Solo se reproduce en el avatar: sin cseq ni segs (no entra al
+      // clasificador), que serian dos tercios de la memoria.
+      out.add(Template.soloReproduccion(
+          m['sign_id'] as String, m['gloss'] as String, seq,
           espanol: (m['espanol'] as String?) ?? ''));
     } catch (_) {
       // Una plantilla corrupta no debe tumbar el resto.
@@ -166,26 +169,35 @@ List<Template> leerAprendizaje(String texto) {
 }
 
 /// Parte pura de la lectura del paquete (corre en un isolate). Lista vacia si
-/// el texto no es un paquete valido o es de otra version del vector.
-List<_Plantilla> _leerPaqueteTexto(String texto) {
-  final Map<String, dynamic> json;
+/// los bytes no son un paquete valido (UTF-8 o JSON roto) o es de otra version
+/// del vector. Decodifica el JSON directo de los bytes, sin armar antes el
+/// String de 51 MB.
+List<_Plantilla> _leerPaqueteBytes(Uint8List bytes) {
+  final Object? decodificado;
   try {
-    json = jsonDecode(texto) as Map<String, dynamic>;
+    decodificado = json.fuse(utf8).decode(bytes);
   } catch (_) {
     return const [];
   }
-  if (!_cabeceraValida(json)) return const [];
+  if (decodificado is! Map<String, dynamic>) return const [];
+  return _plantillasDelPaquete(decodificado);
+}
 
-  final yaCorregido = json['forma'] == kFormaIso;
-  final crudas = (json['plantillas'] as List<dynamic>?) ?? const [];
+List<_Plantilla> _plantillasDelPaquete(Map<String, dynamic> paquete) {
+  if (!_cabeceraValida(paquete)) return const [];
+
+  final yaCorregido = paquete['forma'] == kFormaIso;
+  final crudas = (paquete['plantillas'] as List<dynamic>?) ?? const [];
   final out = <_Plantilla>[];
   for (final p in crudas) {
     try {
       final m = p as Map<String, dynamic>;
-      var seq = (m['seq'] as List<dynamic>)
-          .map((f) =>
-              (f as List<dynamic>).map((v) => (v as num).toDouble()).toList())
-          .toList();
+      // Cada cuadro pasa a Float64List al leerlo (8 bytes por valor en vez de
+      // ~24): mientras se lee el paquete conviven el arbol del JSON y estas
+      // copias, y ese era el pico de memoria al abrir el diccionario.
+      var seq = <List<double>>[
+        for (final f in m['seq'] as List<dynamic>) _aFloat64(f as List<dynamic>),
+      ];
       MotionSequenceV2.fromFrames(seq);
       if (!yaCorregido) {
         seq = isotropizarSecuencia(
@@ -204,6 +216,14 @@ List<_Plantilla> _leerPaqueteTexto(String texto) {
   return out;
 }
 
+Float64List _aFloat64(List<dynamic> valores) {
+  final out = Float64List(valores.length);
+  for (var i = 0; i < valores.length; i++) {
+    out[i] = (valores[i] as num).toDouble();
+  }
+  return out;
+}
+
 bool _cabeceraValida(Map<String, dynamic> json) {
   final normVersion = json['norm_version'] as String?;
   if (normVersion != null && normVersion != kNormVersion) {
@@ -215,34 +235,6 @@ bool _cabeceraValida(Map<String, dynamic> json) {
   return (json['frame_dim'] as num?)?.toInt() == kFrameDim &&
       (json['t_frames'] as num?)?.toInt() == kTFrames;
 }
-
-/// Cuantas plantillas trae un paquete (0 si no es valido), sin corregir ni
-/// validar una por una: basta para la guardia de la sincronizacion.
-int _contarEnBytes(Uint8List bytes) {
-  try {
-    final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-    if (!_cabeceraValida(json)) return 0;
-    return ((json['plantillas'] as List<dynamic>?) ?? const []).length;
-  } catch (_) {
-    return 0;
-  }
-}
-
-final Map<String, Future<int>> _cuentaPaquete = {};
-
-/// Cuantas plantillas trae el paquete del APK (0 si no se puede leer). Sirve
-/// de referencia para no reemplazarlo por un diccionario mucho mas chico
-/// (sincronizador_plantillas.dart). El paquete pesa ~50 MB: se cuenta en un
-/// isolate y una sola vez por ejecucion (el asset no cambia).
-Future<int> contarPlantillasPaquete({String ruta = kRutaPaquete}) =>
-    _cuentaPaquete.putIfAbsent(ruta, () async {
-      try {
-        final bytes = await _leerBytesAsset(ruta);
-        return bytes == null ? 0 : await compute(_contarEnBytes, bytes);
-      } catch (_) {
-        return 0;
-      }
-    });
 
 class _Plantilla {
   final String signId;
@@ -300,14 +292,15 @@ Diccionario armarClasificador({
       String Function(PlantillaFuente) idEspejo) {
     final ids = fuente.map((p) => p.signId).toSet();
     for (final p in fuente) {
-      clasificador.add(p.signId, p.gloss, p.seq, espanol: p.espanol);
+      final original =
+          clasificador.add(p.signId, p.gloss, p.seq, espanol: p.espanol);
       glosas.add(p.gloss);
       final id = idEspejo(p);
       if (!espejar || _esEspejo(p.signId) || ids.contains(id)) continue;
       // El espejo se calcula al vuelo en vez de guardarse: es barato y evita
-      // duplicar plantillas en disco.
-      clasificador.add(id, p.gloss, p.seq.map(mirrorFrame).toList(),
-          espanol: p.espanol);
+      // duplicar plantillas en disco. Tampoco guarda su `seq`: solo la usa el
+      // boton "Ver en avatar" de Reconocer y la recalcula de la original.
+      clasificador.addEspejo(id, original);
       espejadas++;
     }
   }
@@ -329,8 +322,34 @@ Diccionario armarClasificador({
   );
 }
 
-/// Construye el clasificador con todo lo disponible. Llamalo de nuevo
-/// despues de grabar muestras nuevas para que entren al reconocimiento.
+/// Diccionario compartido por todas las pantallas (reconocer, traducir,
+/// avatar, Comunicarse, visor): cada uno pesa cientos de MB, asi que se arma
+/// una sola vez y se reutiliza mientras no cambie nada de lo que lo compone.
+class _DiccionarioCompartido {
+  final (String, int, bool, double, double) clave;
+  final Future<Diccionario> futuro;
+  const _DiccionarioCompartido(this.clave, this.futuro);
+}
+
+_DiccionarioCompartido? _compartido;
+
+/// Solo para pruebas: reemplaza la lectura de assets (rootBundle).
+@visibleForTesting
+Future<Uint8List?> Function(String ruta)? lectorAssetsPrueba;
+
+/// Descarta el diccionario compartido y libera su memoria: el siguiente
+/// [cargarDiccionario] lo arma de nuevo. No hace falta llamarla despues de
+/// grabar, borrar o sincronizar (el almacen ya lo invalida solo); sirve en
+/// pruebas y si algun dia se quiere soltar la memoria.
+void olvidarDiccionarioCompartido() => _compartido = null;
+
+/// Construye el clasificador con todo lo disponible. Se arma UNA vez y se
+/// comparte: las llamadas siguientes (y las simultaneas) reciben el mismo
+/// [Diccionario] mientras no cambien las muestras locales, las plantillas
+/// sincronizadas, el espejo automatico ni los umbrales. Grabar, borrar y
+/// sincronizar cambian [AlmacenMuestras.versionDiccionario]: la siguiente
+/// pantalla que lo pida ya ve lo nuevo. Quien ya tiene un diccionario en la
+/// mano sigue con ese hasta que lo vuelva a pedir.
 ///
 /// El paquete del APK pesa ~50 MB (541 senas, 1296 plantillas) y aprendizaje
 /// otros ~11 MB: leerlos, corregirlos (isotropia), centrarlos y firmarlos en
@@ -341,23 +360,63 @@ Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
   final almacen = AlmacenMuestras.instancia;
   await almacen.cargar();
   final ajustes = almacen.ajustes;
+  final clave = (
+    ruta,
+    almacen.versionDiccionario,
+    ajustes.espejoAutomatico,
+    ajustes.maxDistance,
+    ajustes.minMargin,
+  );
+  final previo = _compartido;
+  if (previo != null && previo.clave == clave) return previo.futuro;
 
+  // Sin ningun await entre calcular la clave y arrancar esto: la foto de las
+  // muestras que arma _cargarSinCompartir corresponde a la clave.
+  final futuro = _cargarSinCompartir(almacen, ruta);
+  final nuevo = _DiccionarioCompartido(clave, futuro);
+  _compartido = nuevo;
+  // Un fallo no se queda guardado: la proxima pantalla vuelve a intentarlo.
+  // Tampoco un diccionario sin paquete cuando se pidio el paquete: leer
+  // 51 MB puede fallar con poca memoria y no debe quedar asi hasta reiniciar.
+  futuro.then<void>((d) {
+    if (ruta == kRutaPaquete &&
+        d.resumen.delPaquete == 0 &&
+        identical(_compartido, nuevo)) {
+      _compartido = null;
+    }
+  }, onError: (Object _) {
+    if (identical(_compartido, nuevo)) _compartido = null;
+  });
+  return futuro;
+}
+
+Future<Diccionario> _cargarSinCompartir(
+    AlmacenMuestras almacen, String ruta) {
+  final ajustes = almacen.ajustes;
+  // De lo sincronizado solo entran las glosas que el paquete no trae (ver
+  // armarClasificador); la forma se corrige aqui con 16:9, el aspecto de
+  // casi todos los videos.
+  final sincronizadas = [
+    for (final p in almacen.sincronizadas)
+      PlantillaFuente(p.signId, p.gloss, p.espanol,
+          isotropizarSecuencia(p.seq, kAspectoVideo)),
+  ];
+  final locales = [
+    for (final m in almacen.muestras)
+      PlantillaFuente('local:${m.gloss}', m.gloss, m.espanol,
+          isotropizarSecuencia(m.seq, m.aspecto ?? kAspectoAnalisisApp)),
+  ];
+  return _armarEnIsolate(ruta, sincronizadas, locales, ajustes);
+}
+
+Future<Diccionario> _armarEnIsolate(String ruta,
+    List<PlantillaFuente> sincronizadas, List<PlantillaFuente> locales,
+    Ajustes ajustes) async {
   final encargo = _EncargoDiccionario(
     paquete: await _leerBytesAsset(ruta),
     aprendizaje: await _leerBytesAsset(kRutaAprendizaje),
-    // De lo sincronizado solo entran las glosas que el paquete no trae (ver
-    // armarClasificador); la forma se corrige aqui con 16:9, el aspecto de
-    // casi todos los videos.
-    sincronizadas: [
-      for (final p in almacen.sincronizadas)
-        PlantillaFuente(p.signId, p.gloss, p.espanol,
-            isotropizarSecuencia(p.seq, kAspectoVideo)),
-    ],
-    locales: [
-      for (final m in almacen.muestras)
-        PlantillaFuente('local:${m.gloss}', m.gloss, m.espanol,
-            isotropizarSecuencia(m.seq, m.aspecto ?? kAspectoAnalisisApp)),
-    ],
+    sincronizadas: sincronizadas,
+    locales: locales,
     espejar: ajustes.espejoAutomatico,
     maxDistance: ajustes.maxDistance,
     minMargin: ajustes.minMargin,
@@ -368,6 +427,8 @@ Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
 /// Bytes de un asset, o null si no existe (no es un error: se puede reconocer
 /// solo con muestras locales).
 Future<Uint8List?> _leerBytesAsset(String ruta) async {
+  final prueba = lectorAssetsPrueba;
+  if (prueba != null) return prueba(ruta);
   try {
     final datos = await rootBundle.load(ruta);
     return datos.buffer.asUint8List(datos.offsetInBytes, datos.lengthInBytes);
@@ -400,9 +461,11 @@ class _EncargoDiccionario {
 /// Cuerpo de [cargarDiccionario] (corre en un isolate; funcion de nivel
 /// superior). Es la parte pura: bytes y listas adentro, [Diccionario] afuera.
 Diccionario _construirDiccionario(_EncargoDiccionario e) {
+  // Un paquete que no se pueda leer (corrupto, otro formato) no tumba las
+  // muestras locales: se sigue sin el, como si no estuviera.
   final delApk = e.paquete == null
       ? const <_Plantilla>[]
-      : _leerPaqueteTexto(utf8.decode(e.paquete!));
+      : _leerPaqueteBytes(e.paquete!);
   // El paquete del APK manda: pasa por tools/curar_plantillas.py (forma
   // corregida con el aspecto de cada grabacion, plantilla "de muestra" de cada
   // sena elegida a mano, cuadros corruptos reparados), y lo que baja la

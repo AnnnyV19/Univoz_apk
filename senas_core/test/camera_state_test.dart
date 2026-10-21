@@ -37,6 +37,18 @@ void main() {
     expect(message, isNot(contains('IllegalStateException')));
   });
 
+  test('native model init failure has its own message', () {
+    final message = mensajeErrorCamara(
+      PlatformException(
+        code: 'mediapipe_init',
+        message: 'java.lang.ExceptionInInitializerError',
+      ),
+    );
+
+    expect(message, contains('reconocimiento de señas'));
+    expect(message, isNot(contains('ExceptionInInitializerError')));
+  });
+
   test('preview watchdog has an actionable message', () {
     expect(
       mensajeErrorCamara(

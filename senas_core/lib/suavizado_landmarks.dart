@@ -173,23 +173,15 @@ class SuavizadorLandmarks {
         _derecha = _GrupoLandmarks(minCutoff, beta);
 
   /// Devuelve una copia de [f] con pose y manos suavizadas. Todo lo demas
-  /// (mundo, render, metadatos) pasa igual.
+  /// (mundo, render, cara, aspecto de la imagen, nivel del dispositivo,
+  /// metadatos) pasa igual: ver [LandmarkFrame.conLandmarks].
   LandmarkFrame filtrar(LandmarkFrame f) {
     final poseT = f.poseTimestampMs ?? f.timestampMs;
     final manosT = f.handsTimestampMs ?? f.timestampMs;
-    return LandmarkFrame(
-      timestampMs: f.timestampMs,
+    return f.conLandmarks(
       pose: _pose.filtrar(f.pose, poseT),
-      poseMundo: f.poseMundo,
       left: _izquierda.filtrar(f.left, manosT),
       right: _derecha.filtrar(f.right, manosT),
-      renderLeft: f.renderLeft,
-      renderRight: f.renderRight,
-      poseTimestampMs: f.poseTimestampMs,
-      handsTimestampMs: f.handsTimestampMs,
-      sourceSkewMs: f.sourceSkewMs,
-      association: f.association,
-      errors: f.errors,
     );
   }
 

@@ -139,87 +139,132 @@ class LandmarkPlugin(
         limpiarRecursos()
         val futuro = ProcessCameraProvider.getInstance(context)
         futuro.addListener({
-            try {
-                val provider = futuro.get()
-                if (requestedSession != sessionToken) {
-                    result.error("camera_start_cancelled", null, null)
-                    return@addListener
-                }
-                cameraProvider = provider
-                provider.unbindAll()
-                val texEntry = textureRegistry.createSurfaceTexture()
-                entry = texEntry
-                val surfaceTexture = texEntry.surfaceTexture()
-                val preview = Preview.Builder().build()
-                preview.setSurfaceProvider { request ->
-                    surfaceTexture.setDefaultBufferSize(
-                        request.resolution.width, request.resolution.height
-                    )
-                    val surface = Surface(surfaceTexture)
-                    request.provideSurface(surface, ejecutor) { surface.release() }
-                }
-                // Cada sesion parte del techo del hardware: una bajada por
-                // inferencia o calor no se guarda (el S22+ quedo atascado en
-                // bajo + separado por el calentamiento de la GPU, 2026-10-19).
-                val motor = crearMotor(false)
-                val techo = DeviceTier.nivelInicial(probe.ramMb(), motor.gpuOk)
-                val nivelTier = DeviceTier(techo)
-                val cfg = nivelTier.config
-                motor.conCara = cfg.cara
-                fpsMax = cfg.fpsMax
-                siguienteFrameMs = 0.0
-                engine = motor
-                tier = nivelTier
-                val resolucion = Size(cfg.analisisAncho, cfg.analisisAlto)
-                val analysis = construirAnalisis(resolucion)
-                analysisActual = analysis
-                resolucionActual = resolucion
-                val selector = if (frontal) CameraSelector.DEFAULT_FRONT_CAMERA
-                else CameraSelector.DEFAULT_BACK_CAMERA
-                selectorActual = selector
-                if (requestedSession != sessionToken) {
-                    limpiarRecursos()
-                    result.error("camera_start_cancelled", null, null)
-                    return@addListener
-                }
-                provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
-                if (requestedSession != sessionToken) {
-                    limpiarRecursos()
-                    result.error("camera_start_cancelled", null, null)
-                    return@addListener
-                }
-
-                val info = preview.resolutionInfo
-                val res = info?.resolution
-                val giro = info?.rotationDegrees ?: 0
-                val volteado = giro == 90 || giro == 270
-                val ancho = if (res == null) 0 else if (volteado) res.height else res.width
-                val alto = if (res == null) 0 else if (volteado) res.width else res.height
-
-                result.success(
-                    mapOf(
-                        "textureId" to texEntry.id(),
-                        // Preview sin espejo: el eje horizontal debe coincidir
-                        // con landmarks y asociación anatómica.
-                        "espejo" to false,
-                        "ancho" to ancho,
-                        "alto" to alto,
-                    )
-                )
-            } catch (e: SecurityException) {
-                limpiarRecursos()
-                result.error("camera_permission", null, null)
-            } catch (e: IllegalArgumentException) {
-                limpiarRecursos()
-                result.error("camera_unavailable", null, null)
-            } catch (e: IllegalStateException) {
-                limpiarRecursos()
-                result.error("camera_busy", null, null)
+            val provider = try {
+                futuro.get()
             } catch (e: Exception) {
-                limpiarRecursos()
                 result.error("camera_start_failed", null, null)
+                return@addListener
+            }
+            if (requestedSession != sessionToken) {
+                result.error("camera_start_cancelled", null, null)
+                return@addListener
+            }
+            // El motor (modelos + delegado GPU, ~1 s) se crea en el ejecutor:
+            // en el hilo principal congelaba la UI al abrir la camara.
+            // aplicarNivel ya crea motores en este mismo hilo.
+            try {
+                ejecutor.execute {
+                    val motor = try {
+                        crearMotor(false)
+                    } catch (e: Throwable) {
+                        // ExceptionInInitializerError/UnsatisfiedLinkError de
+                        // MediaPipe no son Exception: sin esto cerraban la app
+                        // (release con R8 sin las clases de Flogger, 2026-10-21).
+                        principal.post {
+                            result.error("mediapipe_init", e.toString(), null)
+                        }
+                        return@execute
+                    }
+                    principal.post {
+                        enlazar(provider, motor, frontal, requestedSession, result)
+                    }
+                }
+            } catch (e: Exception) {
+                // Ejecutor ya cerrado (plugin destruido).
+                result.error("camera_start_cancelled", null, null)
             }
         }, ContextCompat.getMainExecutor(context))
+    }
+
+    /** Segunda mitad de [iniciar], en el hilo principal con el motor listo. */
+    @SuppressLint("UnsafeOptInUsageError")
+    private fun enlazar(
+        provider: ProcessCameraProvider,
+        motor: LandmarkEngine,
+        frontal: Boolean,
+        requestedSession: Long,
+        result: MethodChannel.Result,
+    ) {
+        if (requestedSession != sessionToken) {
+            motor.cerrar()
+            result.error("camera_start_cancelled", null, null)
+            return
+        }
+        // Desde aqui limpiarRecursos() cierra el motor si algo falla.
+        engine = motor
+        try {
+            cameraProvider = provider
+            provider.unbindAll()
+            val texEntry = textureRegistry.createSurfaceTexture()
+            entry = texEntry
+            val surfaceTexture = texEntry.surfaceTexture()
+            val preview = Preview.Builder().build()
+            preview.setSurfaceProvider { request ->
+                surfaceTexture.setDefaultBufferSize(
+                    request.resolution.width, request.resolution.height
+                )
+                val surface = Surface(surfaceTexture)
+                request.provideSurface(surface, ejecutor) { surface.release() }
+            }
+            // Cada sesion parte del techo del hardware: una bajada por
+            // inferencia o calor no se guarda (el S22+ quedo atascado en
+            // bajo + separado por el calentamiento de la GPU, 2026-10-19).
+            val techo = DeviceTier.nivelInicial(probe.ramMb(), motor.gpuOk)
+            val nivelTier = DeviceTier(techo)
+            val cfg = nivelTier.config
+            motor.conCara = cfg.cara
+            fpsMax = cfg.fpsMax
+            siguienteFrameMs = 0.0
+            tier = nivelTier
+            val resolucion = Size(cfg.analisisAncho, cfg.analisisAlto)
+            val analysis = construirAnalisis(resolucion)
+            analysisActual = analysis
+            resolucionActual = resolucion
+            val selector = if (frontal) CameraSelector.DEFAULT_FRONT_CAMERA
+            else CameraSelector.DEFAULT_BACK_CAMERA
+            selectorActual = selector
+            if (requestedSession != sessionToken) {
+                limpiarRecursos()
+                result.error("camera_start_cancelled", null, null)
+                return
+            }
+            provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+            if (requestedSession != sessionToken) {
+                limpiarRecursos()
+                result.error("camera_start_cancelled", null, null)
+                return
+            }
+
+            val info = preview.resolutionInfo
+            val res = info?.resolution
+            val giro = info?.rotationDegrees ?: 0
+            val volteado = giro == 90 || giro == 270
+            val ancho = if (res == null) 0 else if (volteado) res.height else res.width
+            val alto = if (res == null) 0 else if (volteado) res.width else res.height
+
+            result.success(
+                mapOf(
+                    "textureId" to texEntry.id(),
+                    // Preview sin espejo: el eje horizontal debe coincidir
+                    // con landmarks y asociación anatómica.
+                    "espejo" to false,
+                    "ancho" to ancho,
+                    "alto" to alto,
+                )
+            )
+        } catch (e: SecurityException) {
+            limpiarRecursos()
+            result.error("camera_permission", null, null)
+        } catch (e: IllegalArgumentException) {
+            limpiarRecursos()
+            result.error("camera_unavailable", null, null)
+        } catch (e: IllegalStateException) {
+            limpiarRecursos()
+            result.error("camera_busy", null, null)
+        } catch (e: Exception) {
+            limpiarRecursos()
+            result.error("camera_start_failed", null, null)
+        }
     }
 
     private fun crearMotor(forzarSeparado: Boolean) = LandmarkEngine(
@@ -273,7 +318,13 @@ class LandmarkPlugin(
             if (sesion != sessionToken || motor == null ||
                 motor.forzadoSeparado == separado) return@execute
             motor.cerrar()
-            engine = crearMotor(separado).also { it.conCara = cfg.cara }
+            engine = try {
+                crearMotor(separado).also { it.conCara = cfg.cara }
+            } catch (e: Throwable) {
+                // Sin motor no hay frames: el vigilante de Dart muestra el error.
+                principal.post { sink?.error("mediapipe", e.toString(), null) }
+                null
+            }
         }
         val resolucion = Size(cfg.analisisAncho, cfg.analisisAlto)
         if (resolucion != resolucionActual) reenlazarAnalisis(resolucion)

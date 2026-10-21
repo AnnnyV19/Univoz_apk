@@ -370,6 +370,16 @@ class AlmacenMuestras extends ChangeNotifier {
   File? _archivo;
   int _contador = 0;
 
+  int _versionDiccionario = 0;
+
+  /// Cambia cada vez que cambia algo que entra al diccionario del
+  /// reconocedor: las muestras locales (grabar, borrar), las plantillas
+  /// sincronizadas y la carga inicial del archivo. cargarDiccionario()
+  /// (plantillas.dart) comparte una sola instancia mientras este numero no
+  /// cambie. Los ajustes que tambien lo afectan (espejo, umbrales) los compara
+  /// aparte; subir una muestra a la base no lo cambia.
+  int get versionDiccionario => _versionDiccionario;
+
   List<MuestraLocal> get muestras => List.unmodifiable(_muestras);
   bool get cargado => _cargado;
   int get total => _muestras.length;
@@ -456,6 +466,7 @@ class AlmacenMuestras extends ChangeNotifier {
       // Web is a navigation/test harness. Keep the in-memory dictionary
       // usable, but never call path_provider or dart:io-backed storage.
       _cargado = true;
+      _versionDiccionario++;
       notifyListeners();
       return;
     }
@@ -495,6 +506,7 @@ class AlmacenMuestras extends ChangeNotifier {
     await _cargarSincronizadas();
     await _barrerTmp();
     _cargado = true;
+    _versionDiccionario++;
     notifyListeners();
   }
 
@@ -540,9 +552,10 @@ class AlmacenMuestras extends ChangeNotifier {
 
   /// Vuelve a leer plantillas_sync.json (lo escribio la sincronizacion de
   /// fondo) y avisa a quien escuche. La proxima vez que una pantalla llame a
-  /// cargarDiccionario() ya usa el diccionario nuevo.
+  /// cargarDiccionario() ya usa el diccionario nuevo (cambia [versionDiccionario]).
   Future<void> recargarSincronizadas() async {
     await _cargarSincronizadas();
+    _versionDiccionario++;
     notifyListeners();
   }
 
@@ -553,6 +566,7 @@ class AlmacenMuestras extends ChangeNotifier {
       sincronizadas
         ..clear()
         ..addAll(plantillas);
+      _versionDiccionario++;
       notifyListeners();
       return;
     }
@@ -564,6 +578,7 @@ class AlmacenMuestras extends ChangeNotifier {
       ..addAll(plantillas);
     await escribirAtomico(
         f, construirPaqueteSync(plantillas, DateTime.parse(sincronizadoEn!)));
+    _versionDiccionario++;
     notifyListeners();
   }
 
@@ -658,6 +673,7 @@ class AlmacenMuestras extends ChangeNotifier {
       aspecto: captura?.aspecto,
     );
     _muestras.add(m);
+    _versionDiccionario++;
     await _guardar();
     notifyListeners();
     return m;
@@ -667,6 +683,7 @@ class AlmacenMuestras extends ChangeNotifier {
     final coincidentes = _muestras.where((m) => m.id == id).toList();
     final existente = coincidentes.isEmpty ? null : coincidentes.first;
     _muestras.removeWhere((m) => m.id == id);
+    _versionDiccionario++;
     if (existente != null) await _borrarRaw(existente);
     await _guardar();
     notifyListeners();
@@ -675,6 +692,7 @@ class AlmacenMuestras extends ChangeNotifier {
   Future<void> borrarGlosa(String gloss) async {
     final eliminadas = _muestras.where((m) => m.gloss == gloss).toList();
     _muestras.removeWhere((m) => m.gloss == gloss);
+    _versionDiccionario++;
     for (final muestra in eliminadas) {
       await _borrarRaw(muestra);
     }

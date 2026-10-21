@@ -63,14 +63,12 @@ void main() {
         }),
       );
 
-  Future<ResultadoSync> correr(SupabaseApi a,
-          {DateTime? ahora, int base = 0}) =>
+  Future<ResultadoSync> correr(SupabaseApi a, {DateTime? ahora}) =>
       SincronizadorPlantillas.siCorresponde(
         api: a,
         directorio: () async => dir,
         ahora: ahora,
         alActualizar: () async => recargas++,
-        cantidadBase: () async => base,
       );
 
   PlantillaRemota plantilla(String id, String gloss) =>
@@ -223,22 +221,72 @@ void main() {
         expect(leerPaqueteSync(archivo.readAsStringSync()), hasLength(5));
       });
 
-      test('sin sincronizacion previa se compara con el paquete del APK',
-          () async {
+      test('sin sincronizacion previa acepta cualquier descarga valida '
+          '(el paquete del APK manda, no se compara con el)', () async {
+        // La base remota trae pocas plantillas frente a las 1296 del APK: en
+        // una instalacion nueva eso no es un error.
         final r = await correr(
-            api(() async => http.Response(jsonEncode(filas(3)), 200)),
-            base: 146);
-        expect(r, ResultadoSync.invalido);
-        expect(archivo.existsSync(), isFalse);
+            api(() async => http.Response(jsonEncode(filas(3)), 200)));
+        expect(r, ResultadoSync.actualizado);
+        expect(recargas, 1);
+        expect(leerPaqueteSync(archivo.readAsStringSync()), hasLength(3));
       });
 
-      test('un diccionario mayor o parecido al del APK si entra', () async {
-        final r = await correr(
-            api(() async => http.Response(jsonEncode(filas(80)), 200)),
-            base: 146);
-        expect(r, ResultadoSync.actualizado);
-        expect(leerPaqueteSync(archivo.readAsStringSync()), hasLength(80));
+      test('demasiado chica: anota la hora del intento y no repite antes de '
+          '24 h', () async {
+        final ahora = DateTime(2026, 10, 20, 12);
+        escribirViejo(ahora.subtract(const Duration(hours: 30)), p: viejas(10));
+        final r1 = await correr(
+            api(() async => http.Response(jsonEncode(filas(3)), 200)),
+            ahora: ahora);
+        expect(r1, ResultadoSync.invalido);
+        expect(pedidos, 1);
+
+        final r2 = await correr(
+            api(() async => http.Response(jsonEncode(filas(3)), 200)),
+            ahora: ahora.add(const Duration(hours: 23)));
+        expect(r2, ResultadoSync.omitido);
+        expect(pedidos, 1);
+
+        final r3 = await correr(
+            api(() async => http.Response(jsonEncode(filas(10)), 200)),
+            ahora: ahora.add(const Duration(hours: 25)));
+        expect(r3, ResultadoSync.actualizado);
+        expect(pedidos, 2);
       });
+    });
+
+    test('descarga invalida sin archivo previo: tampoco se repite en cada '
+        'arranque', () async {
+      final ahora = DateTime(2026, 10, 20, 12);
+      final r1 = await correr(api(() async => http.Response('[]', 200)),
+          ahora: ahora);
+      expect(r1, ResultadoSync.invalido);
+      expect(archivo.existsSync(), isFalse);
+      expect(pedidos, 1);
+
+      final r2 = await correr(api(() async => http.Response('[]', 200)),
+          ahora: ahora.add(const Duration(hours: 2)));
+      expect(r2, ResultadoSync.omitido);
+      expect(pedidos, 1);
+
+      final r3 = await correr(api(() async => http.Response('[]', 200)),
+          ahora: ahora.add(const Duration(hours: 25)));
+      expect(r3, ResultadoSync.invalido);
+      expect(pedidos, 2);
+    });
+
+    test('sin red no anota intento: el siguiente arranque vuelve a probar',
+        () async {
+      final ahora = DateTime(2026, 10, 20, 12);
+      final r1 = await correr(
+          api(() async => throw const SocketException('sin red')),
+          ahora: ahora);
+      expect(r1, ResultadoSync.fallo);
+      final r2 = await correr(
+          api(() async => http.Response(jsonEncode([_fila('s1', 'HOLA')]), 200)),
+          ahora: ahora.add(const Duration(minutes: 5)));
+      expect(r2, ResultadoSync.actualizado);
     });
   });
 }

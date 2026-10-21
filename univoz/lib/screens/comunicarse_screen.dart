@@ -118,8 +118,13 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     try {
       await _almacen.cargar();
       await _avatarBridge.configurarRig(_almacen.ajustes.rigCalibration);
-      final diccionario = await cargarDiccionario();
-      if (mounted) setState(() => _diccionario = diccionario);
+      // El diccionario pesa cientos de MB: solo se arma si esta pantalla va a
+      // hacer señas con el avatar (en los demas modos nunca lo usa). Es el
+      // mismo que comparten las demas pantallas, no una copia.
+      if (widget.modo == ComunicacionModo.avatar) {
+        final diccionario = await cargarDiccionario();
+        if (mounted) setState(() => _diccionario = diccionario);
+      }
     } catch (_) {
       // El resto de la pantalla sigue disponible aunque falte diccionario.
     }
@@ -145,6 +150,13 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     if (!_avatarBridge.compatible) {
       if (mounted) setState(() => _voiceStatus = 'Avatar 3D no disponible.');
       return false;
+    }
+    if (_diccionario == null) {
+      // El modo cambio a avatar despues de abrir la pantalla.
+      try {
+        final diccionario = await cargarDiccionario();
+        if (mounted) setState(() => _diccionario = diccionario);
+      } catch (_) {}
     }
     final plantilla = _buscarSena(texto);
     if (plantilla == null) {

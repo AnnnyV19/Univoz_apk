@@ -12,7 +12,6 @@ import 'package:flutter/material.dart';
 import 'config_supabase.dart';
 import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
-import 'plantillas.dart' show contarPlantillasPaquete;
 import 'red.dart';
 import 'sincronizador_plantillas.dart' show kFraccionMinimaSync;
 import 'supabase_api.dart';
@@ -161,20 +160,21 @@ class _PantallaSyncState extends State<PantallaSync> {
         return;
       }
       // Misma regla que la sincronizacion en segundo plano: una descarga
-      // mucho mas chica que el diccionario actual puede ser un corte del
-      // servidor. Aqui la persona decide.
-      final actual = _almacen.sincronizadas.isNotEmpty
-          ? _almacen.sincronizadas.length
-          : await contarPlantillasPaquete();
-      if (plantillas.length < actual * kFraccionMinimaSync &&
+      // mucho mas chica que la anterior puede ser un corte del servidor. Aqui
+      // la persona decide. Sin descarga anterior no hay con que comparar: el
+      // paquete de la app manda y esto solo le suma glosas.
+      final actual = _almacen.sincronizadas.length;
+      if (actual > 0 &&
+          plantillas.length < actual * kFraccionMinimaSync &&
           !await _confirmarDiccionarioMasChico(plantillas.length, actual)) {
         _mostrar('No se cambió el diccionario.');
         return;
       }
       await _almacen.guardarSincronizadas(plantillas);
       final senas = plantillas.map((p) => p.gloss).toSet().length;
-      _mostrar('$senas señas (${plantillas.length} plantillas) descargadas. '
-          'Ya funcionan sin internet.');
+      _mostrar('Se guardaron ${plantillas.length} plantillas de $senas señas '
+          'de la base. Las señas que ya trae la app se quedan como están: '
+          'solo se suman las que no tiene. Ya funcionan sin internet.');
     } catch (e) {
       _mostrar(_textoError(e), error: true);
     }
@@ -187,9 +187,10 @@ class _PantallaSyncState extends State<PantallaSync> {
       builder: (context) => AlertDialog(
         title: const Text('¿Reemplazar el diccionario?'),
         content: Text(
-          'El servidor mandó solo $nuevas plantillas y ahora tienes '
-          '$actuales. Puede ser un error del servidor. Si reemplazas, '
-          'perderás señas hasta la próxima descarga.',
+          'El servidor mandó solo $nuevas plantillas y tu última descarga '
+          'tenía $actuales. Puede ser un error del servidor. Si reemplazas, '
+          'podrías perder las señas nuevas que ya habías descargado hasta la '
+          'próxima descarga. Las que vienen con la app no se tocan.',
         ),
         actions: [
           TextButton(
@@ -312,7 +313,8 @@ class _PantallaSyncState extends State<PantallaSync> {
                     'con la app más tus muestras locales.'
                 : '${_almacen.sincronizadas.length} plantillas guardadas'
                     '${_almacen.sincronizadoEn != null ? " · ${_fecha(_almacen.sincronizadoEn!)}" : ""}. '
-                    'Quedan en el teléfono: no hace falta internet para reconocer.',
+                    'Quedan en el teléfono: no hace falta internet para reconocer. '
+                    'Solo se suman las señas que la app no trae.',
             boton: 'Descargar ahora',
             habilitado: !_trabajando,
             onPressed: _bajar,

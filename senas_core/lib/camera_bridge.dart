@@ -74,6 +74,8 @@ String mensajeErrorCamara(Object error) {
       'camera_unavailable' =>
         'La cámara no está disponible en este dispositivo.',
       'camera_start_cancelled' => 'El inicio de cámara fue cancelado.',
+      'mediapipe_init' =>
+        'No se pudo preparar el reconocimiento de señas en este teléfono.',
       // Errores que llegan por el stream de landmarks (sink?.error nativo).
       'mediapipe' || 'analisis' => 'Hubo un problema con la cámara.',
       _ => 'No se pudo iniciar la cámara. Revisa permisos y reintenta.',
@@ -206,6 +208,43 @@ class LandmarkFrame {
     this.track,
     this.poseRan,
   });
+
+  /// Copia de este frame con otros landmarks de pose y de manos (en imagen) y
+  /// TODO lo demas igual: mundo, render, cara, aspecto, nivel del dispositivo,
+  /// metadatos. Quien reemplaza landmarks (p. ej. el suavizado visual) debe
+  /// pasar por aqui y no armar un LandmarkFrame nuevo campo por campo: al
+  /// agregar un campo a la clase se olvidaba copiarlo y llegaba en null. Los
+  /// tres son obligatorios para poder pasar null a proposito (mano ausente).
+  LandmarkFrame conLandmarks({
+    required List<List<double>>? pose,
+    required List<List<double>>? left,
+    required List<List<double>>? right,
+  }) =>
+      LandmarkFrame(
+        timestampMs: timestampMs,
+        pose: pose,
+        poseMundo: poseMundo,
+        left: left,
+        right: right,
+        renderLeft: renderLeft,
+        renderRight: renderRight,
+        poseTimestampMs: poseTimestampMs,
+        handsTimestampMs: handsTimestampMs,
+        sourceSkewMs: sourceSkewMs,
+        association: association,
+        errors: errors,
+        face: face,
+        leftWorld: leftWorld,
+        rightWorld: rightWorld,
+        captureMode: captureMode,
+        imageAspect: imageAspect,
+        tier: tier,
+        inferMs: inferMs,
+        thermal: thermal,
+        handsIn: handsIn,
+        track: track,
+        poseRan: poseRan,
+      );
 
   /// El aspecto a usar para corregir la forma de la mano.
   double get aspectoEfectivo => imageAspect ?? kAspectoAnalisisApp;
@@ -479,7 +518,10 @@ class CameraBridge {
 
   Stream<LandmarkFrame>? _stream;
   Stream<LandmarkFrame>? _streamPreview;
-  int _session = 0;
+  // Global al proceso, como el token nativo (solo crece): con un contador por
+  // instancia, la primera camara de cada pantalla nueva llegaba con un numero
+  // viejo y el lado nativo la cancelaba.
+  static int _session = 0;
 
   /// Pide permiso de camara antes de llamar esto (por ejemplo con
   /// permission_handler). El lado nativo no lo solicita.
