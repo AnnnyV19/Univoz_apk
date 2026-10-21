@@ -10,7 +10,11 @@ library pantalla_sync;
 import 'package:flutter/material.dart';
 
 import 'config_supabase.dart';
+import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
+import 'plantillas.dart' show contarPlantillasPaquete;
+import 'red.dart';
+import 'sincronizador_plantillas.dart' show kFraccionMinimaSync;
 import 'supabase_api.dart';
 
 class PantallaSync extends StatefulWidget {
@@ -47,6 +51,11 @@ class _PantallaSyncState extends State<PantallaSync> {
     super.dispose();
   }
 
+  /// Nunca el error crudo: una persona normal ve un mensaje humano; el
+  /// detalle tecnico solo con el modo desarrollador.
+  String _textoError(Object e) =>
+      mensajeHumano(e, dev: ModoDesarrollador.activo);
+
   void _mostrar(String texto, {bool error = false}) {
     if (!mounted) return;
     setState(() {
@@ -67,7 +76,7 @@ class _PantallaSyncState extends State<PantallaSync> {
       final msg = await _api.probar();
       _mostrar(msg);
     } catch (e) {
-      _mostrar('$e', error: true);
+      _mostrar(_textoError(e), error: true);
     }
   }
 
@@ -113,7 +122,7 @@ class _PantallaSyncState extends State<PantallaSync> {
         await _almacen.marcarSubida(m.id);
         ok++;
       } catch (e) {
-        errores.add('${m.gloss}: $e');
+        errores.add('${m.gloss}: ${_textoError(e)}');
         // Un error de politica o de red se repite en todas: no tiene sentido
         // seguir intentando 40 veces.
         if (errores.length >= 3) break;
@@ -141,10 +150,25 @@ class _PantallaSyncState extends State<PantallaSync> {
       final plantillas = await _api.descargarPlantillas();
       if (plantillas.isEmpty) {
         _mostrar(
-          'La base no tiene ninguna muestra aprobada todavía. En el SQL Editor '
-          'de Supabase:\n\nUPDATE sign_samples SET estado=\'aprobada\' WHERE estado=\'pendiente\';',
+          ModoDesarrollador.activo
+              ? 'La base no tiene ninguna muestra aprobada todavía. En el SQL '
+                  'Editor de Supabase:\n\nUPDATE sign_samples SET '
+                  'estado=\'aprobada\' WHERE estado=\'pendiente\';'
+              : 'Todavía no hay señas nuevas para descargar. Inténtalo más '
+                  'tarde.',
           error: true,
         );
+        return;
+      }
+      // Misma regla que la sincronizacion en segundo plano: una descarga
+      // mucho mas chica que el diccionario actual puede ser un corte del
+      // servidor. Aqui la persona decide.
+      final actual = _almacen.sincronizadas.isNotEmpty
+          ? _almacen.sincronizadas.length
+          : await contarPlantillasPaquete();
+      if (plantillas.length < actual * kFraccionMinimaSync &&
+          !await _confirmarDiccionarioMasChico(plantillas.length, actual)) {
+        _mostrar('No se cambió el diccionario.');
         return;
       }
       await _almacen.guardarSincronizadas(plantillas);
@@ -152,8 +176,34 @@ class _PantallaSyncState extends State<PantallaSync> {
       _mostrar('$senas señas (${plantillas.length} plantillas) descargadas. '
           'Ya funcionan sin internet.');
     } catch (e) {
-      _mostrar('$e', error: true);
+      _mostrar(_textoError(e), error: true);
     }
+  }
+
+  Future<bool> _confirmarDiccionarioMasChico(int nuevas, int actuales) async {
+    if (!mounted) return false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¿Reemplazar el diccionario?'),
+        content: Text(
+          'El servidor mandó solo $nuevas plantillas y ahora tienes '
+          '$actuales. Puede ser un error del servidor. Si reemplazas, '
+          'perderás señas hasta la próxima descarga.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Conservar el actual'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reemplazar'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
   }
 
   Future<void> _subirRaw() async {
@@ -189,7 +239,7 @@ class _PantallaSyncState extends State<PantallaSync> {
         await _almacen.marcarRawSubida(muestra.id, uri);
         ok++;
       } catch (e) {
-        errores.add('${muestra.gloss}: $e');
+        errores.add('${muestra.gloss}: ${_textoError(e)}');
         if (errores.length >= 3) break;
       }
     }
@@ -205,6 +255,10 @@ class _PantallaSyncState extends State<PantallaSync> {
   @override
   Widget build(BuildContext context) {
     final sinSubir = _almacen.sinSubir.length;
+    final colores = Theme.of(context).colorScheme;
+    // Subir muestras y probar la conexión son herramientas del equipo: solo
+    // con el modo desarrollador. Bajar el diccionario lo ve cualquiera.
+    final dev = ModoDesarrollador.activo;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sincronizar')),
@@ -213,38 +267,43 @@ class _PantallaSyncState extends State<PantallaSync> {
         children: [
           if (!haySupabaseConfigurado)
             _cinta(
-              'Falta cargar la URL y la clave del proyecto en config_supabase.dart. '
-              'Sin eso, la app funciona igual pero solo con las muestras de este teléfono.',
-              Colors.orange.shade800,
+              dev
+                  ? 'Falta cargar la URL y la clave del proyecto en config_supabase.dart. '
+                      'Sin eso, la app funciona igual pero solo con las muestras de este teléfono.'
+                  : 'La descarga del diccionario no está disponible en esta versión.',
+              colores.tertiary,
+              colores.onTertiary,
             ),
-          _seccion(
-            icono: Icons.cloud_upload_outlined,
-            titulo: 'Subir mis muestras',
-            detalle: sinSubir == 0
-                ? 'Todas las muestras de este teléfono ya están en la base.'
-                : '$sinSubir muestra(s) sin subir. Van a quedar como "pendiente" '
-                    'hasta que alguien las apruebe.',
-            boton: 'Subir $sinSubir muestra(s)',
-            habilitado: !_trabajando && sinSubir > 0,
-            onPressed: _subir,
-          ),
-          _seccion(
-            icono: Icons.data_object,
-            titulo: 'Subir landmarks crudos (opcional)',
-            detalle: _almacen.muestras
-                        .where((m) =>
-                            m.rawFramesPath != null && m.rawSubidaEn == null)
-                        .length ==
-                    0
-                ? 'No hay archivos crudos pendientes.'
-                : 'Solo sube coordenadas comprimidas para auditoría o re-normalización. '
-                    'Nunca sube video.',
-            boton: 'Subir landmarks',
-            habilitado: !_trabajando &&
-                _almacen.muestras.any(
-                    (m) => m.rawFramesPath != null && m.rawSubidaEn == null),
-            onPressed: _subirRaw,
-          ),
+          if (dev)
+            _seccion(
+              icono: Icons.cloud_upload_outlined,
+              titulo: 'Subir mis muestras',
+              detalle: sinSubir == 0
+                  ? 'Todas las muestras de este teléfono ya están en la base.'
+                  : '$sinSubir muestra(s) sin subir. Van a quedar como "pendiente" '
+                      'hasta que alguien las apruebe.',
+              boton: 'Subir $sinSubir muestra(s)',
+              habilitado: !_trabajando && sinSubir > 0,
+              onPressed: _subir,
+            ),
+          if (dev)
+            _seccion(
+              icono: Icons.data_object,
+              titulo: 'Subir landmarks crudos (opcional)',
+              detalle: _almacen.muestras
+                          .where((m) =>
+                              m.rawFramesPath != null && m.rawSubidaEn == null)
+                          .length ==
+                      0
+                  ? 'No hay archivos crudos pendientes.'
+                  : 'Solo sube coordenadas comprimidas para auditoría o re-normalización. '
+                      'Nunca sube video.',
+              boton: 'Subir landmarks',
+              habilitado: !_trabajando &&
+                  _almacen.muestras.any(
+                      (m) => m.rawFramesPath != null && m.rawSubidaEn == null),
+              onPressed: _subirRaw,
+            ),
           _seccion(
             icono: Icons.cloud_download_outlined,
             titulo: 'Bajar el diccionario',
@@ -258,12 +317,14 @@ class _PantallaSyncState extends State<PantallaSync> {
             habilitado: !_trabajando,
             onPressed: _bajar,
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _trabajando ? null : _probar,
-            icon: const Icon(Icons.wifi_tethering),
-            label: const Text('Probar conexión'),
-          ),
+          if (dev) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _trabajando ? null : _probar,
+              icon: const Icon(Icons.wifi_tethering),
+              label: const Text('Probar conexión'),
+            ),
+          ],
           const SizedBox(height: 16),
           if (_progreso != null)
             Row(
@@ -278,33 +339,35 @@ class _PantallaSyncState extends State<PantallaSync> {
             ),
           if (_resultado != null)
             _cinta(
-                _resultado!,
-                _resultadoEsError
-                    ? Colors.orange.shade800
-                    : Colors.green.shade700),
-          const SizedBox(height: 24),
-          Text(
-            'Por qué las muestras entran como "pendiente": la app usa la clave '
-            'publishable, que es pública por diseño. Las reglas de la base '
-            '(sql/002_app_acceso.sql) le permiten agregar, pero no aprobar, '
-            'modificar ni borrar. Así, aunque alguien saque la clave del APK, '
-            'no puede tocar el diccionario aprobado.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-          ),
+              _resultado!,
+              _resultadoEsError ? colores.error : colores.primary,
+              _resultadoEsError ? colores.onError : colores.onPrimary,
+            ),
+          if (dev) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Por qué las muestras entran como "pendiente": la app usa la clave '
+              'publishable, que es pública por diseño. Las reglas de la base '
+              '(sql/002_app_acceso.sql) le permiten agregar, pero no aprobar, '
+              'modificar ni borrar. Así, aunque alguien saque la clave del APK, '
+              'no puede tocar el diccionario aprobado.',
+              style: TextStyle(fontSize: 12, color: colores.onSurfaceVariant),
+            ),
+          ],
           const SizedBox(height: 32),
         ],
       ),
     );
   }
 
-  Widget _cinta(String texto, Color color) => Container(
+  Widget _cinta(String texto, Color color, Color sobreColor) => Container(
         width: double.infinity,
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(12),
         decoration:
             BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
         child: SelectableText(texto,
-            style: const TextStyle(color: Colors.white, fontSize: 13)),
+            style: TextStyle(color: sobreColor, fontSize: 13)),
       );
 
   Widget _seccion({
@@ -339,7 +402,9 @@ class _PantallaSyncState extends State<PantallaSync> {
             ),
             const SizedBox(height: 8),
             Text(detalle,
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+                style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,

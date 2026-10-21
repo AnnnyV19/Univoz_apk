@@ -121,7 +121,6 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
 
   Timer? _scanTimer;
 
-  static const Color _bgColor = Color(0xFFF7F2FA);
   static const Color _grayText = Color(0xFF6B6478);
   static const Color _comenzarColor = Color(0xFF8F84A6);
   static const Color _radioCardColor = Color(0xFF241B35);
@@ -417,7 +416,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgColor,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -444,12 +443,12 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '¿Con quién te vas\na comunicar?',
                 style: TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF1A1A2E),
+                  color: Theme.of(context).colorScheme.onSurface,
                   height: 1.2,
                 ),
               ),
@@ -598,8 +597,8 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF6C63FF), Color(0xFFB84FCE)],
+          gradient: LinearGradient(
+            colors: [Theme.of(context).colorScheme.primary, const Color(0xFFB84FCE)],
             begin: Alignment.centerLeft,
             end: Alignment.centerRight,
           ),
@@ -678,10 +677,12 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
           ),
           IconButton(
             icon: Icon(Icons.close, color: config.textColor),
+            tooltip: 'No es correcto',
             onPressed: _rejectDetected,
           ),
           IconButton(
             icon: Icon(Icons.check_circle, color: config.textColor),
+            tooltip: 'Es correcto',
             onPressed: _confirmDetected,
           ),
         ],
@@ -802,6 +803,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 ),
                 IconButton(
                   icon: Icon(Icons.close, color: config.textColor),
+                  tooltip: 'Cerrar',
                   onPressed: _collapseCard,
                 ),
               ],

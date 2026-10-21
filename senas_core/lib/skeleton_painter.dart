@@ -6,18 +6,67 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import 'avatar_bridge.dart';
+import 'avatar_vista.dart';
 import 'avatar_vivo.dart';
 import 'backend_api.dart';
 import 'camera_bridge.dart';
 import 'controlador_captura.dart';
 import 'dtw.dart';
+import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
+import 'reconocer/disposicion_reconocer.dart';
+import 'reconocer/encabezado_reconocer.dart';
+import 'reconocer/guia_encuadre.dart';
+import 'reconocer/guia_inicial.dart';
+import 'reconocer/tarjeta_resultado.dart';
 import 'voz.dart';
 import 'sesion_automatica.dart';
+
+/// Texto corto para el usuario cuando un intento no llega al clasificador.
+/// Los motivos son los mismos que se registran en la sesion.
+String? pistaParaResultado(String motivo) => switch (motivo) {
+      'muy_corta' => 'Seña muy corta. Repítela un poco más lenta.',
+      'vacia' => 'No vi tus manos. Ponte frente a la cámara.',
+      'sin_diccionario' => 'Aún no hay señas cargadas.',
+      _ => null,
+    };
+
+/// Cuanto dura en pantalla la pista de [pistaParaResultado].
+const Duration kDuracionPista = Duration(milliseconds: 2500);
+
+/// Pista transitoria: [mostrar] la deja [kDuracionPista] y se borra sola;
+/// [alCambiar] avisa a la pantalla para repintar.
+class PistaTemporal {
+  final VoidCallback alCambiar;
+  String? texto;
+  Timer? _temporizador;
+
+  PistaTemporal({required this.alCambiar});
+
+  void mostrar(String motivo) {
+    _temporizador?.cancel();
+    texto = pistaParaResultado(motivo);
+    alCambiar();
+    _temporizador = Timer(kDuracionPista, () {
+      texto = null;
+      alCambiar();
+    });
+  }
+
+  /// Quita la pista ya (otro modo, otra sena en curso).
+  void limpiar() {
+    _temporizador?.cancel();
+    _temporizador = null;
+    if (texto == null) return;
+    texto = null;
+    alCambiar();
+  }
+
+  void dispose() => _temporizador?.cancel();
+}
 
 class SkeletonPainter extends CustomPainter {
   final LandmarkFrame? frame;
@@ -297,13 +346,38 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     framesQuietosParaCortar: 10,
   );
 
+  /// De donde sale el movimiento del modo automatico: el visor cuando el
+  /// avatar esta listo, los frames de preview cuando no.
+  late final _fuente = FuenteMovimientoAuto(_detector);
+
   Diccionario? _dicc;
   String? _errorDiccionario;
   Prediction? _prediccion;
   List<MapEntry<double, Template>> _candidatas = const [];
   String? _aviso;
+
+  /// Pista transitoria del modo automatico (ver [pistaParaResultado]).
+  late final _pista = PistaTemporal(alCambiar: () {
+    if (mounted) setState(() {});
+  });
   BackendPrediction? _prediccionBackend;
   int _consultaBackend = 0;
+
+  // ── Presentacion del resultado (no cambia el reconocimiento) ─────────────
+  /// Sube con cada resultado: la tarjeta nueva entra animada y vibra.
+  int _intento = 0;
+
+  /// Alternativa que la persona eligio para corregir el resultado.
+  Template? _elegida;
+
+  /// "Ver en avatar": mientras el visor reproduce la plantilla no le llegan
+  /// frames en vivo (lo cortarian) ni cuenta su movimiento para el modo
+  /// automatico.
+  bool _reproduciendoPlantilla = false;
+  Timer? _finReproduccion;
+
+  /// Guia de la primera vez (coach marks).
+  final _guia = ControladorGuiaInicial();
 
   // ── Modo automático ──────────────────────────────────────────────────────
   bool _modoAuto = false;
@@ -323,12 +397,23 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     _detector.onInicioDetectado = _autoIniciar;
     _detector.onFinDetectado = _autoFinalizar;
     _bridge.onPerf = (perf) => _ctrl.sesion?.evento('perf', perf);
+    // Errores sueltos del visor (no tumban el avatar): a la sesion.
+    _bridge.onErrorVisor = (detalle) {
+      final sesion = _ctrl.sesion;
+      if (sesion != null) {
+        sesion.evento('error_visor', {'detalle': detalle});
+      } else {
+        debugPrint('visor avatar: $detalle');
+      }
+    };
     _bridge.onMovimiento = (m) {
-      if (_modoAuto) {
-        _detector.alimentarMovimiento(
+      if (_modoAuto && !_reproduciendoPlantilla) {
+        _fuente.alMovimientoVisor(
             hayMovimiento: m.hayMovimiento, timestampMs: m.timestampMs);
       }
     };
+    _bridge.estado.addListener(_alCambiarEstadoVisor);
+    _bridge.onTerminado = _alTerminarReproduccion;
     _arrancar();
   }
 
@@ -347,6 +432,9 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       if (!mounted) return;
       await _iniciarAvatar(sesionActiva);
       if (!mounted) return;
+      // Despues del consentimiento: nunca dos capas a la vez.
+      await _guia.mostrarSiPrimeraVez();
+      if (!mounted) return;
     }
     // Si ya estábamos en modo auto antes de que la cámara terminara de iniciar,
     // arrancamos el detector ahora que el stream está disponible.
@@ -357,8 +445,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       setState(() {
         _dicc = d;
         _errorDiccionario = d.resumen.vacio
-            ? 'El diccionario está vacío. Grabá muestras en "Agregar muestras", '
-                'o exportá el paquete desde la PC con tools/exportar_paquete.py.'
+            ? 'Aún no hay señas cargadas. '
+                'Conéctate a internet y abre Sincronizar, o reinstala la app.'
             : null;
       });
     } catch (e) {
@@ -379,14 +467,16 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   Future<void> _voltearCamara() async {
     if (_volteando || _modoAuto || _ctrl.grabando || !_ctrl.lista) return;
     setState(() => _volteando = true);
-    final nuevos = _almacen.ajustes.copiar()
-      ..camaraFrontal = !_almacen.ajustes.camaraFrontal;
+    final frontal = !_almacen.ajustes.camaraFrontal;
     try {
       await _ctrl.reiniciar(
-        frontal: nuevos.camaraFrontal,
-        cruzarManos: nuevos.cruzarManos,
+        frontal: frontal,
+        cruzarManos: _almacen.ajustes.cruzarManos,
       );
-      await _almacen.guardarAjustes(nuevos);
+      // Copia al guardar, no antes del await: un perfil corporal medido
+      // mientras la camara reiniciaba se perderia.
+      await _almacen.guardarAjustes(
+          _almacen.ajustes.copiar()..camaraFrontal = frontal);
     } finally {
       if (mounted) setState(() => _volteando = false);
     }
@@ -398,18 +488,21 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     if (_modoAuto) {
       // Desactivar: si estaba grabando, cancelar sin reconocer.
       if (_ctrl.grabando) await _ctrl.terminar();
-      await _detector.detener();
+      await _fuente.detener();
       setState(() {
         _modoAuto = false;
         _estadoAuto = EstadoAuto.quieto;
       });
+      _pista.limpiar();
     } else {
       setState(() {
         _modoAuto = true;
         _prediccion = null;
+        _elegida = null;
         _candidatas = const [];
         _aviso = null;
       });
+      _pista.limpiar();
       // Solo arrancamos el detector si la cámara ya está lista.
       if (_ctrl.lista) _iniciarDetector();
     }
@@ -429,32 +522,44 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       // El avatar es ayuda visual: si el visor no responde, reconocer sigue.
     }
     await _subAvatar?.cancel();
-    _subAvatar = _ctrl.camara.frames.listen(_alimentador.alFrame);
+    _subAvatar =
+        _ctrl.camara.frames.listen(_alimentador.alFrame, onError: _errorStream);
     _alimentador.iniciar();
     // Sin pose usable el visor no recibe frames y no manda motion: si la
     // persona sale de cuadro grabando, el preview sin mano o sin pose cuenta
     // como quieto para que la seña se corte como antes.
     await _subSinMano?.cancel();
     _subSinMano = _ctrl.camara.framesPreview.listen((f) {
-      if (!_modoAuto) return;
-      if (!f.tieneAlgunaMano || f.normalize() == null) {
-        _detector.alimentarMovimiento(
-            hayMovimiento: false, timestampMs: f.timestampMs);
-      }
-    });
+      if (_modoAuto) _fuente.alPreviewSinMano(f);
+    }, onError: _errorStream);
   }
 
-  /// Con el visor, el inicio y fin de la seña salen de su quieto/movimiento
-  /// adaptativo (llega por onMovimiento); sin visor, del detector propio
-  /// sobre el preview.
-  Future<void> _iniciarDetector() async {
-    await _detector.detener();
-    if (!_bridge.disponible) _detector.iniciar(_ctrl.camara.framesPreview);
+  /// Error del stream nativo. El controlador lo clasifica, lo registra en la
+  /// sesion y, si es grave, deja la camara en error (texto amable +
+  /// Reintentar en [_contenido]); aqui solo se evita que llegue sin manejar.
+  void _errorStream(Object error, StackTrace _) =>
+      debugPrint('stream de landmarks: $error');
+
+  bool get _visorListo =>
+      _bridge.disponible && _bridge.estado.value == EstadoAvatar.listo;
+
+  /// Con el avatar listo, el inicio y fin de la seña salen de su quieto/
+  /// movimiento adaptativo (llega por onMovimiento); sin el (sin visor,
+  /// cargando, con error o caido) del detector propio sobre el preview.
+  Future<void> _iniciarDetector() =>
+      _fuente.iniciar(_ctrl.camara.framesPreview, visorListo: _visorListo);
+
+  /// El avatar cambio de estado (cargo, fallo, se reintento): cambia la
+  /// fuente del modo automatico sin duplicar el conteo.
+  void _alCambiarEstadoVisor() {
+    if (!mounted || !_modoAuto || !_fuente.activa) return;
+    _fuente.visorCambio(listo: _visorListo);
   }
 
   /// Callback: el detector detectó inicio de movimiento.
   void _autoIniciar() {
     if (!mounted || !_ctrl.lista || _ctrl.grabando) return;
+    _pista.limpiar();
     _ctrl.empezar(preRollMs: kPreRollMs);
   }
 
@@ -471,8 +576,9 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     if (!mounted) return;
     final nFrames = _ctrl.framesGrabados;
 
-    // Secuencia demasiado corta, vacía o sin diccionario: ignorar en
-    // silencio (queda en la sesion).
+    // Secuencia demasiado corta, vacía o sin diccionario: no se clasifica;
+    // se limpia el resultado anterior y se da una pista (y queda en la
+    // sesion).
     final motivo = seq == null
         ? 'vacia'
         : nFrames < _detector.minFramesParaReconocer
@@ -481,6 +587,16 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
                 ? 'sin_diccionario'
                 : null;
     if (motivo != null) {
+      // Invalida tambien la consulta al backend en vuelo: su respuesta tardia
+      // no debe repoblar el resultado que se acaba de limpiar.
+      _consultaBackend++;
+      setState(() {
+        _prediccion = null;
+        _elegida = null;
+        _prediccionBackend = null;
+        _candidatas = const [];
+      });
+      _pista.mostrar(motivo);
       _registrarReconocimiento('auto', nFrames, motivo: motivo);
       _detector.entrarPausa(const Duration(milliseconds: 300), () {
         if (mounted) setState(() {});
@@ -488,6 +604,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       return;
     }
 
+    _pista.limpiar();
     _reconocer(seq!, modo: 'auto', frames: nFrames);
 
     // Pausa corta para encadenar senas seguidas en una conversacion, sin
@@ -502,8 +619,11 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   void _reconocer(List<List<double>> seq,
       {required String modo, required int frames}) {
     final clasificador = _dicc!.clasificador;
+    final reloj = Stopwatch()..start();
     final ranking = clasificador.rank(seq);
     final pred = clasificador.classifyRanking(ranking);
+    reloj.stop();
+    final dtwMs = reloj.elapsedMicroseconds / 1000;
 
     final vistas = <String>{};
     final unicas = <MapEntry<double, Template>>[];
@@ -514,11 +634,14 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
 
     setState(() {
       _prediccion = pred;
+      _elegida = null;
+      _intento++;
       _prediccionBackend = null;
       _candidatas = unicas;
       _aviso = null;
     });
-    _registrarReconocimiento(modo, frames, pred: pred, candidatas: unicas);
+    _registrarReconocimiento(modo, frames,
+        pred: pred, candidatas: unicas, dtwMs: dtwMs);
     _consultarBackend(seq);
 
     if (pred.aceptada && _almacen.ajustes.hablarResultado) {
@@ -530,11 +653,13 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   void _registrarReconocimiento(String modo, int frames,
       {Prediction? pred,
       List<MapEntry<double, Template>> candidatas = const [],
-      String? motivo}) {
+      String? motivo,
+      double? dtwMs}) {
     double? finito(double v) => v.isFinite ? v : null;
     _ctrl.sesion?.evento('reconocimiento', {
       'modo': modo,
       'frames': frames,
+      if (dtwMs != null) 'dtw_ms': double.parse(dtwMs.toStringAsFixed(2)),
       if (motivo != null) 'motivo': motivo,
       'aceptada': pred?.aceptada ?? false,
       if (pred != null) ...{
@@ -544,7 +669,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       },
       if (candidatas.isNotEmpty)
         'top': [
-          for (final e in candidatas) {'gloss': e.value.gloss, 'd': finito(e.key)},
+          for (final e in candidatas)
+            {'gloss': e.value.gloss, 'd': finito(e.key)},
         ],
     });
   }
@@ -555,9 +681,13 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     _ctrl.removeListener(_alCambiar);
     _subAvatar?.cancel();
     _subSinMano?.cancel();
+    _pista.dispose();
+    _finReproduccion?.cancel();
+    _guia.dispose();
     _alimentador.detener();
+    _bridge.estado.removeListener(_alCambiarEstadoVisor);
     _bridge.dispose();
-    _detector.detener();
+    _fuente.detener();
     _ctrl.dispose();
     _backend.cerrar();
     _voz.detener();
@@ -577,6 +707,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     if (!_ctrl.grabando) {
       setState(() {
         _prediccion = null;
+        _elegida = null;
         _prediccionBackend = null;
         _candidatas = const [];
         _aviso = null;
@@ -590,26 +721,73 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     final nFrames = _ctrl.framesGrabados;
 
     if (_dicc == null) {
-      setState(() => _aviso = 'El diccionario todavía no cargó.');
+      setState(() => _aviso = pistaParaResultado('sin_diccionario'));
       _registrarReconocimiento('manual', nFrames, motivo: 'sin_diccionario');
       return;
     }
     if (seq == null) {
-      setState(() => _aviso =
-          'No se capturó nada. Revisá que se vean los hombros y las manos en cámara.');
+      setState(() => _aviso = pistaParaResultado('vacia'));
       _registrarReconocimiento('manual', nFrames, motivo: 'vacia');
       return;
     }
     // Mismo minimo que el modo automatico: con menos frames validos el DTW
     // compara casi un solo instante y responde cualquier cosa.
     if (nFrames < _detector.minFramesParaReconocer) {
-      setState(() => _aviso = 'Seña muy corta: mantené la seña un poco más '
-          'antes de soltar el botón.');
+      setState(() => _aviso = pistaParaResultado('muy_corta'));
       _registrarReconocimiento('manual', nFrames, motivo: 'muy_corta');
       return;
     }
 
     _reconocer(seq, modo: 'manual', frames: nFrames);
+  }
+
+  /// La persona toco una alternativa: se muestra esa y queda en la sesion
+  /// (tools/analizar_sesion.py) para saber donde se equivoca el reconocedor.
+  void _corregir(Template t) {
+    final original = _prediccion;
+    if (original == null) return;
+    setState(() => _elegida = t);
+    _ctrl.sesion?.evento('correccion_usuario', {
+      'gloss': t.gloss,
+      'original': original.gloss,
+      'aceptada_original': original.aceptada,
+    });
+    if (_almacen.ajustes.hablarResultado) _hablar(textoDePlantilla(t));
+  }
+
+  /// Plantilla de lo que se muestra: la elegida o la ganadora aceptada (la
+  /// primera del ranking).
+  Template? get _plantillaMostrada {
+    if (_elegida != null) return _elegida;
+    final pred = _prediccion;
+    if (pred == null || !pred.aceptada || _candidatas.isEmpty) return null;
+    return _candidatas.first.value;
+  }
+
+  /// Reproduce en el avatar la plantilla de la sena mostrada. El espejo en
+  /// vivo se pausa (cada frame cortaria la reproduccion) y vuelve cuando el
+  /// visor avisa el fin, o a los 6 s si no avisa.
+  Future<void> _verEnAvatar() async {
+    final t = _plantillaMostrada;
+    if (t == null || _reproduciendoPlantilla || _ctrl.grabando) return;
+    setState(() => _reproduciendoPlantilla = true);
+    _alimentador.detener();
+    _finReproduccion?.cancel();
+    _finReproduccion =
+        Timer(const Duration(seconds: 6), _alTerminarReproduccion);
+    try {
+      await _bridge.reproducir(t.seq);
+    } catch (_) {
+      _alTerminarReproduccion();
+    }
+  }
+
+  void _alTerminarReproduccion() {
+    _finReproduccion?.cancel();
+    _finReproduccion = null;
+    if (!mounted || !_reproduciendoPlantilla) return;
+    setState(() => _reproduciendoPlantilla = false);
+    _alimentador.iniciar();
   }
 
   void _hablar(String texto) {
@@ -637,330 +815,362 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
 
   @override
   Widget build(BuildContext context) {
-    final resumen = _dicc?.resumen;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Reconocer seña'),
-        centerTitle: true,
+    // Los numeros de diagnostico aparecen y se van al cambiar el modo
+    // desarrollador sin salir de la pantalla.
+    return ValueListenableBuilder<bool>(
+      valueListenable: ModoDesarrollador.notificador,
+      builder: (context, dev, _) => Scaffold(
+        appBar: AppBar(
+          title: EncabezadoReconocer(
+              resumen: _dicc?.resumen, desarrollador: dev),
+          centerTitle: true,
+          toolbarHeight: dev ? 92 : 64,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.info_outline),
+              tooltip: 'Cómo funciona',
+              onPressed: _guia.abrir,
+            ),
+          ],
+        ),
+        body: CapaGuiaInicial(
+          controlador: _guia,
+          child: Column(
+            children: [
+              _franjaControles(),
+              Expanded(child: _contenido(dev)),
+              _barraAccion(dev),
+            ],
+          ),
+        ),
       ),
-      body: Column(
+    );
+  }
+
+  /// Modo y camara, fuera del AppBar para que Honor no la tape.
+  Widget _franjaControles() {
+    final colores = Theme.of(context).colorScheme;
+    return Container(
+      color: colores.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+      child: Row(
         children: [
-          // ── Franja de controles (fuera del AppBar para que Honor no la tape) ──
-          Container(
-            color: Colors.grey.shade100,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              children: [
-                // Stats a la izquierda
-                Expanded(
-                  child: resumen == null
-                      ? const SizedBox.shrink()
-                      : Text(
-                          '${resumen.senasDistintas} señas · ${resumen.total} plantillas '
-                          '(${resumen.sincronizadas + resumen.delPaquete} base, '
-                          '${resumen.locales} local)',
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                ),
-                // Botón voltear cámara
-                IconButton(
-                  iconSize: 26,
-                  icon: _volteando
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(Icons.cameraswitch_outlined,
-                          color: (_modoAuto || _ctrl.grabando || !_ctrl.lista)
-                              ? Colors.grey
-                              : Colors.blue.shade800),
-                  tooltip: _almacen.ajustes.camaraFrontal
-                      ? 'Cambiar a cámara trasera'
-                      : 'Cambiar a cámara frontal',
-                  onPressed: (_modoAuto || _ctrl.grabando || !_ctrl.lista)
-                      ? null
-                      : _voltearCamara,
-                ),
-                // Botón modo auto/manual
-                IconButton(
-                  iconSize: 26,
-                  icon: Icon(
-                    _modoAuto ? Icons.touch_app : Icons.auto_fix_high,
-                    color: _modoAuto
-                        ? Colors.orange.shade700
-                        : Colors.blue.shade800,
-                  ),
-                  tooltip: _modoAuto
-                      ? 'Cambiar a modo manual'
-                      : 'Activar modo automático',
-                  onPressed: _toggleModoAuto,
-                ),
-              ],
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SelectorModo(
+                automatico: _modoAuto,
+                onCambiar: (_) => _toggleModoAuto(),
+              ),
             ),
           ),
-          Expanded(child: _preview()),
-          _panelInferior(),
+          const SizedBox(width: 4),
+          _botonVoltear(),
         ],
       ),
     );
   }
 
-  Widget _preview() {
-    if (_ctrl.error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(_ctrl.error!, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                  onPressed: _arrancar, child: const Text('Reintentar')),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final camara = _ctrl.iniciada;
-    if (camara == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final camaraConEsqueleto = Stack(
-      children: [
-        Center(
-          child: AspectRatio(
-            aspectRatio: camara.relacionAspecto,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Texture(textureId: camara.textureId),
-                ),
-                ValueListenableBuilder<LandmarkFrame?>(
-                  valueListenable: _ctrl.frame,
-                  builder: (_, frame, __) => CustomPaint(
-                    painter: SkeletonPainter(frame: frame),
-                    size: Size.infinite,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (_ctrl.grabando)
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text('● ${_ctrl.framesGrabados} frames',
-                  style: const TextStyle(color: Colors.white, fontSize: 12)),
-            ),
-          ),
-        // Indicador de estado en modo automático
-        if (_modoAuto)
-          Positioned(
-            top: 8,
-            left: 8,
-            child: _chipEstadoAuto(),
-          ),
-      ],
-    );
-    if (!_bridge.disponible) return camaraConEsqueleto;
-    // El avatar y la camara van LADO A LADO, no superpuestos: en Android el
-    // WebView es una platform view y tapa un Texture que quede encima.
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(flex: 3, child: WebViewWidget(controller: _bridge.controller!)),
-        Expanded(flex: 2, child: camaraConEsqueleto),
-      ],
+  /// Cambiar de camara; deshabilitado, el tooltip dice por que.
+  Widget _botonVoltear() {
+    final colores = Theme.of(context).colorScheme;
+    final motivo = _modoAuto
+        ? 'Pasa a Manual para cambiar de cámara'
+        : _ctrl.grabando
+            ? 'Termina de grabar para cambiar de cámara'
+            : !_ctrl.lista
+                ? 'Espera a que la cámara esté lista'
+                : null;
+    return IconButton(
+      iconSize: 26,
+      icon: _volteando
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(Icons.cameraswitch_outlined,
+              color: motivo != null ? colores.outline : colores.primary),
+      tooltip: motivo ??
+          (_almacen.ajustes.camaraFrontal
+              ? 'Cambiar a cámara trasera'
+              : 'Cambiar a cámara frontal'),
+      onPressed: motivo != null ? null : _voltearCamara,
     );
   }
 
-  Widget _chipEstadoAuto() {
-    final (texto, color) = switch (_estadoAuto) {
-      EstadoAuto.quieto => ('👁 Esperando seña...', Colors.black54),
-      EstadoAuto.grabando => ('⏺ Grabando...', Colors.red.shade700),
-      EstadoAuto.reconociendo => ('🔍 Reconociendo...', Colors.blue.shade700),
-      EstadoAuto.pausa => ('✓ Listo', Colors.green.shade700),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(texto,
-          style: const TextStyle(
-              color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+  /// Avatar, camara y resultado: el acomodo vive en DisposicionReconocer
+  /// (camara siempre junto al avatar, nunca encima: el WebView la taparia).
+  Widget _contenido(bool dev) {
+    if (_ctrl.error != null) return _errorCamara();
+    return DisposicionReconocer(
+      avatar: _bridge.disponible ? VistaAvatar(bridge: _bridge) : null,
+      camara: (compacta) => _vistaCamara(dev, compacta: compacta),
+      panel: _panelResultado(dev),
+      aspectoCamara: _ctrl.iniciada?.relacionAspecto ?? 3 / 4,
     );
   }
 
-  Widget _panelInferior() {
-    return SafeArea(
-      top: false,
+  /// Error bloqueante de la camara (fatal, sin imagen o estancada) con su
+  /// texto amable y Reintentar.
+  Widget _errorCamara() {
+    final tema = Theme.of(context);
+    return Center(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_prediccion != null) _tarjetaResultado(_prediccion!),
-            if (_prediccionBackend?.label != null)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Backend: ${_prediccionBackend!.label} · '
-                  '${(_prediccionBackend!.confidence * 100).round()}% · '
-                  '${_prediccionBackend!.classifier}',
-                  style:
-                      TextStyle(fontSize: 11, color: Colors.blueGrey.shade600),
-                ),
-              ),
-            if (_candidatas.length > 1) _listaCandidatas(),
-            if (_aviso != null) _cinta(_aviso!, Colors.orange.shade800),
-            if (_errorDiccionario != null)
-              _cinta(_errorDiccionario!, Colors.blueGrey.shade700, chico: true),
-            if (_modoAuto)
-              // Modo automático: solo un botón para volver al modo manual
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _toggleModoAuto,
-                  icon: const Icon(Icons.touch_app),
-                  label: const Text('Desactivar modo automático'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              )
-            else
-              // Modo manual: botón grabar/detener de siempre
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _ctrl.lista ? _alternar : null,
-                  icon: Icon(
-                      _ctrl.grabando ? Icons.stop : Icons.fiber_manual_record),
-                  label: Text(
-                      _ctrl.grabando ? 'Detener y reconocer' : 'Grabar seña'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _ctrl.grabando ? Colors.red : null,
-                    foregroundColor: _ctrl.grabando ? Colors.white : null,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                ),
-              ),
+            Icon(Icons.videocam_off_outlined,
+                size: 48, color: tema.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            Text(_ctrl.error!,
+                textAlign: TextAlign.center,
+                style: tema.textTheme.titleMedium),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _arrancar,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reintentar'),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _cinta(String texto, Color color, {bool chico = false}) => Container(
+  /// Camara con esqueleto, guia de encuadre e indicador de grabacion.
+  /// [compacta]: la ventanita del telefono vertical (ya recortada).
+  Widget _vistaCamara(bool dev, {bool compacta = false}) {
+    final colores = Theme.of(context).colorScheme;
+    final camara = _ctrl.iniciada;
+    if (camara == null) {
+      return ColoredBox(
+        color: compacta ? colores.surfaceContainerHighest : colores.surface,
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    final vista = AspectRatio(
+      aspectRatio: camara.relacionAspecto,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Texture(textureId: camara.textureId),
+          ValueListenableBuilder<LandmarkFrame?>(
+            valueListenable: _ctrl.frame,
+            builder: (_, frame, __) => CustomPaint(
+              painter: SkeletonPainter(frame: frame),
+              size: Size.infinite,
+            ),
+          ),
+          GuiaEncuadre(frame: _ctrl.frame),
+          if (_ctrl.grabando)
+            Positioned(left: 8, bottom: 8, child: _chipGrabando(dev)),
+        ],
+      ),
+    );
+    return compacta ? vista : Center(child: vista);
+  }
+
+  Widget _chipGrabando(bool dev) {
+    final colores = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: colores.error,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.fiber_manual_record, size: 12, color: colores.onError),
+          const SizedBox(width: 4),
+          Text(dev ? '${_ctrl.framesGrabados} frames' : 'Grabando',
+              style: TextStyle(color: colores.onError, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  /// Resultado, avisos y pistas.
+  Widget _panelResultado(bool dev) {
+    final colores = Theme.of(context).colorScheme;
+    final pred = _prediccion;
+    final elegida = _elegida;
+    final hayAlgo = pred != null ||
+        _aviso != null ||
+        _pista.texto != null ||
+        _errorDiccionario != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (pred != null)
+          TarjetaResultado(
+            key: ValueKey('resultado_${_intento}_${elegida?.gloss}'),
+            prediccion: pred,
+            umbral: _dicc?.clasificador.maxDistance ??
+                _almacen.ajustes.maxDistance,
+            margenMin:
+                _dicc?.clasificador.minMargin ?? _almacen.ajustes.minMargin,
+            candidatas: _candidatas,
+            elegida: elegida,
+            desarrollador: dev,
+            onAlternativa: _corregir,
+            onHablar: () => _hablar(elegida != null
+                ? textoDePlantilla(elegida)
+                : pred.textoHablado),
+            onVerEnAvatar: _bridge.disponible ? _verEnAvatar : null,
+          ),
+        // Línea del clasificador remoto: solo con el modo desarrollador.
+        if (dev && _prediccionBackend?.label != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              'Backend: ${_prediccionBackend!.label} · '
+              '${(_prediccionBackend!.confidence * 100).round()}% · '
+              '${_prediccionBackend!.classifier}',
+              style: TextStyle(fontSize: 11, color: colores.onSurfaceVariant),
+            ),
+          ),
+        if (_aviso != null)
+          _cinta(_aviso!, colores.tertiaryContainer,
+              colores.onTertiaryContainer),
+        _pistaTransitoria(),
+        if (_errorDiccionario != null)
+          _cinta(_errorDiccionario!, colores.inverseSurface,
+              colores.onInverseSurface,
+              chico: true),
+        if (!hayAlgo)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              _modoAuto
+                  ? 'Haz una seña frente a la cámara. La reconozco cuando '
+                      'terminas.'
+                  : 'Toca Grabar seña, haz la seña y luego toca Detener.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: colores.onSurfaceVariant),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Abajo: en Manual el boton de grabar; en Automatico, el estado.
+  Widget _barraAccion(bool dev) {
+    final colores = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: SizedBox(
+          width: double.infinity,
+          child: _modoAuto
+              ? _estadoAutomatico()
+              : FilledButton.icon(
+                  onPressed: _ctrl.lista ? _alternar : null,
+                  icon: Icon(_ctrl.grabando
+                      ? Icons.stop
+                      : Icons.fiber_manual_record),
+                  label: Text(_ctrl.grabando
+                      ? 'Detener y reconocer'
+                      : 'Grabar seña'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _ctrl.grabando ? colores.error : null,
+                    foregroundColor: _ctrl.grabando ? colores.onError : null,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// Estado del modo automatico, con icono y texto (sin emojis).
+  Widget _estadoAutomatico() {
+    final colores = Theme.of(context).colorScheme;
+    final (icono, texto, fondo, tinta) = switch (_estadoAuto) {
+      EstadoAuto.quieto => (
+          Icons.visibility_outlined,
+          'Esperando seña…',
+          colores.surfaceContainerHighest,
+          colores.onSurfaceVariant
+        ),
+      EstadoAuto.grabando => (
+          Icons.fiber_manual_record,
+          'Grabando…',
+          colores.error,
+          colores.onError
+        ),
+      EstadoAuto.reconociendo => (
+          Icons.search,
+          'Reconociendo…',
+          colores.primary,
+          colores.onPrimary
+        ),
+      EstadoAuto.pausa => (
+          Icons.check_circle_outline,
+          'Listo',
+          colores.secondaryContainer,
+          colores.onSecondaryContainer
+        ),
+    };
+    return Semantics(
+      liveRegion: true,
+      child: AnimatedContainer(
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 200),
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: fondo,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icono, color: tinta, size: 20),
+            const SizedBox(width: 8),
+            Text(texto,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(color: tinta)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Pista del modo automatico: aparece y se desvanece sola.
+  Widget _pistaTransitoria() => AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: _pista.texto == null
+            ? const SizedBox.shrink(key: ValueKey('sin_pista'))
+            : Padding(
+                key: ValueKey(_pista.texto),
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _pista.texto!,
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+              ),
+      );
+
+  Widget _cinta(String texto, Color color, Color sobreColor,
+          {bool chico = false}) =>
+      Container(
         width: double.infinity,
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(10),
         decoration:
-            BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
+            BoxDecoration(color: color, borderRadius: BorderRadius.circular(12)),
         child: Text(texto,
-            style: TextStyle(color: Colors.white, fontSize: chico ? 12 : 13)),
+            style: TextStyle(color: sobreColor, fontSize: chico ? 12 : 13)),
       );
-
-  Widget _tarjetaResultado(Prediction pred) {
-    final ok = pred.aceptada;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: ok ? Colors.green.shade700 : Colors.orange.shade800,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  ok ? pred.textoHablado : 'No reconocida con confianza',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 22),
-                ),
-              ),
-              if (ok)
-                IconButton(
-                  icon: const Icon(Icons.volume_up, color: Colors.white),
-                  tooltip: 'Repetir en voz alta',
-                  onPressed: () => _hablar(pred.textoHablado),
-                ),
-            ],
-          ),
-          if (!ok && pred.gloss != null)
-            Text('la más parecida fue ${pred.textoHablado}',
-                style: const TextStyle(color: Colors.white70)),
-          Text(
-            'distancia ${pred.distance.toStringAsFixed(3)} '
-            '(máx ${_almacen.ajustes.maxDistance.toStringAsFixed(2)})  ·  '
-            'margen ${pred.margin.toStringAsFixed(3)} '
-            '(mín ${_almacen.ajustes.minMargin.toStringAsFixed(2)})',
-            style: const TextStyle(color: Colors.white70, fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _listaCandidatas() {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade200,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('otras candidatas',
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
-          const SizedBox(height: 4),
-          for (final e in _candidatas.skip(1))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Expanded + ellipsis: una glosa larga (ME_AYUDAS_UN_POCO)
-                  // desbordaria el Row en pantalla angosta.
-                  Expanded(
-                    child: Text(e.value.gloss,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13)),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(e.key.toStringAsFixed(3),
-                      style:
-                          TextStyle(fontSize: 13, color: Colors.grey.shade700)),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }

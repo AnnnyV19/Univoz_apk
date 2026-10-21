@@ -12,8 +12,11 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 
 import 'camera_bridge.dart';
+import 'frame_derivados.dart';
 import 'body_profile.dart';
 import 'motion_contract.dart';
 import 'sesion_captura.dart';
@@ -60,11 +63,104 @@ class CapturaMovimiento {
       };
 }
 
+/// Vigila que la camara siga mandando frames una vez que arranco. Si pasan
+/// [limite] sin ninguno (preview o fusionado) con la app en primer plano,
+/// avisa una vez con [alEstancarse]. En segundo plano no cuenta: Android
+/// suelta la camara y el silencio es normal.
+///
+/// En vez de rearmar un Timer por frame (dos streams a ~30 FPS) cada frame
+/// solo levanta una bandera y un tic cada [paso] lleva la cuenta: avisa
+/// entre [limite] y [limite] + [paso] despues del ultimo frame.
+class VigilanteEstancamiento {
+  VigilanteEstancamiento({
+    required this.alEstancarse,
+    this.limite = const Duration(seconds: 4),
+    this.paso = const Duration(milliseconds: 250),
+    bool Function()? enPrimerPlano,
+  }) : _enPrimerPlano = enPrimerPlano ?? appEnPrimerPlano;
+
+  final VoidCallback alEstancarse;
+  final Duration limite;
+  final Duration paso;
+  final bool Function() _enPrimerPlano;
+
+  Timer? _tic;
+  bool _huboFrame = false;
+  int _sinFrameMs = 0;
+
+  bool get activo => _tic != null;
+
+  /// Empieza (o reinicia) la cuenta desde cero.
+  void iniciar() {
+    _tic?.cancel();
+    _huboFrame = false;
+    _sinFrameMs = 0;
+    _tic = Timer.periodic(paso, (_) => _alTic());
+  }
+
+  /// Llego un frame: la camara sigue viva.
+  void frame() => _huboFrame = true;
+
+  void detener() {
+    _tic?.cancel();
+    _tic = null;
+  }
+
+  void _alTic() {
+    if (_huboFrame || !_enPrimerPlano()) {
+      _huboFrame = false;
+      _sinFrameMs = 0;
+      return;
+    }
+    _sinFrameMs += paso.inMilliseconds;
+    if (_sinFrameMs < limite.inMilliseconds) return;
+    detener();
+    alEstancarse();
+  }
+}
+
+/// Primer plano segun el binding de Flutter. Sin binding (pruebas puras) o
+/// sin estado informado todavia, se asume primer plano.
+bool appEnPrimerPlano() {
+  try {
+    final estado = SchedulerBinding.instance.lifecycleState;
+    return estado == null || estado == AppLifecycleState.resumed;
+  } catch (_) {
+    return true;
+  }
+}
+
 class ControladorCaptura extends ChangeNotifier {
   /// [camara] se inyecta en pruebas; por defecto, la camara nativa.
-  ControladorCaptura({CameraBridge? camara}) : camara = camara ?? CameraBridge();
+  /// [enPrimerPlano] reemplaza al ciclo de vida de la app en pruebas.
+  ControladorCaptura({
+    CameraBridge? camara,
+    int Function()? ahora,
+    bool Function()? enPrimerPlano,
+  })  : camara = camara ?? CameraBridge(),
+        _ahora = ahora ?? (() => DateTime.now().millisecondsSinceEpoch),
+        _enPrimerPlano = enPrimerPlano;
 
   final CameraBridge camara;
+  final int Function() _ahora;
+  final bool Function()? _enPrimerPlano;
+
+  /// La camara arranco y despues se callo (cable logico roto, servicio de
+  /// camara caido): error bloqueante con Reintentar, igual que los fatales.
+  late final VigilanteEstancamiento _estancamiento = VigilanteEstancamiento(
+    enPrimerPlano: _enPrimerPlano,
+    alEstancarse: () {
+      if (_apagado || iniciada == null) return;
+      _marcarError(StateError(kCamaraSinRespuesta));
+      unawaited(camara.detener());
+    },
+  );
+
+  /// Errores transitorios del stream nativo: solo a la sesion, y escalan al
+  /// error bloqueante si persisten sin frames (ver [VigilanteErrores]).
+  final VigilanteErrores _vigilante = VigilanteErrores();
+  int _ultimoLogTransitorioMs = -1000000;
+  int _transitoriosSinLog = 0;
 
   /// Frames fusionados que se guardan aunque no se este grabando: el
   /// detector automatico declara el inicio cuando la sena ya arranco, y
@@ -158,6 +254,7 @@ class ControladorCaptura extends ChangeNotifier {
     final inicio = ++_inicioActual;
     _watchdogPreview?.cancel();
     _watchdogPreview = null;
+    _estancamiento.detener();
     await _subPreview?.cancel();
     _subPreview = null;
     if (iniciada != null) await camara.detener();
@@ -166,6 +263,7 @@ class ControladorCaptura extends ChangeNotifier {
     estado = EstadoCamara.inicializando;
     _primerFrameRecibido = false;
     frame.value = null;
+    _vigilante.frameValido();
     _notificar();
 
     // Subscribe before binding CameraX so the first preview event cannot be
@@ -174,18 +272,23 @@ class ControladorCaptura extends ChangeNotifier {
       (f) {
         if (_apagado || inicio != _inicioActual) return;
         frame.value = f;
+        _vigilante.frameValido();
+        _estancamiento.frame();
         _registrarSesion(f);
         if (!_primerFrameRecibido) {
           _primerFrameRecibido = true;
           _watchdogPreview?.cancel();
           _watchdogPreview = null;
           estado = EstadoCamara.lista;
+          // Desde aqui la camara ya mostro imagen: si se calla, es un
+          // estancamiento (el vigilante de 5 s solo cubre el arranque).
+          _estancamiento.iniciar();
           _notificar();
         }
       },
       onError: (Object e, StackTrace stack) {
-        if (_apagado || inicio != _inicioActual) return;
-        _marcarError(e);
+        if (inicio != _inicioActual) return;
+        _errorDeStream(e);
       },
     );
     await _subFusion?.cancel();
@@ -196,6 +299,13 @@ class ControladorCaptura extends ChangeNotifier {
       final c = await camara.iniciar(frontal: frontal);
       if (_apagado || inicio != _inicioActual) {
         await camara.detener();
+        return;
+      }
+      if (estado == EstadoCamara.error) {
+        // Un error del stream llego mientras enlazaba: no se pisa con
+        // "enlazada"; la camara se suelta y el usuario ve el Reintentar.
+        await camara.detener();
+        _notificar();
         return;
       }
       iniciada = c;
@@ -225,17 +335,56 @@ class ControladorCaptura extends ChangeNotifier {
     iniciada = null;
     _watchdogPreview?.cancel();
     _watchdogPreview = null;
+    _estancamiento.detener();
     _notificar();
+  }
+
+  /// Error del stream nativo (sink?.error), segun [clasificarErrorStream].
+  /// Transitorio: queda en la sesion (con tope de frecuencia, pueden ser uno
+  /// por frame) y la camara sigue; solo si persiste [VigilanteErrores] sin
+  /// ningun frame valido escala. Fatal (o escalado): estado recuperable con
+  /// el texto amable del mapper y "Reintentar" de la pantalla. Un error no es
+  /// un frame, asi que nunca entra a la grabacion. Preview y fusion suelen
+  /// traer el mismo error: el segundo se ignora si ya se esta en error.
+  void _errorDeStream(Object e) {
+    if (_apagado || estado == EstadoCamara.error) return;
+    if (clasificarErrorStream(e) == GravedadError.transitorio) {
+      // El nativo sigue vivo (p. ej. tier_rebind_failed al cambiar de nivel
+      // por dispositivo): no es silencio. Si estos errores siguen sin
+      // frames, quien escala es [VigilanteErrores] (3 s).
+      _estancamiento.frame();
+      final ahora = _ahora();
+      _registrarTransitorio(e, ahora);
+      if (!_vigilante.registrarTransitorio(ahora)) return;
+    }
+    _marcarError(e);
+    unawaited(camara.detener());
+  }
+
+  void _registrarTransitorio(Object e, int ahora) {
+    _transitoriosSinLog++;
+    if (ahora - _ultimoLogTransitorioMs < 1000) return;
+    _ultimoLogTransitorioMs = ahora;
+    _sesion?.evento('error_transitorio', {
+      'error': e.toString(),
+      'cuantos': _transitoriosSinLog,
+    });
+    _transitoriosSinLog = 0;
   }
 
   /// Una sola suscripcion a los frames fusionados: llena el anillo y, si se
   /// esta grabando, la grabacion.
   void _escucharFusion() {
-    _subFusion ??= camara.frames.listen(_alFrameFusionado);
+    _subFusion ??= camara.frames.listen(
+      _alFrameFusionado,
+      onError: (Object e, StackTrace stack) => _errorDeStream(e),
+    );
   }
 
   void _alFrameFusionado(LandmarkFrame f) {
     if (_apagado) return;
+    _vigilante.frameValido();
+    _estancamiento.frame();
     if (grabando) {
       _agregar(f);
       if (_framesCrudos.length % 5 == 0) _notificar();
@@ -250,7 +399,7 @@ class ControladorCaptura extends ChangeNotifier {
 
   void _agregar(LandmarkFrame f) {
     _framesCrudos.add(f);
-    final vec = f.normalize();
+    final vec = normalizarCacheado(f);
     _vectores.add(vec);
     if (vec == null) _framesInvalidos++;
   }
@@ -352,6 +501,7 @@ class ControladorCaptura extends ChangeNotifier {
     _inicioActual++;
     _watchdogPreview?.cancel();
     _watchdogPreview = null;
+    _estancamiento.detener();
     await _subPreview?.cancel();
     _subPreview = null;
     await camara.detener();
@@ -359,11 +509,21 @@ class ControladorCaptura extends ChangeNotifier {
   }
 
   Future<void> apagar() async {
-    await _cerrarSesion('camera_stop');
-    _apagado = true;
-    _inicioActual++;
+    // Antes de cualquier await: cerrar la sesion escribe a disco y un tic
+    // del vigilante en esa ventana marcaria error sobre un controlador ya
+    // liberado.
+    _estancamiento.detener();
     _watchdogPreview?.cancel();
     _watchdogPreview = null;
+    // Tambien antes del await: cerrar la sesion escribe a disco y, en esa
+    // ventana, los frames del preview seguirian tocando un controlador que
+    // dispose() ya libero (frame.value, notifyListeners).
+    _apagado = true;
+    _inicioActual++;
+    await _cerrarSesion('camera_stop');
+    _watchdogPreview?.cancel();
+    _watchdogPreview = null;
+    _estancamiento.detener();
     await _subPreview?.cancel();
     await _subFusion?.cancel();
     _subPreview = null;
@@ -383,10 +543,80 @@ class ControladorCaptura extends ChangeNotifier {
 
   @override
   void dispose() {
+    _estancamiento.detener();
     unawaited(apagar());
     _liberado = true;
     frame.dispose();
     super.dispose();
+  }
+}
+
+/// Decide de donde sale el movimiento que alimenta al [DetectorAutomatico].
+///
+/// Con el avatar `listo`, del filtro adaptativo del visor (motion:, mismo del
+/// laboratorio web). Si el visor no esta listo (cargando, error, tiempo
+/// agotado, renderer caido) no manda motion: el detector se alimenta de los
+/// frames de preview con su umbral propio. Nunca las dos fuentes a la vez.
+class FuenteMovimientoAuto {
+  FuenteMovimientoAuto(this.detector);
+
+  final DetectorAutomatico detector;
+
+  bool _activa = false;
+  bool _visorListo = false;
+  Stream<LandmarkFrame>? _preview;
+
+  /// True si el movimiento viene del visor (y los frames no se escuchan).
+  bool get usaVisor => _activa && _visorListo;
+  bool get activa => _activa;
+
+  Future<void> iniciar(Stream<LandmarkFrame> preview,
+      {required bool visorListo}) async {
+    _activa = true;
+    _preview = preview;
+    _visorListo = visorListo;
+    await _reiniciarDetector();
+  }
+
+  /// El visor cambio de estado: solo se re-engancha si la fuente cambia.
+  Future<void> visorCambio({required bool listo}) async {
+    if (_visorListo == listo) return;
+    _visorListo = listo;
+    if (_activa) await _reiniciarDetector();
+  }
+
+  Future<void> detener() async {
+    _activa = false;
+    _preview = null;
+    await detector.detener();
+  }
+
+  Future<void> _reiniciarDetector() async {
+    await detector.detener();
+    // El await anterior pudo coincidir con un detener().
+    if (!_activa) return;
+    final preview = _preview;
+    if (!_visorListo && preview != null) detector.iniciar(preview);
+  }
+
+  /// Movimiento del visor (onMovimiento). Ignorado si el visor no es la
+  /// fuente: evita contar dos veces el mismo frame.
+  void alMovimientoVisor(
+      {required bool hayMovimiento, required int timestampMs}) {
+    if (!usaVisor) return;
+    detector.alimentarMovimiento(
+        hayMovimiento: hayMovimiento, timestampMs: timestampMs);
+  }
+
+  /// Preview sin mano o sin pose: con el visor como fuente no le llega nada
+  /// (el no recibe frames sin pose), asi que cuenta como quieto. Con la
+  /// fuente propia el detector ya ve ese frame.
+  void alPreviewSinMano(LandmarkFrame f) {
+    if (!usaVisor) return;
+    if (!f.tieneAlgunaMano || normalizarCacheado(f) == null) {
+      detector.alimentarMovimiento(
+          hayMovimiento: false, timestampMs: f.timestampMs);
+    }
   }
 }
 

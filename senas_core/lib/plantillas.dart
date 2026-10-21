@@ -101,6 +101,17 @@ Future<List<_Plantilla>> _leerPaquete(String ruta) async {
   return out;
 }
 
+/// Cuantas plantillas validas trae el paquete del APK (0 si no se puede
+/// leer). Sirve de referencia para no reemplazarlo por un diccionario mucho
+/// mas chico (sincronizador_plantillas.dart).
+Future<int> contarPlantillasPaquete({String ruta = kRutaPaquete}) async {
+  try {
+    return (await _leerPaquete(ruta)).length;
+  } catch (_) {
+    return 0;
+  }
+}
+
 class _Plantilla {
   final String signId;
   final String gloss;

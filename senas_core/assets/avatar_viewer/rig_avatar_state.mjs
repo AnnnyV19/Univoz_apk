@@ -64,6 +64,20 @@ export function createAvatarStateTracker({onChange = null} = {}) {
   };
 }
 
+// El render (60-144 Hz) corre mas rapido que el tracking (12-30 FPS) y
+// antes resolvia el mismo frame en cada tick: IK, dedos y palma repetidos
+// para escribir la misma pose (compuertas, filtros y longitudes ya
+// deduplican por frame). Clave del frame: {frame, frameId, timestampMs,
+// view, retarget, rig}; un tick con la misma clave que el ultimo frame
+// resuelto no vuelve a resolver. El suavizado de salida y las transiciones
+// siguen corriendo en cada tick.
+export function shouldSolveFrame(previous, next) {
+  if (!previous || !next) return true;
+  return previous.frame !== next.frame || previous.frameId !== next.frameId ||
+    previous.timestampMs !== next.timestampMs || previous.view !== next.view ||
+    previous.retarget !== next.retarget || previous.rig !== next.rig;
+}
+
 function normalize(q) {
   if (!Array.isArray(q) || q.length !== 4 || !q.every(finite)) return null;
   const norm = Math.hypot(...q);
@@ -144,6 +158,8 @@ export function createPoseTransitions({durationMs = 250} = {}) {
     },
     // El hueso esta en alguna transicion activa (ya se mueve suave).
     owns(id) {
+      // Sin transiciones (lo normal) no se crea el iterador en cada render.
+      if (!transitions.size) return false;
       for (const item of transitions.values()) {
         if (item.bones.has(id)) return true;
       }
@@ -199,42 +215,146 @@ export function adaptiveTauMs(gapRad, {tauMinMs, tauMaxMs, fastRad}) {
   return tauMaxMs + (tauMinMs - tauMaxMs) * k;
 }
 
-const quaternionGap = (a, b) => 2 * Math.acos(Math.min(1,
-  Math.abs(a.reduce((sum, value, index) => sum + value * b[index], 0))));
+// Las cuentas de abajo son las de normalize/slerpQuaternion/quaternionGap
+// con escalares y buffers reutilizados: mismas operaciones en el mismo
+// orden y sin crear arreglos por tick. Solo el salto de huesos quietos
+// (kQuietoEps) se aparta de la version con arreglos, en menos de 1e-9.
+
+// normalize(q) escrito en out; false si no es un cuaternion valido.
+function normalizeInto(out, x, y, z, w) {
+  if (!finite(x) || !finite(y) || !finite(z) || !finite(w)) return false;
+  const norm = Math.hypot(x, y, z, w);
+  if (!(norm > 1e-8)) return false;
+  out[0] = x / norm;
+  out[1] = y / norm;
+  out[2] = z / norm;
+  out[3] = w / norm;
+  return true;
+}
+
+const gapOf = (a, b) => 2 * Math.acos(Math.min(1,
+  Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])));
+
+// slerpQuaternion(a, b, t) escrito en out (out puede ser a); a y b ya son
+// cuaterniones validos. false si el resultado no se pudo normalizar.
+function slerpInto(out, a, b, t) {
+  const na = Math.hypot(a[0], a[1], a[2], a[3]);
+  const ax = a[0] / na, ay = a[1] / na, az = a[2] / na, aw = a[3] / na;
+  const nb = Math.hypot(b[0], b[1], b[2], b[3]);
+  let bx = b[0] / nb, by = b[1] / nb, bz = b[2] / nb, bw = b[3] / nb;
+  let dot = ax * bx + ay * by + az * bz + aw * bw;
+  if (dot < 0) {
+    bx = -bx; by = -by; bz = -bz; bw = -bw;
+    dot = -dot;
+  }
+  const progress = Math.max(0, Math.min(1, Number(t) || 0));
+  if (dot > .9995) {
+    return normalizeInto(out, ax + (bx - ax) * progress,
+      ay + (by - ay) * progress, az + (bz - az) * progress,
+      aw + (bw - aw) * progress);
+  }
+  const theta = Math.acos(Math.min(1, dot));
+  const sinTheta = Math.sin(theta);
+  const wa = Math.sin((1 - progress) * theta) / sinTheta;
+  const wb = Math.sin(progress * theta) / sinTheta;
+  out[0] = wa * ax + wb * bx;
+  out[1] = wa * ay + wb * by;
+  out[2] = wa * az + wb * bz;
+  out[3] = wa * aw + wb * bw;
+  return true;
+}
+
+// Hueco por componente bajo el cual el hueso ya llego a su objetivo: el
+// slerp lo moveria menos que esto, asi que se deja quieto (docs/15 mejora 1).
+const kQuietoEps = 1e-10;
 
 /**
  * Un estado por hueso (id). step(id, escrito, dtMs, params) devuelve la pose
  * a mostrar. Si nadie reescribio el hueso desde el ultimo step (el valor
  * actual es el que mostramos), el objetivo sigue siendo el ultimo visto.
+ * stepQuaternion/followQuaternion hacen lo mismo leyendo y escribiendo un
+ * cuaternion THREE en su lugar, sin crear arreglos (render a 60-144 Hz).
  */
 export function createOutputSmoother() {
   const bones = new Map();
+  // Escrito normalizado del paso en curso (un solo buffer para todos).
+  const now = new Float64Array(4);
+
+  // Avanza el hueso con el escrito ya normalizado en `now`.
+  const advance = (id, dtMs, params) => {
+    let bone = bones.get(id);
+    if (!bone) {
+      bone = {shown: Float64Array.from(now), target: Float64Array.from(now),
+        settled: true};
+      bones.set(id, bone);
+      return bone;
+    }
+    const {shown, target} = bone;
+    if (Math.abs(now[0] - shown[0]) > 1e-6 || Math.abs(now[1] - shown[1]) > 1e-6 ||
+        Math.abs(now[2] - shown[2]) > 1e-6 || Math.abs(now[3] - shown[3]) > 1e-6) {
+      target.set(now);
+    }
+    const gap = gapOf(shown, target);
+    let alpha = smoothingAlpha(dtMs, adaptiveTauMs(gap, params));
+    // Tope de velocidad: un giro enorme (volteo, salto de IK) se ve como
+    // giro rapido y no como salto de un render.
+    if (params.maxSpeedRadS && gap > 1e-9) {
+      alpha = Math.min(alpha, params.maxSpeedRadS * Number(dtMs) / 1000 / gap);
+    }
+    if (alpha >= 1) shown.set(target);
+    else slerpInto(shown, shown, target, alpha);
+    bone.settled = Math.abs(target[0] - shown[0]) <= kQuietoEps &&
+      Math.abs(target[1] - shown[1]) <= kQuietoEps &&
+      Math.abs(target[2] - shown[2]) <= kQuietoEps &&
+      Math.abs(target[3] - shown[3]) <= kQuietoEps;
+    return bone;
+  };
+
+  const followNow = (id) => {
+    const bone = bones.get(id);
+    if (!bone) {
+      bones.set(id, {shown: Float64Array.from(now),
+        target: Float64Array.from(now), settled: true});
+      return;
+    }
+    bone.shown.set(now);
+    bone.target.set(now);
+    bone.settled = true;
+  };
+
   return {
     step(id, written, dtMs, params) {
-      const now = normalize(written);
-      if (!now) return null;
+      if (!Array.isArray(written) || written.length !== 4 ||
+          !normalizeInto(now, written[0], written[1], written[2], written[3])) {
+        return null;
+      }
+      return Array.from(advance(id, dtMs, params).shown);
+    },
+    // Igual que step, sobre un cuaternion THREE (x, y, z, w, set). Devuelve
+    // true si escribio la pose mostrada en q. Un hueso que ya llego a su
+    // objetivo y que nadie reescribio no se toca.
+    stepQuaternion(id, q, dtMs, params) {
       const bone = bones.get(id);
-      if (!bone) {
-        bones.set(id, {shown: now, target: now});
-        return now.slice();
+      if (bone?.settled) {
+        const {shown} = bone;
+        if (q.x === shown[0] && q.y === shown[1] && q.z === shown[2] &&
+            q.w === shown[3]) return false;
       }
-      if (!same(now, bone.shown)) bone.target = now;
-      const gap = quaternionGap(bone.shown, bone.target);
-      let alpha = smoothingAlpha(dtMs, adaptiveTauMs(gap, params));
-      // Tope de velocidad: un giro enorme (volteo, salto de IK) se ve como
-      // giro rapido y no como salto de un render.
-      if (params.maxSpeedRadS && gap > 1e-9) {
-        alpha = Math.min(alpha, params.maxSpeedRadS * Number(dtMs) / 1000 / gap);
-      }
-      bone.shown = alpha >= 1
-        ? bone.target.slice() : slerpQuaternion(bone.shown, bone.target, alpha);
-      return bone.shown.slice();
+      if (!normalizeInto(now, q.x, q.y, q.z, q.w)) return false;
+      const {shown} = advance(id, dtMs, params);
+      q.set(shown[0], shown[1], shown[2], shown[3]);
+      return true;
     },
     // Sin suavizar (reproduccion, flag apagado): seguir la pose escrita para
     // que al volver no haya salto.
     follow(id, written) {
-      const now = normalize(written);
-      if (now) bones.set(id, {shown: now, target: now});
+      if (Array.isArray(written) && written.length === 4 &&
+          normalizeInto(now, written[0], written[1], written[2], written[3])) {
+        followNow(id);
+      }
+    },
+    followQuaternion(id, q) {
+      if (normalizeInto(now, q.x, q.y, q.z, q.w)) followNow(id);
     },
     reset() {
       bones.clear();

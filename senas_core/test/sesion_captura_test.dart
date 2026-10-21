@@ -77,6 +77,53 @@ void main() {
     await dir.delete(recursive: true);
   });
 
+  test('el sumidero pasa a un archivo nuevo al llegar al tope por archivo',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('sesion');
+    final sesiones = Directory('${dir.path}/sesiones');
+    final sink = sumideroArchivo(sesiones, maxBytesArchivo: 100);
+    final linea = 'x' * 40; // 41 bytes con el salto de linea
+    for (var i = 0; i < 5; i++) {
+      await sink('abc', [linea]);
+    }
+    final nombres = sesiones
+        .listSync()
+        .map((e) => e.uri.pathSegments.last)
+        .toList()
+      ..sort();
+    // 2 lineas (82 B) por archivo: la tercera no cabe en 100.
+    expect(nombres, ['abc.jsonl', 'abc.part002.jsonl', 'abc.part003.jsonl']);
+    for (final f in sesiones.listSync().whereType<File>()) {
+      expect(f.lengthSync(), lessThanOrEqualTo(100));
+    }
+    await dir.delete(recursive: true);
+  });
+
+  test('al rodar poda los cerrados mas viejos y deja el total bajo el tope',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('sesion');
+    final sesiones = Directory('${dir.path}/sesiones')..createSync();
+    // Una sesion vieja ya cerrada, de 150 bytes.
+    File('${sesiones.path}/20250101T000000Z-aaaaaa.jsonl')
+        .writeAsStringSync('v' * 150);
+    final sink = sumideroArchivo(sesiones,
+        maxBytesArchivo: 100, maxBytesTotal: 250);
+    final linea = 'x' * 40;
+    for (var i = 0; i < 12; i++) {
+      await sink('20260101T000000Z-bbbbbb', [linea]);
+    }
+    final archivos = sesiones.listSync().whereType<File>().toList();
+    final total = archivos.fold<int>(0, (a, f) => a + f.lengthSync());
+    expect(total, lessThanOrEqualTo(250));
+    final nombres = archivos.map((f) => f.uri.pathSegments.last).toList()
+      ..sort();
+    expect(nombres, isNot(contains('20250101T000000Z-aaaaaa.jsonl')));
+    // El archivo abierto (la ultima parte) sigue ahi y con su contenido.
+    expect(nombres.last, startsWith('20260101T000000Z-bbbbbb.part'));
+    expect(File('${sesiones.path}/${nombres.last}').lengthSync(), greaterThan(0));
+    await dir.delete(recursive: true);
+  });
+
   test('frameDeSesion compacta un LandmarkFrame', () {
     final pose = List<double>.filled(33 * 4, 0);
     for (var i = 0; i < 33; i++) {

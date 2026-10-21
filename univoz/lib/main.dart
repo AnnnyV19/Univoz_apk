@@ -1,4 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:senas_core/modo_desarrollador.dart';
+import 'package:senas_core/registro_errores.dart';
+import 'package:senas_core/sincronizador_plantillas.dart';
+import 'package:senas_core/tema_univoz.dart';
 import 'screens/welcome_screen.dart';
 import 'services/perfil_guardado.dart';
 
@@ -7,11 +13,20 @@ Future<void> main() async {
   // path_provider, que es un plugin de plataforma y necesita el binding
   // listo. Sin esto revienta con "Binding has not yet been initialized".
   WidgetsFlutterBinding.ensureInitialized();
+  // Errores no capturados -> <documentos>/errores.jsonl (solo local; se
+  // comparte a mano desde Configuración con el modo desarrollador).
+  RegistroErrores.instancia.instalarManejadores();
   // Se lee el perfil ANTES de runApp para que la primera pantalla ya sepa
   // si hay que preguntar quién eres o no. Es un archivo de pocos bytes:
   // no retrasa el arranque de forma perceptible.
   await PerfilGuardado.cargar();
+  // Igual de pequeño: un bool en un archivo. Decide si Configuración y el
+  // reconocedor muestran las herramientas de diagnóstico.
+  await ModoDesarrollador.cargar();
   runApp(const MyApp());
+  // Diccionario aprobado: se renueva solo si pasaron más de 24 h, sin
+  // esperar a nadie. Un fallo (sin red) deja el que ya hay.
+  unawaited(SincronizadorPlantillas.siCorresponde());
 }
 
 class MyApp extends StatelessWidget {
@@ -19,9 +34,16 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
+      title: 'Univoz',
       debugShowCheckedModeBanner: false,
-      home: WelcomeScreen(),
+      theme: temaUnivoz(),
+      darkTheme: temaUnivoz(brightness: Brightness.dark),
+      // Claro fijo por ahora: varias pantallas siguen con paletas propias
+      // (bienvenida oscura, tarjetas de perfil) que no se adaptan al tema
+      // oscuro del teléfono. Cuando se migren, pasar a ThemeMode.system.
+      themeMode: ThemeMode.light,
+      home: const WelcomeScreen(),
     );
   }
 }

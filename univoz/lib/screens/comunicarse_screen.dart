@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:permission_handler/permission_handler.dart';
+import '../services/permiso_camara.dart';
 import 'package:senas_core/avatar_bridge.dart';
-import 'package:senas_core/avatar_view.dart';
+import 'package:senas_core/avatar_vista.dart';
 import 'package:senas_core/dtw.dart';
 import 'package:senas_core/muestras_locales.dart';
 import 'package:senas_core/plantillas.dart';
 import 'package:senas_core/skeleton_painter.dart' show PantallaDeTranslacion;
 import 'univoz_shared_widgets.dart';
+import 'voz_mensaje.dart';
 import 'profile_selection_screen.dart' show ProfileType;
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
@@ -89,8 +89,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   // seguir: si no coincide, se sabe que ya quedó obsoleto y se detiene,
   // aunque estuviera a mitad de una pregunta o una escucha.
   int _voiceFlowGeneration = 0;
-
-  static const Color _bgColor = Color(0xFFF7F2FA);
 
   static const Set<String> _exitPhrases = {
     'salir',
@@ -328,31 +326,11 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     }
   }
 
-  /// Pide permiso de cámara antes de abrir el reconocedor de señas
-  /// (mismo patrón que TraducirSenasScreen). Devuelve true si ya se
-  /// puede continuar.
-  Future<bool> _asegurarPermisoCamara() async {
-    if (kIsWeb) return true;
-    final status = await Permission.camera.status;
-    if (status.isGranted) return true;
-    setState(() => _pidiendoPermisoCamara = true);
-    final resultado = await Permission.camera.request();
-    if (mounted) setState(() => _pidiendoPermisoCamara = false);
-    if (resultado.isGranted) return true;
-    if (!mounted) return false;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text(
-            'Sin permiso de cámara no se puede traducir lengua de señas.'),
-        action: SnackBarAction(label: 'Ajustes', onPressed: openAppSettings),
-      ),
-    );
-    return false;
-  }
-
   Future<void> _abrirCamaraTraductora() async {
-    if (!await _asegurarPermisoCamara()) return;
-    if (!mounted) return;
+    setState(() => _pidiendoPermisoCamara = true);
+    final permitido = await pedirPermisoCamara(context);
+    if (mounted) setState(() => _pidiendoPermisoCamara = false);
+    if (!permitido || !mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const PantallaDeTranslacion()),
     );
@@ -410,7 +388,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       _ => null,
     };
     return Scaffold(
-      backgroundColor: _bgColor,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: UnivozHeader(subtitle: subtitulo),
       body: SafeArea(
         top: false,
@@ -468,7 +446,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE85D5D),
+                    color: Theme.of(context).colorScheme.error,
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: const Text(
@@ -564,7 +542,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                 child: _lsmActionButton(
                   icon: Icons.videocam,
                   label: 'Traducir señas\ny leerlas en voz alta',
-                  color: const Color(0xFF6C63FF),
+                  color: Theme.of(context).colorScheme.primary,
                   busy: _pidiendoPermisoCamara,
                   onTap: _pidiendoPermisoCamara ? null : _abrirCamaraTraductora,
                 ),
@@ -577,8 +555,8 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                       ? 'Escuchando...'
                       : 'Hablar para que\nel avatar firme',
                   color: _listening
-                      ? const Color(0xFFE85D5D)
-                      : const Color(0xFF8B5CF6),
+                      ? Theme.of(context).colorScheme.error
+                      : Theme.of(context).colorScheme.secondary,
                   busy: false,
                   onTap: _listening ? null : _dictarMensaje,
                 ),
@@ -598,7 +576,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                 Positioned.fill(
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(20),
-                    child: AvatarViewport(bridge: _avatarBridge),
+                    child: VistaAvatar(bridge: _avatarBridge),
                   ),
                 ),
                 if (_listening)
@@ -609,7 +587,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE85D5D),
+                        color: Theme.of(context).colorScheme.error,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: const Text(
@@ -735,12 +713,12 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Escribe para escuchar',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
-            color: Color(0xFF1A1A2E),
+            color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: 14),
@@ -763,51 +741,9 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           ),
         ),
         const SizedBox(height: 14),
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: ElevatedButton.icon(
-            onPressed: () {
-              // TODO: convertir _controller.text a voz (TTS) y reproducir.
-            },
-            icon: const Icon(Icons.volume_up, color: Colors.white),
-            label: const Text('Leer en voz alta',
-                style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF8B5CF6),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: OutlinedButton.icon(
-            onPressed: () {
-              setState(() => _listening = !_listening);
-              // TODO: iniciar/detener dictado por voz (speech-to-text).
-            },
-            icon: Icon(Icons.mic,
-                color: _listening ? Colors.red : const Color(0xFF3A2A5C)),
-            label: Text(
-              _listening ? 'Escuchando...' : 'Dictar con voz',
-              style: const TextStyle(color: Color(0xFF3A2A5C)),
-            ),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Color(0xFF3A2A5C)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-            ),
-          ),
-        ),
+        ControlesVozMensaje(controlador: _controller),
         const SizedBox(height: 10),
         const SosButton(),
-        const SizedBox(height: 14),
-        _buildAudioPlayerPlaceholder(),
       ],
     );
   }
@@ -822,12 +758,12 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Traducir señas a texto',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
-            color: Color(0xFF1A1A2E),
+            color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: 4),
@@ -855,7 +791,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             label: const Text('Abrir cámara y traducir señas',
                 style: TextStyle(color: Colors.white)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF6C63FF),
+              backgroundColor: Theme.of(context).colorScheme.primary,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
               ),
@@ -902,12 +838,12 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Escribir directamente',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
-            color: Color(0xFF1A1A2E),
+            color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: 4),
@@ -979,7 +915,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             margin: const EdgeInsets.only(right: 10),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFFE85D5D),
+              color: Theme.of(context).colorScheme.error,
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Text(
@@ -1001,36 +937,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildAudioPlayerPlaceholder() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        children: [
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('00:00', style: TextStyle(fontSize: 12)),
-              Text('00:00', style: TextStyle(fontSize: 12)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          // TODO: reemplazar por una forma de onda real del audio recibido.
-          Container(height: 30, color: const Color(0xFFEDE4FB)),
-          const SizedBox(height: 8),
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: const Color(0xFF3A2A5C),
-            child: const Icon(Icons.play_arrow, color: Colors.white),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1066,17 +972,23 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   return Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: AspectRatio(
-                        aspectRatio: 1,
+                      // Alto de 48 dp (toque cómodo); el ancho lo reparte la fila.
+                      child: SizedBox(
+                        height: 48,
                         child: Material(
                           color: const Color(0xFFEDE4FB),
                           borderRadius: BorderRadius.circular(6),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(6),
                             onTap: () => _insertLetter(letter),
-                            child: Center(
-                              child: Text(letter,
-                                  style: const TextStyle(fontSize: 12)),
+                            child: Semantics(
+                              label: 'Letra $letter',
+                              button: true,
+                              excludeSemantics: true,
+                              child: Center(
+                                child: Text(letter,
+                                    style: const TextStyle(fontSize: 12)),
+                              ),
                             ),
                           ),
                         ),
@@ -1109,7 +1021,9 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           label,
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: selected ? Colors.white : const Color(0xFF1A1A2E),
+            color: selected
+                ? Colors.white
+                : Theme.of(context).colorScheme.onSurface,
             fontWeight: FontWeight.w700,
           ),
         ),

@@ -20,12 +20,13 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import 'avatar_bridge.dart';
+import 'avatar_vista.dart';
 import 'avatar_vivo.dart';
 import 'camera_bridge.dart';
 import 'controlador_captura.dart';
+import 'modo_desarrollador.dart';
 import 'motion_contract.dart';
 import 'muestras_locales.dart';
 import 'sesion_automatica.dart';
@@ -34,12 +35,18 @@ import 'skeleton_painter.dart' show SkeletonPainter;
 class PantallaEspejo extends StatefulWidget {
   final bool iniciarCalibracion;
 
-  /// App producto (univoz): sin contadores ni datos técnicos en pantalla y
-  /// sin modo diagnóstico.
+  /// App producto (univoz). Los contadores, datos técnicos y el modo
+  /// diagnóstico solo salen con el modo desarrollador (ModoDesarrollador).
   final bool modoProducto;
 
   const PantallaEspejo(
-      {super.key, this.iniciarCalibracion = false, this.modoProducto = false});
+      {super.key,
+      this.iniciarCalibracion = false,
+      this.modoProducto = false,
+      this.visorParaPruebas});
+
+  /// Solo pruebas: visor sin WebView (AvatarBridge.sinVisor).
+  final AvatarBridge? visorParaPruebas;
 
   @override
   State<PantallaEspejo> createState() => _PantallaEspejoState();
@@ -47,7 +54,7 @@ class PantallaEspejo extends StatefulWidget {
 
 class _PantallaEspejoState extends State<PantallaEspejo> {
   final _ctrl = ControladorCaptura();
-  final _bridge = AvatarBridge();
+  late final AvatarBridge _bridge = widget.visorParaPruebas ?? AvatarBridge();
   final _almacen = AlmacenMuestras.instancia;
 
   StreamSubscription<LandmarkFrame>? _sub;
@@ -71,6 +78,14 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
     _bridge.onDiagnosticReport = _compartirDiagnostico;
     _bridge.onCalibrationChanged = _guardarCalibracion;
     _bridge.onPerf = (perf) => _ctrl.sesion?.evento('perf', perf);
+    _bridge.onErrorVisor = (detalle) {
+      final sesion = _ctrl.sesion;
+      if (sesion != null) {
+        sesion.evento('error_visor', {'detalle': detalle});
+      } else {
+        debugPrint('visor avatar: $detalle');
+      }
+    };
     _arrancar();
   }
 
@@ -108,6 +123,10 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
     ));
   }
 
+  /// Numeros y panel de diagnostico del visor: solo con el modo desarrollador.
+  /// El espejo en si (avatar, estado de cuerpo y manos, pausar) es del producto.
+  bool get _diagnostico => ModoDesarrollador.activo;
+
   void _alCambiar() {
     if (mounted) setState(() {});
   }
@@ -140,7 +159,7 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
       // Esta pantalla es para verte a ti mismo: el avatar actua como reflejo.
       // Las pantallas de traduccion dejan la vista de interlocutor.
       await _bridge.configurarVista(espejo: true);
-      await _bridge.configurarDiagnostico(!widget.modoProducto &&
+      await _bridge.configurarDiagnostico(_diagnostico &&
           (_almacen.ajustes.rigDiagnosticMode || widget.iniciarCalibracion));
       if (widget.iniciarCalibracion) {
         await _bridge.iniciarCalibracionPulgares();
@@ -159,10 +178,15 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
     _sub?.cancel();
     // El preview sigue alimentando SkeletonPainter; RigBody usa frames
     // fusionados para no animar con pose y manos de timestamps distintos.
-    _sub = _ctrl.camara.frames.listen(_alFrame);
+    _sub = _ctrl.camara.frames.listen(_alFrame, onError: _errorStream);
     _alimentador.iniciar();
     setState(() => _espejando = true);
   }
+
+  /// Error del stream nativo: el controlador lo clasifica, lo registra y, si
+  /// es grave, deja el error visible; aqui solo se evita que llegue sin manejar.
+  void _errorStream(Object error, StackTrace _) =>
+      debugPrint('stream de landmarks: $error');
 
   void _pararEspejo() {
     _sub?.cancel();
@@ -176,8 +200,8 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
     if (widget.modoProducto && !_avisoAhorroMostrado && f.tier == 'bajo') {
       _avisoAhorroMostrado = true;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('Modo ahorro: el avatar se mueve más simple en este teléfono')));
+          content: Text(
+              'Modo ahorro: el avatar se mueve más simple en este teléfono')));
     }
     _alimentador.alFrame(f);
   }
@@ -202,7 +226,7 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
             icon: Icon(_mostrarCamara
                 ? Icons.videocam_outlined
                 : Icons.videocam_off_outlined),
-            tooltip: _mostrarCamara ? 'Ocultar camara' : 'Mostrar camara',
+            tooltip: _mostrarCamara ? 'Ocultar cámara' : 'Mostrar cámara',
             onPressed: () => setState(() => _mostrarCamara = !_mostrarCamara),
           ),
         ],
@@ -220,15 +244,22 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
               margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.orange.shade800,
+                color: Theme.of(context).colorScheme.tertiary,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Text(_aviso ?? 'La camara no arranco: ${_ctrl.error}',
-                  style: const TextStyle(color: Colors.white, fontSize: 13)),
+              child: Text(
+                  _aviso ??
+                      (ModoDesarrollador.activo
+                          ? 'La cámara no arrancó: ${_ctrl.error}'
+                          : 'La cámara no arrancó. Cierra esta pantalla y '
+                              'vuelve a intentarlo.'),
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onTertiary,
+                      fontSize: 13)),
             ),
           Expanded(
             child: _bridge.disponible
-                ? WebViewWidget(controller: _bridge.controller!)
+                ? VistaAvatar(bridge: _bridge)
                 : const _EspejoNoDisponible(),
           ),
           _barra(),
@@ -240,11 +271,14 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
   Widget _preview() {
     final camara = _ctrl.iniciada;
     if (camara == null) {
-      return const AspectRatio(
+      return AspectRatio(
         aspectRatio: 3 / 4,
         child: ColoredBox(
-          color: Colors.black26,
-          child: Center(
+          color: Theme.of(context)
+              .colorScheme
+              .onInverseSurface
+              .withValues(alpha: 0.2),
+          child: const Center(
             child: SizedBox(
               width: 20,
               height: 20,
@@ -277,10 +311,11 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
   }
 
   Widget _barra() {
+    final colores = Theme.of(context).colorScheme;
     return SafeArea(
       top: false,
       child: Container(
-        color: Colors.black87,
+        color: colores.inverseSurface,
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,10 +332,12 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
                     builder: (_, frame, __) => _estado(frame),
                   ),
                   const SizedBox(height: 6),
-                  if (!widget.modoProducto)
+                  if (_diagnostico)
                     Text('${_alimentador.framesEnviados} frames enviados',
-                        style: const TextStyle(
-                            color: Colors.white38, fontSize: 11)),
+                        style: TextStyle(
+                            color:
+                                colores.onInverseSurface.withValues(alpha: 0.5),
+                            fontSize: 11)),
                   const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
@@ -325,13 +362,16 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
   /// normalize() devuelve null y el avatar no se mueve por mas que las manos
   /// esten perfectas. Conviene que eso sea visible de un vistazo.
   Widget _estado(LandmarkFrame? frame) {
+    final colores = Theme.of(context).colorScheme;
     Widget punto(String texto, bool ok) => Padding(
           padding: const EdgeInsets.only(right: 8),
           child: Text(
             '${ok ? "✓" : "✗"} $texto',
             style: TextStyle(
               fontSize: 12,
-              color: ok ? Colors.greenAccent.shade400 : Colors.white54,
+              color: ok
+                  ? colores.inversePrimary
+                  : colores.onInverseSurface.withValues(alpha: 0.6),
             ),
           ),
         );
@@ -340,10 +380,12 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
       punto('Cuerpo', frame?.pose != null),
       punto('Izq', frame?.left != null),
       punto('Der', frame?.right != null),
-      if (!widget.modoProducto)
+      if (_diagnostico)
         Text(
           'Lados: $modo',
-          style: const TextStyle(color: Colors.white60, fontSize: 11),
+          style: TextStyle(
+              color: colores.onInverseSurface.withValues(alpha: 0.6),
+              fontSize: 11),
         ),
     ]);
   }
@@ -353,15 +395,17 @@ class _EspejoNoDisponible extends StatelessWidget {
   const _EspejoNoDisponible();
 
   @override
-  Widget build(BuildContext context) => const ColoredBox(
-        color: Colors.black87,
+  Widget build(BuildContext context) => ColoredBox(
+        color: Theme.of(context).colorScheme.inverseSurface,
         child: Center(
           child: Padding(
-            padding: EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
             child: Text(
               'El modo espejo está disponible en Android',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 18),
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onInverseSurface,
+                  fontSize: 18),
             ),
           ),
         ),

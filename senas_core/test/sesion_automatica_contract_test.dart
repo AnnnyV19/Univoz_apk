@@ -15,7 +15,7 @@ void main() {
     }
     // el consentimiento vive en un solo lugar
     final helper = File('lib/sesion_automatica.dart').readAsStringSync();
-    expect(helper, contains('consentimientoSesion = true'));
+    expect(helper, contains('consentimientoPreguntado = true'));
     expect(File('lib/pantalla_espejo.dart').readAsStringSync(),
         isNot(contains('showDialog<bool>')));
   });

@@ -98,3 +98,9 @@ Este índice consolida los tres documentos adjuntos del objetivo. La
 investigación extensa se convierte aquí en decisiones, límites comprobables y
 tareas pequeñas; no se copian promesas de precisión que aún no tengan
 medición.
+
+### Publicación
+
+- [Publicar Univoz en Android (firma, APK, Play)](RELEASE.md)
+- [Privacidad (mismo texto que la pantalla Privacidad de la app)](PRIVACIDAD.md)
+- [iPhone, fase 2](16-ios-fase2.md)

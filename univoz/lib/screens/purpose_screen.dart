@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:permission_handler/permission_handler.dart';
+import '../services/permiso_camara.dart';
 import 'package:senas_core/skeleton_painter.dart' show PantallaDeTranslacion;
 import 'profile_selection_screen.dart';
 import 'other_person_profile_screen.dart';
@@ -57,7 +56,6 @@ class _PurposeScreenState extends State<PurposeScreen> {
   CommunicationPurpose? _selected;
   bool _pidiendoPermisoCamara = false;
 
-  static const Color _bgColor = Color(0xFFF7F2FA);
   static const Color _grayText = Color(0xFF6B6478);
   static const Color _comenzarColor = Color(0xFF8F84A6);
 
@@ -192,31 +190,11 @@ class _PurposeScreenState extends State<PurposeScreen> {
     );
   }
 
-  /// Pide permiso de cámara antes de abrir el reconocedor de señas
-  /// (mismo patrón que TraducirSenasScreen/ComunicarseScreen). Devuelve
-  /// true si ya se puede continuar.
-  Future<bool> _asegurarPermisoCamara() async {
-    if (kIsWeb) return true;
-    final status = await Permission.camera.status;
-    if (status.isGranted) return true;
-    setState(() => _pidiendoPermisoCamara = true);
-    final resultado = await Permission.camera.request();
-    if (mounted) setState(() => _pidiendoPermisoCamara = false);
-    if (resultado.isGranted) return true;
-    if (!mounted) return false;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text(
-            'Sin permiso de cámara no se puede traducir lengua de señas.'),
-        action: SnackBarAction(label: 'Ajustes', onPressed: openAppSettings),
-      ),
-    );
-    return false;
-  }
-
   Future<void> _abrirCamaraTraductora() async {
-    if (!await _asegurarPermisoCamara()) return;
-    if (!mounted) return;
+    setState(() => _pidiendoPermisoCamara = true);
+    final permitido = await pedirPermisoCamara(context);
+    if (mounted) setState(() => _pidiendoPermisoCamara = false);
+    if (!permitido || !mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const PantallaDeTranslacion()),
     );
@@ -225,7 +203,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgColor,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -252,12 +230,12 @@ class _PurposeScreenState extends State<PurposeScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '¿Para qué quieres\nusar UNIVOZ?',
                 style: TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF1A1A2E),
+                  color: Theme.of(context).colorScheme.onSurface,
                   height: 1.2,
                 ),
               ),
@@ -284,7 +262,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                         title: 'Comunicarme con alguien',
                         subtitle:
                             'Elige tu perfil y el de la persona con la que quieres hablar',
-                        textColor: const Color(0xFF1A1A2E),
+                        textColor: Theme.of(context).colorScheme.onSurface,
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
@@ -295,19 +273,19 @@ class _PurposeScreenState extends State<PurposeScreen> {
                         cardColor: const Color(0xFFF0C869),
                         title: 'Quiero aprender LSM',
                         subtitle: 'Aprender con avatar 3D a mi propio ritmo',
-                        textColor: const Color(0xFF1A1A2E),
+                        textColor: Theme.of(context).colorScheme.onSurface,
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
                         key: const ValueKey('purpose-traducir-senas'),
                         purpose: CommunicationPurpose.traducirSenas,
                         icon: Icons.camera_alt,
-                        iconBgColor: const Color(0xFF6C63FF),
+                        iconBgColor: Theme.of(context).colorScheme.primary,
                         cardColor: const Color(0xFFB8B2E8),
                         title: 'Traducir una seña',
                         subtitle:
                             'Abre la cámara y traduce lengua de señas a texto, sin armar una conversación',
-                        textColor: const Color(0xFF1A1A2E),
+                        textColor: Theme.of(context).colorScheme.onSurface,
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
@@ -319,7 +297,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                         title: 'Configuración',
                         subtitle: 'Agregar muestras, espejo y ajustes de '
                             'reconocimiento',
-                        textColor: const Color(0xFF1A1A2E),
+                        textColor: Theme.of(context).colorScheme.onSurface,
                       ),
                       if (_pidiendoPermisoCamara)
                         const Padding(

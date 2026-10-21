@@ -9,7 +9,7 @@ library avatar_vivo;
 import 'dart:async';
 
 import 'camera_bridge.dart';
-import 'sign_norm.dart' show calidadFrame;
+import 'frame_derivados.dart';
 
 /// Tope de envio al WebView. El canal de landmarks entrega ~30 FPS; el
 /// avatar queda libre para actualizarse a 60 FPS.
@@ -32,7 +32,7 @@ Map<String, dynamic> sourceMetaDeFrame(LandmarkFrame f,
     if (f.poseTimestampMs != null) 'pose_t': f.poseTimestampMs,
     if (f.handsTimestampMs != null) 'hands_t': f.handsTimestampMs,
     if (f.sourceSkewMs != null) 'source_skew_ms': f.sourceSkewMs,
-    if (f.signSpace(profileMeasures: perfilMedidas) case final ss?)
+    if (signSpaceCacheado(f, profileMeasures: perfilMedidas) case final ss?)
       'sign_space': ss.toJson(),
     // Cara (Holistic): el visor calcula cabeza y expresiones.
     if (f.face != null) 'face_pts': f.face,
@@ -116,9 +116,9 @@ class AlimentadorAvatar {
     // cuadro, hombros no visibles). En ese caso no se manda nada: WebView
     // conserva pose durante un gap breve y su watchdog vuelve a reposo si el
     // stream queda silencioso mas de 450 ms.
-    final v = f.normalize();
+    final v = normalizarCacheado(f);
     if (v == null) return;
-    final render = f.normalizeForRender() ?? v;
+    final render = normalizarRenderCacheado(f) ?? v;
 
     _ultimoEnvio = ahora;
     _enVuelo = true;
@@ -128,7 +128,7 @@ class AlimentadorAvatar {
         renderFrame: render,
         timestampMs: f.timestampMs,
         // Formula de la web (calcularCalidadFrameWeb); v ya es valido.
-        quality: calidadFrame(f.pose, f.poseMundo, f.left, f.right),
+        quality: calidadCacheada(f),
         sourceMeta: sourceMetaDeFrame(f, perfilMedidas: perfilMedidas?.call()),
       );
       if (_activo) framesEnviados++;

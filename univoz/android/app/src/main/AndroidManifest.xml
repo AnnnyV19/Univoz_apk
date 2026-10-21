@@ -16,14 +16,16 @@
          propio (el de su app de ejemplo); a este, el de univoz, se le
          quedó afuera al integrar. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Cualquier cámara (la frontal basta): "camera" a secas exige la
+         trasera y Play ocultaría la app en teléfonos que solo tienen frontal. -->
     <uses-feature
-        android:name="android.hardware.camera"
+        android:name="android.hardware.camera.any"
         android:required="true" />
     <uses-feature
         android:name="android.hardware.camera.front"
         android:required="false" />
     <application
-        android:label="univoz"
+        android:label="Univoz"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -68,6 +70,31 @@
              el servicio de reconocimiento de voz del sistema. -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- Requerido en Android 11+ para que url_launcher pueda abrir el
+             marcador y los mensajes desde el botón SOS (ver
+             lib/screens/sos.dart). -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="sms" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="sms" />
+        </intent>
+        <!-- Requerido en Android 11+ para que flutter_tts vea el motor de
+             texto a voz (SOS, "Leer en voz alta", resultado de Reconocer).
+             Sin esto la lectura puede fallar en el APK release. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 </manifest>

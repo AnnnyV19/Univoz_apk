@@ -1,7 +1,9 @@
 name: univoz
 description: "Aplicación de comunicación accesible UNIVOZ"
 publish_to: "none"
-version: 1.0.0+1
+# Debe coincidir con kVersionApp (lib/screens/traducir_senas_screen.dart):
+# lo vigila test/configuracion_test.dart.
+version: 0.9.0+9
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -36,6 +38,10 @@ dependencies:
   # Lee el QR de la otra persona. Usa MLKit en Android y AVFoundation en
   # iOS, todo en el dispositivo: no manda la imagen a ningun lado.
   mobile_scanner: ^7.4.2
+  # Abre el marcador (tel:) y los mensajes (sms:) desde el botón SOS
+  # (lib/screens/sos.dart). Nada se manda solo: la persona confirma en la
+  # app del teléfono.
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:
@@ -60,5 +66,8 @@ flutter:
     # Diccionario de señas y avatar 3D, de senas_core (copiados a
     # univoz/assets/ junto a los originales de senas_core/assets/).
     - assets/plantillas.json
-    - assets/avatar/
-    - assets/avatar_viewer/
+    # Solo el avatar y el visor que usa Android (el WebView carga index.html
+    # con todo inline; los .task viven en android/app/src/main/assets). La
+    # otra VRM y los .mjs/.task quedan solo en senas_core (web standalone).
+    - assets/avatar/univozM.vrm
+    - assets/avatar_viewer/index.html

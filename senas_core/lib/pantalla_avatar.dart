@@ -14,7 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import 'avatar_bridge.dart';
-import 'avatar_view.dart';
+import 'avatar_vista.dart';
 import 'dtw.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
@@ -204,7 +204,7 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
             flex: 3,
             child: Stack(
               children: [
-                Positioned.fill(child: AvatarViewport(bridge: _bridge)),
+                Positioned.fill(child: VistaAvatar(bridge: _bridge)),
                 if (_reproduciendo)
                   const Positioned(
                     top: 8,
@@ -241,7 +241,7 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
                 child: TextField(
                   controller: _controladorTexto,
                   decoration: const InputDecoration(
-                    labelText: 'Escribí una palabra',
+                    labelText: 'Escribe una palabra',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -281,9 +281,6 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
                   ],
                   selected: {_manos},
                   showSelectedIcon: false,
-                  style: SegmentedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                  ),
                   onSelectionChanged: (s) => _cambiarManos(s.first),
                 ),
               ),

@@ -1,10 +1,20 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Firma de release: android/key.properties (ver docs/RELEASE.md). No se versiona.
+val keyPropsFile = rootProject.file("key.properties")
+val keyProps = Properties().apply {
+    if (keyPropsFile.exists()) keyPropsFile.inputStream().use { load(it) }
+}
+
 android {
+    // El namespace (paquete de R/BuildConfig) se queda; el id que ve Android
+    // y Play es applicationId.
     namespace = "com.example.univoz"
     // Fijo en 36 (no flutter.compileSdkVersion, que aquí resuelve a 33):
     // share_plus y varias libs de androidx que llegan vía senas_core piden
@@ -18,22 +28,80 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.univoz"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // MediaPipe (reconocimiento de señas) requiere API 21+.
-        minSdk = maxOf(flutter.minSdkVersion, 21)
+        // Identidad de la app en el teléfono y en Play: no volver a cambiarla.
+        applicationId = "com.univoz.app"
+        // MediaPipe tasks-vision/tasks-core 1.0.0 declaran minSdk 24.
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
+        // Salen de pubspec.yaml (version: 0.9.0+9): Flutter los pasa aquí.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // Solo se crea si hay key.properties: debug y los tests no lo piden.
+        if (keyPropsFile.exists()) {
+            create("release") {
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+                storeFile = keyProps.getProperty("storeFile")?.let { file(it) }
+                storePassword = keyProps.getProperty("storePassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
+            // R8: reglas en proguard-rules.pro (MediaPipe, protobuf, plugins propios).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+}
+
+// senas_core declara sus assets (las dos VRM, los .task, el visor y las
+// plantillas) para su web standalone, y Flutter los vuelve a empaquetar aquí
+// como packages/senas_core/assets/...: ~68 MB duplicados. La app solo carga
+// las rutas propias (assets/avatar/univozM.vrm, assets/avatar_viewer/index.html,
+// assets/plantillas.json) y Kotlin lee los .task de src/main/assets, así que
+// esos duplicados se quedan fuera del APK. Si algún día senas_core carga un
+// asset con package:, quita esta exclusión.
+tasks.withType<Copy>().matching { it.name.startsWith("copyFlutterAssets") }
+    .configureEach { exclude("**/packages/senas_core/assets/**") }
+
+// Sin llave no hay release: falla antes de compilar y dice por qué. Solo se
+// evalúa cuando el grafo de tareas trae un empaquetado release, así que
+// `flutter build apk --debug`, `flutter run` y los tests no la necesitan.
+gradle.taskGraph.whenReady {
+    val pideRelease = allTasks.any {
+        it.project == project &&
+            Regex("^(assemble|bundle|package)Release$").containsMatchIn(it.name)
+    }
+    if (pideRelease && !keyPropsFile.exists()) {
+        throw GradleException("Falta android/key.properties: ver docs/RELEASE.md")
+    }
+    if (pideRelease) {
+        // Un campo vacío o mal escrito daba un error críptico de firma al final
+        // del build: se avisa aquí, con el nombre del campo.
+        val faltan = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+            .filter { keyProps.getProperty(it).isNullOrBlank() }
+        if (faltan.isNotEmpty()) {
+            throw GradleException(
+                "android/key.properties no tiene: ${faltan.joinToString(", ")}. " +
+                    "Ver docs/RELEASE.md, sección 2.",
+            )
+        }
+        val almacen = file(keyProps.getProperty("storeFile"))
+        if (!almacen.exists()) {
+            throw GradleException(
+                "storeFile de android/key.properties no existe: $almacen. " +
+                    "Ver docs/RELEASE.md, sección 2.",
+            )
         }
     }
 }

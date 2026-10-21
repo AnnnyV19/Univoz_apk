@@ -124,7 +124,8 @@ test('orientarMuneca converts CMC shape array before marcoMano', () => {
   const end = html.indexOf('    function ponerMunecaReposo(', start);
   assert.ok(start >= 0 && end > start, 'Missing wrist orientation block');
   const block = html.slice(start, end);
-  assert.match(block, /const cmc = vectorManoAAvatar\(puntos\[0\], base\);/);
+  // Admite vectores de trabajo opcionales (sin crear objetos por frame).
+  assert.match(block, /const cmc = vectorManoAAvatar\(puntos\[0\], base(, [\w.]+)*\);/);
   assert.match(block, /const objetivo = marcoMano\(dedos, ancho, cmc\);/);
   assert.doesNotMatch(block, /marcoMano\(dedos, ancho, puntos\[0\]\)/);
 });

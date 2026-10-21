@@ -13,7 +13,8 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'camera_bridge.dart';
-import 'sign_norm.dart' show calidadFrame;
+import 'frame_derivados.dart';
+import 'rotacion_sesiones.dart';
 
 const String kSessionSchema = 'SessionLogV1';
 
@@ -139,13 +140,59 @@ class SesionCaptura {
   }
 }
 
+/// Tope de un archivo de sesion. Medido en un S22+ una sesion pesa ~8 MB por
+/// minuto: sin tope, un solo archivo pasaria de los 50 MB de
+/// [kMaxBytesSesiones] y la poda (que nunca borra el abierto) no serviria.
+const int kMaxBytesArchivoSesion = 8 * 1024 * 1024;
+
 /// Sumidero que anexa las lineas a `<dir>/<id>.jsonl`.
-SumideroSesion sumideroArchivo(Directory dir) => (id, lineas) async {
-      await dir.create(recursive: true);
-      await File('${dir.path}/$id.jsonl')
-          .writeAsString('${lineas.join('\n')}\n', mode: FileMode.append, flush: true);
-      return true;
-    };
+///
+/// Si el archivo actual pasaria de [maxBytesArchivo], sigue en
+/// `<id>.part002.jsonl`, `.part003`... (el relleno a tres cifras mantiene el
+/// orden por nombre) y poda los archivos ya cerrados mas viejos hasta que el
+/// total quede dentro de [maxBytesTotal] y [maxArchivos]. Nunca borra el
+/// archivo abierto.
+SumideroSesion sumideroArchivo(
+  Directory dir, {
+  int maxBytesArchivo = kMaxBytesArchivoSesion,
+  int maxBytesTotal = kMaxBytesSesiones,
+  int maxArchivos = kMaxArchivosSesion,
+}) {
+  final partes = <String, int>{}; // id -> parte abierta (1 = sin sufijo)
+  final tamanos = <String, int>{}; // id -> bytes del archivo abierto
+  String nombre(String id, int parte) => parte <= 1
+      ? '$id.jsonl'
+      : '$id.part${parte.toString().padLeft(3, '0')}.jsonl';
+  return (id, lineas) async {
+    await dir.create(recursive: true);
+    final texto = '${lineas.join('\n')}\n';
+    final bytes = utf8.encode(texto).length;
+    var parte = partes[id] ?? 1;
+    var usado = tamanos[id];
+    if (usado == null) {
+      final f = File('${dir.path}/${nombre(id, parte)}');
+      usado = await f.exists() ? await f.length() : 0;
+    }
+    var roto = false;
+    // Un lote suelto mayor que el tope va entero a un archivo propio.
+    if (usado > 0 && usado + bytes > maxBytesArchivo) {
+      parte++;
+      usado = 0;
+      roto = true;
+    }
+    await File('${dir.path}/${nombre(id, parte)}')
+        .writeAsString(texto, mode: FileMode.append, flush: true);
+    partes[id] = parte;
+    tamanos[id] = usado + bytes;
+    if (roto || tamanos[id]! > maxBytesTotal) {
+      await podarSesiones(dir,
+          maxArchivos: maxArchivos,
+          maxBytes: maxBytesTotal,
+          conservar: {nombre(id, parte)});
+    }
+    return true;
+  };
+}
 
 double? _r3(Object? v) =>
     v is num && v.isFinite ? (v * 1e3).round() / 1e3 : null;
@@ -172,8 +219,8 @@ List<List<double>>? _puntosCanal(Object? raw, int ancho) {
 /// que tools/rig-tests/paridad/replay_sesion.mjs reproduzca la captura del
 /// telefono y la compare con la web.
 Map<String, dynamic> frameDeSesion(LandmarkFrame f, {int? id}) {
-  final vec = f.normalize();
-  final ss = f.signSpace();
+  final vec = normalizarCacheado(f);
+  final ss = signSpaceCacheado(f);
   final entrada = f.handsIn;
   final track = f.track;
   return {
@@ -235,7 +282,7 @@ Map<String, dynamic> frameDeSesion(LandmarkFrame f, {int? id}) {
           },
     // Calidad web (calcularCalidadFrameWeb): 0 si el frame no da vector.
     'quality':
-        vec == null ? 0.0 : calidadFrame(f.pose, f.poseMundo, f.left, f.right),
+        calidadCacheada(f),
     'errors': [for (final e in f.errors) e['code']],
   };
 }

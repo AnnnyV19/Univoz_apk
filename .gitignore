@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 .env
 build/
+
+# Firma de release (ver docs/RELEASE.md): nunca se versiona.
+key.properties
+*.jks
+*.keystore

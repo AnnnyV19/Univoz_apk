@@ -116,8 +116,13 @@ void main() {
     expect(html, contains("void cerrarSesionAutomatica('camera_stop')"));
     expect(html, contains("fetch('/api/sesiones/'"));
     expect(html, contains('window.borrarMisDatos'));
-    // nunca video ni imagenes en la sesion
-    expect(html, isNot(contains('toDataURL')));
+    // nunca video ni imagenes en la sesion (sin contar el vendor de three.js,
+    // que trae toDataURL para sus texturas y no toca la camara)
+    final propio = html.replaceAll(
+        RegExp(r'<!-- inicio univoz_vendor\.min\.js -->.*?'
+            r'<!-- fin univoz_vendor\.min\.js -->', dotAll: true),
+        '');
+    expect(propio, isNot(contains('toDataURL')));
   });
 
   test('cabeza usa la proporcion real de la imagen en Android', () {

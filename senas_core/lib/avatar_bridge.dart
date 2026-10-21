@@ -23,11 +23,13 @@
 /// anclas que usa el IK del lado JavaScript, no hace falta mandarlas.
 library avatar_bridge;
 
+import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show ValueNotifier, debugPrint, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart' show Color;
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show ByteData, rootBundle;
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'motion_contract.dart';
@@ -90,6 +92,60 @@ MovimientoVisor? decodificarMovimiento(String mensaje) {
   }
 }
 
+/// Llamada JS defensiva: si el visor todavia no definio la funcion (pagina a
+/// medio cargar, recarga en curso) no pasa nada. Sin esto Android devuelve
+/// un "Script error." saneado que el visor pintaba como fallo fatal.
+String llamadaSegura(String funcion, [String argumentos = '']) =>
+    'window.$funcion && window.$funcion($argumentos)';
+
+/// Lo que Dart pidio al visor mientras no estaba listo. Guarda solo el
+/// ultimo valor de vista y manos y lo reaplica cuando carga el avatar; los
+/// frames en vivo antes de tiempo se descartan (llega otro en 33 ms).
+/// Es puro (sin WebView) para poder probarlo.
+class ColaPuenteAvatar {
+  bool _listo = false;
+  String? _vista;
+  String? _manos;
+
+  bool get listo => _listo;
+  bool get aceptaFrames => _listo;
+
+  /// JS a correr ya, o null si hay que esperar a js_listo.
+  String? vista({required bool espejo}) {
+    _vista = llamadaSegura(
+        'configurarVista', espejo ? "'espejo'" : "'interlocutor'");
+    return _listo ? _vista : null;
+  }
+
+  String? manos({required bool izquierda, required bool derecha}) {
+    _manos = llamadaSegura('configurarManos', '$izquierda, $derecha');
+    return _listo ? _manos : null;
+  }
+
+  void marcarListo() => _listo = true;
+
+  /// Recarga de la pagina: se vuelve a esperar js_listo sin perder valores.
+  void reiniciar() => _listo = false;
+
+  /// Lo pedido antes de js_listo (el mas nuevo de cada uno), en orden.
+  List<String> llamadasAlCargar() =>
+      [if (_vista != null) _vista!, if (_manos != null) _manos!];
+}
+
+/// Estado visible del avatar para la UI (avatar_vista.dart).
+enum EstadoAvatar { cargando, listo, error }
+
+/// Motivo corto para la persona; el detalle tecnico va a onErrorVisor.
+String motivoErrorAvatar(String detalle) {
+  final d = detalle.toLowerCase();
+  if (d.contains('tiempo_agotado')) {
+    return 'El avatar tardó demasiado en cargar.';
+  }
+  // El visor va completo dentro de la app (sin CDN): ningun fallo es de red,
+  // asi que no se le pide a la persona que revise su internet.
+  return 'Ocurrió un problema al preparar el avatar. Toca Reintentar.';
+}
+
 class AvatarBridge {
   late final WebViewController? controller;
 
@@ -115,11 +171,42 @@ class AvatarBridge {
   void Function(MovimientoVisor)? onMovimiento;
   bool _movimiento = false;
   RigCalibration _calibracion = const RigCalibration();
-  bool _jsListo = false;
+  final _cola = ColaPuenteAvatar();
+  bool get _jsListo => _cola.listo;
   bool _diagnostico = false;
   bool _calibracionPendiente = false;
 
-  AvatarBridge() {
+  /// cargando hasta que el visor confirma el VRM en escena (avatar_listo);
+  /// error solo en fallos reales (pagina, modelo). En web el iframe maneja
+  /// su propio aviso, asi que arranca listo.
+  final ValueNotifier<EstadoAvatar> estado = ValueNotifier<EstadoAvatar>(
+      kIsWeb ? EstadoAvatar.listo : EstadoAvatar.cargando);
+  String? _motivoError;
+  bool _cerrado = false;
+  int _recargas = 0;
+
+  /// Motivo corto del ultimo error, para mostrar debajo del titulo.
+  String? get mensajeError => _motivoError;
+
+  /// Errores que NO tumban el avatar (recurso secundario, excepcion JS ya
+  /// arrancado). Las pantallas lo guardan como evento de sesion.
+  void Function(String)? onErrorVisor;
+
+  /// Sin WebView (pruebas de widget y de la cola). [ejecutar] recibe el JS
+  /// que iria al visor y [modelo] reemplaza la lectura del .vrm.
+  @visibleForTesting
+  AvatarBridge.sinVisor({
+    Future<void> Function(String js)? ejecutar,
+    Future<ByteData> Function()? modelo,
+  })  : _ejecutarPrueba = ejecutar,
+        _modeloPrueba = modelo {
+    controller = null;
+    _armarLimiteCarga();
+  }
+
+  AvatarBridge()
+      : _ejecutarPrueba = null,
+        _modeloPrueba = null {
     if (kIsWeb) {
       controller = null;
       return;
@@ -127,68 +214,201 @@ class AvatarBridge {
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0x00000000))
-      ..addJavaScriptChannel(
-        'SenasChannel',
-        onMessageReceived: (msg) {
-          if (msg.message == 'fin') {
-            onTerminado?.call();
-          } else if (msg.message.startsWith('pose:')) {
-            onPoseCapturada?.call(msg.message.substring(5));
-          } else if (msg.message.startsWith('diagnostic_report:')) {
-            onDiagnosticReport?.call(msg.message.substring(18));
-          } else if (msg.message.startsWith('thumb_calibration:')) {
-            try {
-              final thumbs = jsonDecode(msg.message.substring(18));
-              if (thumbs is Map) {
-                final left = (thumbs['left'] as Map?)?.cast<String, dynamic>();
-                final right =
-                    (thumbs['right'] as Map?)?.cast<String, dynamic>();
-                if (left != null && right != null) {
-                  _calibracion = _calibracion.copyWith(
-                    leftThumb: ThumbCalibration.fromJson(left),
-                    rightThumb: ThumbCalibration.fromJson(right),
-                  );
-                  onCalibrationChanged?.call(_calibracion);
-                }
-              }
-            } catch (_) {
-              // Mensaje de diagnóstico corrupto no debe detener avatar.
-            }
-          } else if (msg.message.startsWith('motion:')) {
-            final m = decodificarMovimiento(msg.message);
-            if (m != null) onMovimiento?.call(m);
-          } else if (msg.message.startsWith('perf:')) {
-            final perf = decodificarPerf(msg.message);
-            if (perf != null) onPerf?.call(perf);
-          } else if (msg.message == 'js_listo') {
-            // La pagina ya importo three.js/three-vrm y esta lista para
-            // recibir el modelo. Se lo mandamos nosotros en vez de que lo
-            // pida por fetch(): mas confiable dentro de un WebView cargado
-            // con loadFlutterAsset (ver la nota grande en index.html).
-            _jsListo = true;
-            _cargarAvatar();
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) => _alPaginaIniciada(),
+        onWebResourceError: (error) {
+          final detalle = '${error.errorCode} ${error.description}'
+              '${error.url == null ? '' : ' ${error.url}'}';
+          // Solo la pagina principal es fatal; un recurso secundario roto
+          // (una fuente, un modelo opcional) no debe tapar el avatar.
+          if (error.isForMainFrame ?? true) {
+            _fallar(detalle);
+          } else {
+            _avisarErrorVisor('recurso: $detalle');
           }
         },
+      ))
+      ..addJavaScriptChannel(
+        'SenasChannel',
+        onMessageReceived: (msg) => _alMensaje(msg.message),
       )
       ..loadFlutterAsset('assets/avatar_viewer/index.html');
+    _armarLimiteCarga();
+  }
+
+  final Future<void> Function(String js)? _ejecutarPrueba;
+  final Future<ByteData> Function()? _modeloPrueba;
+
+  /// Si el visor no confirma ni falla en este tiempo, se da por caido (red
+  /// colgada, error de arranque saneado). Generoso: el VRM viaja como ~20 MB
+  /// de base64 por runJavaScript y un telefono de gama baja tarda.
+  static const limiteCarga = Duration(seconds: 45);
+  Timer? _limite;
+
+  /// Entre "Reintentar" y el onPageStarted de la recarga, los mensajes de
+  /// carga que lleguen son de la pagina vieja.
+  bool _esperandoPagina = false;
+
+  @visibleForTesting
+  void simularMensaje(String m) => _alMensaje(m);
+
+  @visibleForTesting
+  void simularPaginaIniciada() => _alPaginaIniciada();
+
+  void _alPaginaIniciada() => _esperandoPagina = false;
+
+  void _alMensaje(String m) {
+    if (m == 'fin') {
+      onTerminado?.call();
+    } else if (m.startsWith('pose:')) {
+      onPoseCapturada?.call(m.substring(5));
+    } else if (m.startsWith('diagnostic_report:')) {
+      onDiagnosticReport?.call(m.substring(18));
+    } else if (m.startsWith('thumb_calibration:')) {
+      try {
+        final thumbs = jsonDecode(m.substring(18));
+        if (thumbs is Map) {
+          final left = (thumbs['left'] as Map?)?.cast<String, dynamic>();
+          final right = (thumbs['right'] as Map?)?.cast<String, dynamic>();
+          if (left != null && right != null) {
+            _calibracion = _calibracion.copyWith(
+              leftThumb: ThumbCalibration.fromJson(left),
+              rightThumb: ThumbCalibration.fromJson(right),
+            );
+            onCalibrationChanged?.call(_calibracion);
+          }
+        }
+      } catch (_) {
+        // Mensaje de diagnóstico corrupto no debe detener avatar.
+      }
+    } else if (m.startsWith('motion:')) {
+      final mov = decodificarMovimiento(m);
+      if (mov != null) onMovimiento?.call(mov);
+    } else if (m.startsWith('perf:')) {
+      final perf = decodificarPerf(m);
+      if (perf != null) onPerf?.call(perf);
+    } else if (_esperandoPagina &&
+        (m == 'js_listo' ||
+            m == 'avatar_listo' ||
+            m.startsWith('avatar_error:'))) {
+      // Restos de la pagina anterior a "Reintentar": la nueva todavia no
+      // arranco (onPageStarted), asi que no son de esta carga.
+      return;
+    } else if (m == 'js_listo') {
+      // La pagina ya importo three.js/three-vrm y esta lista para
+      // recibir el modelo. Se lo mandamos nosotros en vez de que lo
+      // pida por fetch(): mas confiable dentro de un WebView cargado
+      // con loadFlutterAsset (ver la nota grande en index.html).
+      _cola.marcarListo();
+      _cargarAvatar();
+    } else if (m == 'avatar_listo') {
+      if (!_jsListo) return;
+      _motivoError = null;
+      _ponerEstado(EstadoAvatar.listo);
+    } else if (m.startsWith('avatar_error:')) {
+      _fallar(m.substring(13));
+    } else if (m.startsWith('js_error:')) {
+      _avisarErrorVisor(m.substring(9));
+    }
+  }
+
+  void _armarLimiteCarga() {
+    _limite?.cancel();
+    _limite = Timer(limiteCarga, () {
+      if (!_cerrado && estado.value == EstadoAvatar.cargando) {
+        _fallar('tiempo_agotado');
+      }
+    });
+  }
+
+  Future<void> _js(String codigo) async {
+    final webView = controller;
+    if (webView != null) {
+      await webView.runJavaScript(codigo);
+    } else {
+      await _ejecutarPrueba?.call(codigo);
+    }
   }
 
   Future<void> _cargarAvatar() async {
-    final webView = controller;
-    if (webView == null) return;
-    final datos = await rootBundle.load(_kRutaAvatar);
-    final b64 = base64Encode(
-        datos.buffer.asUint8List(datos.offsetInBytes, datos.lengthInBytes));
-    await webView.runJavaScript("window.cargarAvatarBase64('$b64')");
-    await webView.runJavaScript(
-        "window.configurarRig('${_escapar(jsonEncode(_calibracion.toJson()))}')");
-    await webView.runJavaScript('window.configurarDiagnostico($_diagnostico)');
-    await webView.runJavaScript('window.configurarSesion($_sesion)');
-    await webView.runJavaScript('window.configurarMovimiento($_movimiento)');
-    if (_calibracionPendiente) {
-      _calibracionPendiente = false;
-      await webView.runJavaScript('window.iniciarCalibracionPulgares()');
+    if (controller == null && _ejecutarPrueba == null) return;
+    final recarga = _recargas;
+    // Si se pidio "Reintentar" a mitad de la carga, la pagina nueva manda su
+    // propio js_listo: esta carga se abandona para no meter dos VRM.
+    bool vigente() => recarga == _recargas && !_cerrado;
+    try {
+      final modelo = _modeloPrueba;
+      final datos =
+          await (modelo != null ? modelo() : rootBundle.load(_kRutaAvatar));
+      if (!vigente()) return;
+      final b64 = base64Encode(
+          datos.buffer.asUint8List(datos.offsetInBytes, datos.lengthInBytes));
+      await _js(llamadaSegura('cargarAvatarBase64', "'$b64'"));
+      // Cada valor se lee al momento de mandarlo: un configurarX que llegue
+      // durante la carga no queda pisado por uno viejo.
+      final llamadas = <String Function()>[
+        () => llamadaSegura('configurarRig',
+            "'${_escapar(jsonEncode(_calibracion.toJson()))}'"),
+        () => llamadaSegura('configurarDiagnostico', '$_diagnostico'),
+        () => llamadaSegura('configurarSesion', '$_sesion'),
+        () => llamadaSegura('configurarMovimiento', '$_movimiento'),
+      ];
+      for (final llamada in llamadas) {
+        if (!vigente()) return;
+        await _js(llamada());
+      }
+      // Vista y manos pedidas antes de que el visor estuviera listo.
+      if (!vigente()) return;
+      for (var i = 0; i < _cola.llamadasAlCargar().length; i++) {
+        await _js(_cola.llamadasAlCargar()[i]);
+      }
+      if (!vigente()) return;
+      if (_calibracionPendiente) {
+        _calibracionPendiente = false;
+        await _js(llamadaSegura('iniciarCalibracionPulgares'));
+      }
+    } catch (e) {
+      if (vigente()) _fallar('carga: $e');
     }
+  }
+
+  void _fallar(String detalle) {
+    _avisarErrorVisor(detalle);
+    _motivoError = motivoErrorAvatar(detalle);
+    _ponerEstado(EstadoAvatar.error);
+  }
+
+  // Los mensajes del WebView y la carga async pueden llegar despues de
+  // dispose(): un ValueNotifier cerrado no se toca.
+  void _ponerEstado(EstadoAvatar nuevo) {
+    if (_cerrado) return;
+    if (nuevo != EstadoAvatar.cargando) _limite?.cancel();
+    estado.value = nuevo;
+  }
+
+  void _avisarErrorVisor(String detalle) {
+    final cb = onErrorVisor;
+    if (cb != null) {
+      cb(detalle);
+    } else {
+      debugPrint('visor avatar: $detalle');
+    }
+  }
+
+  /// Vuelve a cargar el visor desde cero (boton "Reintentar").
+  Future<void> reintentar() async {
+    if (_cerrado) return;
+    _motivoError = null;
+    _cola.reiniciar();
+    _recargas++;
+    if (kIsWeb) {
+      _ponerEstado(EstadoAvatar.listo);
+      return;
+    }
+    _esperandoPagina = controller != null || _ejecutarPrueba != null;
+    _ponerEstado(EstadoAvatar.cargando);
+    _armarLimiteCarga();
+    await controller?.reload();
   }
 
   /// Configura adaptación del espacio normalizado al esqueleto VRM.
@@ -204,22 +424,24 @@ class AvatarBridge {
     if (!_jsListo) return;
     final webView = controller;
     if (webView == null) return;
-    await webView.runJavaScript(
-        "window.configurarRig('${_escapar(jsonEncode(calibracion.toJson()))}')");
+    await webView.runJavaScript(llamadaSegura(
+        'configurarRig', "'${_escapar(jsonEncode(calibracion.toJson()))}'"));
   }
 
   /// Con movimiento activo el visor manda quieto/movimiento por frame.
   Future<void> configurarMovimiento(bool activo) async {
     _movimiento = activo;
     if (kIsWeb || !_jsListo) return;
-    await controller?.runJavaScript('window.configurarMovimiento($activo)');
+    await controller
+        ?.runJavaScript(llamadaSegura('configurarMovimiento', '$activo'));
   }
 
   /// Con sesion activa el visor manda perf cada segundo (onPerf).
   Future<void> configurarSesion(bool activa) async {
     _sesion = activa;
     if (kIsWeb || !_jsListo) return;
-    await controller?.runJavaScript('window.configurarSesion($activa)');
+    await controller
+        ?.runJavaScript(llamadaSegura('configurarSesion', '$activa'));
   }
 
   Future<void> configurarDiagnostico(bool activo) async {
@@ -227,7 +449,8 @@ class AvatarBridge {
     if (!_jsListo) return;
     final webView = controller;
     if (webView == null) return;
-    await webView.runJavaScript('window.configurarDiagnostico($activo)');
+    await webView
+        .runJavaScript(llamadaSegura('configurarDiagnostico', '$activo'));
   }
 
   Future<void> iniciarCalibracionPulgares() async {
@@ -237,8 +460,8 @@ class AvatarBridge {
     final webView = controller;
     if (webView == null) return;
     _calibracionPendiente = false;
-    await webView.runJavaScript('window.configurarDiagnostico(true)');
-    await webView.runJavaScript('window.iniciarCalibracionPulgares()');
+    await webView.runJavaScript(llamadaSegura('configurarDiagnostico', 'true'));
+    await webView.runJavaScript(llamadaSegura('iniciarCalibracionPulgares'));
   }
 
   /// Elige que brazos anima el avatar. Muchas senas de LSM son de una sola
@@ -256,9 +479,10 @@ class AvatarBridge {
       });
       return;
     }
-    final webView = controller;
-    if (webView == null) return;
-    await webView.runJavaScript('window.configurarManos($izquierda, $derecha)');
+    // Antes de js_listo solo se guarda: _cargarAvatar lo reaplica.
+    final js = _cola.manos(izquierda: izquierda, derecha: derecha);
+    if (js == null) return;
+    await _js(js);
   }
 
   /// Vista del avatar en vivo. `espejo: true` lo mueve como tu reflejo (para
@@ -270,9 +494,9 @@ class AvatarBridge {
       postAvatarCommand({'action': 'configurarVista', 'vista': vista});
       return;
     }
-    final webView = controller;
-    if (webView == null) return;
-    await webView.runJavaScript("window.configurarVista('$vista')");
+    final js = _cola.vista(espejo: espejo);
+    if (js == null) return;
+    await _js(js);
   }
 
   /// Reproduce una secuencia completa (lista de frames de 152 dimensiones
@@ -303,9 +527,8 @@ class AvatarBridge {
     final contrato = MotionSequenceV2.fromFrames(seq, fps: fps);
     final json = jsonEncode(seq);
     final pistaJs = pista == null ? 'null' : "'${_escapar(jsonEncode(pista))}'";
-    await webView.runJavaScript(
-        "window.reproducirSecuencia('${_escapar(json)}',$fps,'$kNormVersion',"
-        '$pistaJs)');
+    await webView.runJavaScript(llamadaSegura('reproducirSecuencia',
+        "'${_escapar(json)}',$fps,'$kNormVersion',$pistaJs"));
     // Validación ocurre antes de cruzar WebView; evita mezclar formatos legacy.
     assert(contrato.tFrames == kTFrames &&
         contrato.frames.first.length == kFrameDim);
@@ -326,15 +549,18 @@ class AvatarBridge {
   }) async {
     final webView = controller;
     if (webView == null) return;
+    // Antes de js_listo aplicarFrameVivo no existe: el frame se descarta.
+    if (!_cola.aceptaFrames) return;
     MotionFrameV2(v);
     if (renderFrame != null) MotionFrameV2(renderFrame);
     final timestamp = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
     final calidad = quality.clamp(0.0, 1.0);
     final renderJson = jsonEncode(renderFrame ?? v);
     final metaJson = jsonEncode(sourceMeta ?? const <String, dynamic>{});
-    await webView.runJavaScript(
-        "window.aplicarFrameVivo('${jsonEncode(v)}',$timestamp,$calidad,"
-        "'${_escapar(renderJson)}','${_escapar(metaJson)}')");
+    await webView.runJavaScript(llamadaSegura(
+        'aplicarFrameVivo',
+        "'${jsonEncode(v)}',$timestamp,$calidad,"
+            "'${_escapar(renderJson)}','${_escapar(metaJson)}'"));
   }
 
   // Los frames son puramente numericos (nunca llevan comillas ni barras),
@@ -350,5 +576,11 @@ class AvatarBridge {
     onCalibrationChanged = null;
     onPerf = null;
     onMovimiento = null;
+    onErrorVisor = null;
+    _limite?.cancel();
+    if (!_cerrado) {
+      _cerrado = true;
+      estado.dispose();
+    }
   }
 }

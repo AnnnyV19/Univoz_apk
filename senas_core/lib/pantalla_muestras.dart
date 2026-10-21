@@ -47,8 +47,7 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
       if (!mounted) return;
       await Share.shareXFiles(
         [XFile(archivo.path)],
-        text: 'Muestras de señas UNIVOZ (${_almacen.total}) — '
-            'importar con: python tools/importar_muestras.py --archivo <este archivo>',
+        text: 'Muestras de señas Univoz (${_almacen.total})',
       );
     } catch (e) {
       if (!mounted) return;
@@ -95,7 +94,7 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
                 ? const SizedBox(
                     width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.ios_share),
-            tooltip: 'Exportar para subir a la base',
+            tooltip: 'Guardar las muestras en un archivo',
           ),
         ],
       ),
@@ -129,7 +128,7 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Andá a "Agregar muestras", escribí la palabra y grabá la seña varias veces.',
+                'Ve a "Agregar muestras", escribe la palabra y graba la seña varias veces.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
               ),
@@ -161,10 +160,9 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Text(
-            'Para subirlas a la base usá "Sincronizar" en el menú — es directo, '
-            'sin pasar por la PC. El ícono de compartir de acá arriba es la vía '
-            'alternativa: exporta un archivo para importar con '
-            'tools/importar_muestras.py, útil si no hay internet en el teléfono. '
+            'Para subirlas a la base usa "Sincronizar" en el menú. El ícono de '
+            'compartir de aquí arriba es una vía alternativa: guarda un archivo '
+            'con tus muestras, útil si no hay internet en el teléfono. '
             'Las muestras funcionan en el teléfono aunque no las subas.',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
@@ -217,6 +215,7 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
           : _almacen.espanolDe(gloss) ?? ''),
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline),
+        tooltip: 'Borrar las muestras de $gloss',
         onPressed: () => _confirmarBorrarGlosa(gloss, cuantas),
       ),
       children: [
@@ -234,6 +233,7 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
                 '${m.subida ? " · en la base" : ""}'),
             trailing: IconButton(
               icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Borrar esta muestra',
               onPressed: () => _almacen.borrar(m.id),
             ),
           ),

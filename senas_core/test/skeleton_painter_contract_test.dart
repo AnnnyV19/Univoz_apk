@@ -36,20 +36,35 @@ void main() {
         source.substring(source.indexOf('class _PantallaDeTranslacionState'));
     // Avatar con los frames fusionados, igual que Espejo.
     expect(traducir, contains('AlimentadorAvatar('));
-    expect(traducir, contains('_ctrl.camara.frames.listen(_alimentador.alFrame)'));
+    expect(traducir, contains('.listen(_alimentador.alFrame, onError: _errorStream)'));
     // Inicio y fin de la seña con el quieto/movimiento del visor.
     expect(traducir, contains('configurarMovimiento(true)'));
     expect(traducir, contains('onMovimiento'));
-    expect(traducir, contains('_detector.alimentarMovimiento('));
-    // WebView y Texture lado a lado: encima, el WebView tapa la cámara.
-    expect(traducir, contains('WebViewWidget('));
-    final vista = traducir.substring(traducir.indexOf('Widget _preview()'));
-    expect(vista.indexOf('Row('), lessThan(vista.indexOf('WebViewWidget(')));
+    expect(traducir, contains('_fuente.alMovimientoVisor('));
+    expect(traducir, contains('_bridge.estado.addListener(_alCambiarEstadoVisor)'));
+    // WebView y Texture lado a lado: encima, el WebView tapa la cámara. El
+    // acomodo vive en DisposicionReconocer: filas y columnas, ningun Stack
+    // que encime la camara sobre el avatar.
+    expect(traducir, contains('VistaAvatar('));
+    expect(traducir, contains('DisposicionReconocer('));
+    final disposicion =
+        File('lib/reconocer/disposicion_reconocer.dart').readAsStringSync();
+    expect(disposicion, contains('LayoutBuilder('));
+    expect(disposicion, isNot(contains('Stack(')));
+    expect(disposicion, isNot(contains('Positioned(')));
+    final contenido = traducir.substring(
+        traducir.indexOf('Widget _contenido('),
+        traducir.indexOf('Widget _errorCamara('));
+    expect(contenido, isNot(contains('Stack(')));
     // Rendimiento y fluidez de Android a la sesión.
     expect(traducir, contains("_ctrl.sesion?.evento('perf', perf)"));
     // Sin pose usable el visor no recibe frames ni manda motion: el preview
     // sin mano o sin pose cuenta como quieto para no colgar la grabación.
-    expect(traducir, contains('!f.tieneAlgunaMano || f.normalize() == null'));
+    expect(traducir, contains('_fuente.alPreviewSinMano(f)'));
+    final controlador =
+        File('lib/controlador_captura.dart').readAsStringSync();
+    expect(controlador,
+        contains('!f.tieneAlgunaMano || normalizarCacheado(f) == null'));
   });
 
   test('Traducir reconoce con un solo DTW y corta la sena con pre-roll y cola',
@@ -65,6 +80,13 @@ void main() {
     expect(traducir, contains('hastaMs:'));
     expect(traducir, contains('_detector.ultimoMovimientoMs'));
     expect(traducir, contains("evento('reconocimiento'"));
-    expect(traducir, contains('Seña muy corta'));
+    expect(traducir, contains("pistaParaResultado('muy_corta')"));
+    // El DTW se mide y queda en el evento de la sesion.
+    expect(traducir, contains("'dtw_ms'"));
+    expect(traducir, isNot(contains('exportar_paquete')));
+    // Al limpiar por intento invalido, una respuesta tardia del backend no
+    // repuebla; la pista se quita al cambiar de modo y al empezar otra sena.
+    expect(traducir, contains('_consultaBackend++;'));
+    expect('_pista.limpiar()'.allMatches(traducir).length, greaterThanOrEqualTo(3));
   });
 }

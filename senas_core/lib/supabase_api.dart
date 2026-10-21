@@ -12,6 +12,7 @@
 library supabase_api;
 
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha1;
@@ -19,15 +20,26 @@ import 'package:http/http.dart' as http;
 
 import 'config_supabase.dart';
 import 'motion_contract.dart';
+import 'red.dart';
 import 'sign_norm.dart'
     show kNormVersion, kTFrames, kFrameDim, packF16, unpackF16;
 
-class SupabaseError implements Exception {
+class SupabaseError implements Exception, ErrorHumano {
+  /// Texto para el equipo (puede nombrar archivos SQL o configuracion).
   final String mensaje;
-  SupabaseError(this.mensaje);
+  final String? _humano;
+
+  /// [humano] es lo que ve una persona normal; sin el, [mensaje] ya lo es.
+  SupabaseError(this.mensaje, {String? humano}) : _humano = humano;
+
+  @override
+  String get mensajeHumano => _humano ?? mensaje;
+
   @override
   String toString() => mensaje;
 }
+
+const String _kNoDisponible = 'Esto no está disponible por ahora.';
 
 /// Una plantilla bajada de la base, lista para el DtwClassifier.
 class PlantillaRemota {
@@ -102,6 +114,19 @@ String signerUuid(String nombre) {
   return '${hex(0, 4)}-${hex(4, 6)}-${hex(6, 8)}-${hex(8, 10)}-${hex(10, 16)}';
 }
 
+/// UUID v4 aleatorio (RFC 4122) para ids que genera el cliente.
+String uuidV4([Random? azar]) {
+  final r = azar ?? Random.secure();
+  final b = List<int>.generate(16, (_) => r.nextInt(256));
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variante RFC 4122
+  String hex(int desde, int hasta) => b
+      .sublist(desde, hasta)
+      .map((x) => x.toRadixString(16).padLeft(2, '0'))
+      .join();
+  return '${hex(0, 4)}-${hex(4, 6)}-${hex(6, 8)}-${hex(8, 10)}-${hex(10, 16)}';
+}
+
 /// Postgres representa BYTEA en texto como \x seguido de hexadecimal. Es el
 /// formato que PostgREST devuelve al leer y acepta al escribir.
 String _aHexPostgres(Uint8List bytes) {
@@ -143,15 +168,39 @@ class SupabaseApi {
       Uri.parse('$url/rest/v1/$recurso').replace(queryParameters: params);
 
   Never _fallo(String que, http.Response r) {
-    final detalle = switch (r.statusCode) {
-      401 || 403 => 'Revisa permisos y políticas RLS.',
-      408 || 429 => 'Reintenta en unos segundos.',
-      >= 500 => 'El servicio no está disponible; reintenta más tarde.',
-      _ => 'Revisa conexión y configuración.',
+    // Nunca se muestra el cuerpo de PostgREST: puede traer SQL, detalles de
+    // politicas o datos internos. Solo el mensaje humano segun el estado.
+    final fallo = falloDeRespuesta(r);
+    final humano = switch (r.statusCode) {
+      401 || 403 || 408 || 429 || >= 500 => fallo.mensaje,
+      _ => '$que no se pudo completar. Revisa tu conexión e inténtalo de '
+          'nuevo.',
     };
-    // Never surface PostgREST body: it may contain SQL, policy details or
-    // internal infrastructure information.
-    throw SupabaseError('$que no se pudo completar. $detalle');
+    throw SupabaseError('$humano (${fallo.tecnico})', humano: humano);
+  }
+
+  /// GET con tiempo maximo y un reintento; los fallos de red salen como
+  /// SupabaseError con mensaje humano.
+  Future<http.Response> _get(Uri uri,
+      {Duration timeout = kTimeoutRed}) async {
+    try {
+      return await redGet(_http, uri, headers: _cabeceras, timeout: timeout);
+    } on FalloRed catch (e) {
+      throw SupabaseError('${e.mensaje} (${e.tecnico})', humano: e.mensaje);
+    }
+  }
+
+  /// POST con tiempo maximo y SIN reintento.
+  Future<http.Response> _post(Uri uri,
+      {Map<String, String>? cabeceras,
+      Object? body,
+      Duration timeout = kTimeoutRed}) async {
+    try {
+      return await redPost(_http, uri,
+          headers: cabeceras ?? _cabeceras, body: body, timeout: timeout);
+    } on FalloRed catch (e) {
+      throw SupabaseError('${e.mensaje} (${e.tecnico})', humano: e.mensaje);
+    }
   }
 
   /// Pedido minimo para saber si hay red, si la URL/clave sirven y si las
@@ -159,16 +208,17 @@ class SupabaseApi {
   Future<String> probar() async {
     if (!haySupabaseConfigurado) {
       throw SupabaseError(
-          'Falta cargar la URL y la clave en config_supabase.dart.');
+          'Falta cargar la URL y la clave en config_supabase.dart.',
+          humano: _kNoDisponible);
     }
-    final r = await _http.get(
+    final r = await _get(
       _uri('v_dtw_aprobadas', {'select': 'gloss', 'limit': '1'}),
-      headers: _cabeceras,
     );
     if (r.statusCode == 404) {
       throw SupabaseError(
-          'No existe la vista v_dtw_aprobadas. Corré sql/002_app_acceso.sql '
-          'en el SQL Editor de Supabase.');
+          'No existe la vista v_dtw_aprobadas. Corre sql/002_app_acceso.sql '
+          'en el SQL Editor de Supabase.',
+          humano: _kNoDisponible);
     }
     if (r.statusCode >= 400) _fallo('La conexión', r);
     return 'Conexión OK';
@@ -177,9 +227,8 @@ class SupabaseApi {
   /// Busca la sena por glosa; si no existe la crea. Devuelve su id.
   Future<String> _idDeSena(
       String gloss, String espanol, String? categoria) async {
-    final existentes = await _http.get(
+    final existentes = await _get(
       _uri('signs', {'gloss': 'eq.$gloss', 'select': 'id', 'limit': '1'}),
-      headers: _cabeceras,
     );
     if (existentes.statusCode >= 400) _fallo('Buscar la seña', existentes);
 
@@ -188,9 +237,9 @@ class SupabaseApi {
       return (filas.first as Map<String, dynamic>)['id'] as String;
     }
 
-    final creada = await _http.post(
+    final creada = await _post(
       _uri('signs'),
-      headers: {..._cabeceras, 'Prefer': 'return=representation'},
+      cabeceras: {..._cabeceras, 'Prefer': 'return=representation'},
       body: jsonEncode({
         'gloss': gloss,
         'espanol': espanol,
@@ -201,7 +250,8 @@ class SupabaseApi {
 
     final nuevas = jsonDecode(creada.body) as List<dynamic>;
     if (nuevas.isEmpty) {
-      throw SupabaseError('La base no devolvió el id de la seña $gloss.');
+      throw SupabaseError('La base no devolvió el id de la seña $gloss.',
+          humano: kMsgGenerico);
     }
     return (nuevas.first as Map<String, dynamic>)['id'] as String;
   }
@@ -227,16 +277,24 @@ class SupabaseApi {
   }) async {
     if (!haySupabaseConfigurado) {
       throw SupabaseError(
-          'Falta cargar la URL y la clave en config_supabase.dart.');
+          'Falta cargar la URL y la clave en config_supabase.dart.',
+          humano: _kNoDisponible);
     }
     MotionSequenceV2.fromFrames(seq);
 
     final signId = await _idDeSena(gloss, espanol, categoria);
 
-    final muestra = await _http.post(
+    // El id de la muestra se genera aca y se manda en el body, con
+    // return=minimal. Con return=representation Postgres aplica la politica
+    // de SELECT a la fila nueva (INSERT ... RETURNING), y las 'pendiente' no
+    // son legibles para la app (samples_lectura solo deja 'aprobada'): el
+    // alta se rechazaria con 42501.
+    final sampleId = uuidV4();
+    final muestra = await _post(
       _uri('sign_samples'),
-      headers: {..._cabeceras, 'Prefer': 'return=representation'},
+      cabeceras: {..._cabeceras, 'Prefer': 'return=minimal'},
       body: jsonEncode({
+        'id': sampleId,
         'sign_id': signId,
         'origen': 'camara',
         'estado': 'pendiente',
@@ -253,15 +311,8 @@ class SupabaseApi {
     );
     if (muestra.statusCode >= 400) _fallo('Subir la muestra', muestra);
 
-    final creadas = jsonDecode(muestra.body) as List<dynamic>;
-    if (creadas.isEmpty) {
-      throw SupabaseError('La base no devolvió el id de la muestra.');
-    }
-    final sampleId = (creadas.first as Map<String, dynamic>)['id'] as String;
-
-    final landmarks = await _http.post(
+    final landmarks = await _post(
       _uri('sample_landmarks'),
-      headers: _cabeceras,
       body: jsonEncode({
         'sample_id': sampleId,
         'norm_version': kNormVersion,
@@ -279,10 +330,11 @@ class SupabaseApi {
   Future<List<PlantillaRemota>> descargarPlantillas() async {
     if (!haySupabaseConfigurado) {
       throw SupabaseError(
-          'Falta cargar la URL y la clave en config_supabase.dart.');
+          'Falta cargar la URL y la clave en config_supabase.dart.',
+          humano: _kNoDisponible);
     }
 
-    final r = await _http.get(
+    final r = await _get(
       _uri('v_motion_v2_aprobadas', {
         // norm_version TIENE que ir en el select aunque abajo ya se filtre
         // con 'norm_version=eq.': PostgREST solo devuelve las columnas que
@@ -295,11 +347,14 @@ class SupabaseApi {
             'sign_id,gloss,espanol,norm_version,t_frames,frame_dim,data',
         'norm_version': 'eq.$kNormVersion',
       }),
-      headers: _cabeceras,
+      // El diccionario completo pesa varios MB: con datos lentos no cabe en
+      // los 10 s de una peticion normal.
+      timeout: kTimeoutDescargaDiccionario,
     );
     if (r.statusCode == 404) {
-      throw SupabaseError('No existe la vista v_motion_v2_aprobadas. Corré '
-          'sql/004_motion_v2.sql en el SQL Editor de Supabase.');
+      throw SupabaseError('No existe la vista v_motion_v2_aprobadas. Corre '
+          'sql/004_motion_v2.sql en el SQL Editor de Supabase.',
+          humano: _kNoDisponible);
     }
     if (r.statusCode >= 400) _fallo('Descargar el diccionario', r);
 
@@ -344,18 +399,20 @@ class SupabaseApi {
   }) async {
     if (!haySupabaseConfigurado) {
       throw SupabaseError(
-          'Falta cargar la URL y la clave en config_supabase.dart.');
+          'Falta cargar la URL y la clave en config_supabase.dart.',
+          humano: _kNoDisponible);
     }
     final uri = Uri.parse('$url/storage/v1/object/$bucket/$objectPath');
-    final r = await _http.post(
+    final r = await _post(
       uri,
-      headers: {
+      cabeceras: {
         'apikey': clave,
         'Authorization': 'Bearer $clave',
         'Content-Type': 'application/gzip',
         'x-upsert': 'false',
       },
       body: gzipBytes,
+      timeout: kTimeoutSubida,
     );
     if (r.statusCode >= 400) _fallo('Subir landmarks crudos', r);
     return '$bucket/$objectPath';

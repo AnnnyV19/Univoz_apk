@@ -4,14 +4,15 @@ import 'package:test/test.dart';
 
 void main() {
   test('pantallas visibles usan avatar real, no placeholder de persona', () {
-    final aprender =
-        File('../univoz/lib/screens/aprender_screen.dart').readAsStringSync();
     final comunicarse = File('../univoz/lib/screens/comunicarse_screen.dart')
         .readAsStringSync();
+    final avatar = File('lib/pantalla_avatar.dart').readAsStringSync();
 
-    expect(aprender, contains('AvatarViewport'));
-    expect(comunicarse, contains('AvatarViewport'));
-    expect(aprender, isNot(contains('Icons.person')));
+    // VistaAvatar envuelve AvatarViewport con estado de carga/error. La
+    // seccion "Aprender" es PantallaAvatar (aprender_screen.dart ya no existe).
+    expect(avatar, contains('VistaAvatar'));
+    expect(comunicarse, contains('VistaAvatar'));
+    expect(avatar, isNot(contains('Icons.person')));
     expect(comunicarse, isNot(contains('Icons.person')));
   });
 

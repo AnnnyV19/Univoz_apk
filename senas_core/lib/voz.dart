@@ -7,11 +7,14 @@ library voz;
 
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'tts_compartido.dart';
+
 class LectorVoz {
   static final LectorVoz instancia = LectorVoz._();
   LectorVoz._();
 
-  final FlutterTts _tts = FlutterTts();
+  // El motor es uno para toda la app (ver TtsCompartido).
+  FlutterTts get _tts => TtsCompartido.instancia.tts;
   bool _listo = false;
 
   /// Configura el motor la primera vez que hace falta, no en el arranque de
@@ -71,9 +74,7 @@ class LectorVoz {
     // sueltas fuera de contexto, no una oracion, y asi se entienden mejor.
     await _tts.setVolume(1.0);
     await _tts.setPitch(1.0);
-    try {
-      await _tts.awaitSpeakCompletion(true);
-    } catch (_) {}
+    await TtsCompartido.instancia.esperarFinDeVoz();
     _listo = true;
   }
 
@@ -92,6 +93,8 @@ class LectorVoz {
     if (t.isEmpty) return null;
     try {
       await _preparar();
+      // Si algun boton "Leer en voz alta" estaba leyendo, se corta aqui.
+      TtsCompartido.instancia.tomar(() {});
       await _tts.stop();
       final res = await _tts.speak(t);
       if (res == 0) {

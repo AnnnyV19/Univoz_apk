@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:senas_core/tts_compartido.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
@@ -26,7 +27,8 @@ enum VoiceCommand { start, yes, no, exit, unknown }
 class BlindNarrator {
   BlindNarrator._();
 
-  static final FlutterTts _tts = FlutterTts();
+  // Un solo motor para toda la app (ver TtsCompartido).
+  static FlutterTts get _tts => TtsCompartido.instancia.tts;
   static final stt.SpeechToText _stt = stt.SpeechToText();
   static bool _ttsConfigured = false;
   static bool _sttAvailable = false;
@@ -121,7 +123,14 @@ class BlindNarrator {
     await _tts.setLanguage('es-MX');
     await _tts.setSpeechRate(0.45);
     await _tts.setPitch(1.0);
-    await _tts.awaitSpeakCompletion(true);
+    await TtsCompartido.instancia.esperarFinDeVoz();
+  }
+
+  /// Habla tomando la ranura del motor: si un "Leer en voz alta" estaba
+  /// leyendo, se entera de que lo cortaron.
+  static Future<dynamic> _hablarTts(String texto) {
+    TtsCompartido.instancia.tomar(() {});
+    return _tts.speak(texto);
   }
 
   /// Pide (si hace falta) el permiso de micrófono y prepara el
@@ -231,7 +240,7 @@ class BlindNarrator {
     if (!enabled) return;
     await _ensureTts();
     await _tts.stop();
-    await _tts.speak(text);
+    await _hablarTts(text);
   }
 
   /// Detiene la narración en curso (sin deshabilitarla).
@@ -300,7 +309,7 @@ class BlindNarrator {
     if (isCancelled != null && isCancelled()) return '';
     await _ensureTts();
     await _tts.stop();
-    await _tts.speak(prompt);
+    await _hablarTts(prompt);
     if (isCancelled != null && isCancelled()) return '';
     final bool micReady = await ensureMicrophoneReady();
     if (!micReady) return '';
@@ -372,7 +381,7 @@ class BlindNarrator {
       if (isCancelled != null && isCancelled()) return '';
       await _ensureTts();
       await _tts.stop();
-      await _tts.speak(currentPrompt);
+      await _hablarTts(currentPrompt);
       if (isCancelled != null && isCancelled()) return '';
       final bool micReady = await ensureMicrophoneReady();
       if (!micReady) return '';
@@ -484,12 +493,12 @@ class BlindNarrator {
 
     await _ensureTts();
     await _tts.stop();
-    await _tts.speak(
+    await _hablarTts(
       'Antes de empezar, vamos a ajustar el micrófono a tu voz y al '
       'ruido de este lugar. Cuando te lo pida, di claro y sin prisa: '
       'Univoz, actívate.',
     );
-    await _tts.speak('Di: Univoz, actívate.');
+    await _hablarTts('Di: Univoz, actívate.');
 
     final completer = Completer<String>();
     var heard = '';

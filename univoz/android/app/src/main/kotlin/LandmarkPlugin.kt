@@ -52,6 +52,18 @@ class LandmarkPlugin(
         // conserva cadena anatomica fresca y deja CPU para dedos a 30 FPS.
         // Render/preview continua independiente a 60 FPS.
         private const val INTERVALO_MIN_POSE_NS = 66_000_000L
+
+        /**
+         * false (default): cada frame se rota con Bitmap.createBitmap (copia
+         * completa) antes de enviarlo. true: se envia el bitmap SIN rotar y
+         * MediaPipe aplica la rotacion (ImageProcessingOptions.rotationDegrees,
+         * tasks-vision 1.0.0), sin esa copia. NO activar sin validar en
+         * telefono: las coordenadas de los landmarks (y image_w/image_h) deben
+         * coincidir con las del camino por bitmap rotado en los 4 giros, con
+         * camara frontal y trasera, y el sentido de rotationDegrees de
+         * MediaPipe (horario) debe coincidir con el de CameraX.
+         */
+        private const val ROTACION_MEDIAPIPE = false
     }
     private val principal = Handler(Looper.getMainLooper())
     private val ejecutor = Executors.newSingleThreadExecutor()
@@ -296,13 +308,11 @@ class LandmarkPlugin(
                 val siguiente = DeviceTier.admitirFrame(
                     siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax) ?: return
                 siguienteFrameMs = siguiente
-                val bitmap = rotar(proxy.toBitmap(), proxy.imageInfo.rotationDegrees)
-                imagenAncho = bitmap.width
-                imagenAlto = bitmap.height
+                val (bitmap, giroMediaPipe) = prepararBitmap(proxy)
                 var t = proxy.imageInfo.timestamp / 1_000_000
                 if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
                 ultimoTimestamp = t
-                motor.analizarHolistic(bitmap, t)
+                motor.analizarHolistic(bitmap, t, giroMediaPipe)
                 return
             }
             val ahoraNs = proxy.imageInfo.timestamp
@@ -317,17 +327,14 @@ class LandmarkPlugin(
                 siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax) ?: return
             siguienteFrameMs = siguiente
 
-            val rotacion = proxy.imageInfo.rotationDegrees
-            val bitmap = rotar(proxy.toBitmap(), rotacion)
-            imagenAncho = bitmap.width
-            imagenAlto = bitmap.height
+            val (bitmap, giroMediaPipe) = prepararBitmap(proxy)
             var t = proxy.imageInfo.timestamp / 1_000_000
             if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
             ultimoTimestamp = t
 
-            if (manosLibres) engine?.analizarManos(bitmap, t)
+            if (manosLibres) engine?.analizarManos(bitmap, t, giroMediaPipe)
             if (tocaPose) {
-                engine?.analizarPose(bitmap, t)
+                engine?.analizarPose(bitmap, t, giroMediaPipe)
                 ultimoPoseEnviadoNs = ahoraNs
             }
         } catch (e: Exception) {
@@ -338,6 +345,26 @@ class LandmarkPlugin(
     }
     @Volatile private var imagenAncho = 0
     @Volatile private var imagenAlto = 0
+
+    /**
+     * Bitmap a enviar y grados que debe aplicar MediaPipe (0 si ya va
+     * rotado). Deja en imagenAncho/imagenAlto el tamano de la imagen ya
+     * rotada, que es el de las coordenadas de los landmarks.
+     */
+    private fun prepararBitmap(proxy: ImageProxy): Pair<Bitmap, Int> {
+        val grados = proxy.imageInfo.rotationDegrees
+        val crudo = proxy.toBitmap()
+        if (ROTACION_MEDIAPIPE && grados != 0) {
+            val girado = grados == 90 || grados == 270
+            imagenAncho = if (girado) crudo.height else crudo.width
+            imagenAlto = if (girado) crudo.width else crudo.height
+            return crudo to grados
+        }
+        val bitmap = rotar(crudo, grados)
+        imagenAncho = bitmap.width
+        imagenAlto = bitmap.height
+        return bitmap to 0
+    }
 
     private fun rotar(bitmap: Bitmap, grados: Int): Bitmap {
         if (grados == 0) return bitmap

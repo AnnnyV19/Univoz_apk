@@ -8,6 +8,7 @@ import {
   createAvatarStateTracker,
   createOutputSmoother,
   createPoseTransitions,
+  shouldSolveFrame,
   slerpQuaternion,
   smoothingAlpha,
 } from '../../assets/avatar_viewer/rig_avatar_state.mjs';
@@ -174,4 +175,26 @@ test('output smoother caps angular speed per render', () => {
   }
   // 162 grados a 720 grados/s: al menos ~13 renders a 60 Hz.
   assert.ok(renders >= 13, `renders ${renders}`);
+});
+
+test('a live frame is solved once, not on every render tick', () => {
+  const frame = new Array(152).fill(0);
+  const rig = {};
+  const clave = {frame, frameId: 7, timestampMs: 1000, view: 'interlocutor',
+    retarget: 'legacy', rig};
+  assert.equal(shouldSolveFrame(null, clave), true);
+  const resuelto = {...clave};
+  // Mismo frame en el siguiente render: no se vuelve a resolver.
+  assert.equal(shouldSolveFrame(resuelto, {...clave}), false);
+  // Frame nuevo (id, tiempo o arreglo) o cambio de vista/retarget/avatar.
+  assert.equal(shouldSolveFrame(resuelto, {...clave, frameId: 8}), true);
+  assert.equal(shouldSolveFrame(resuelto, {...clave, timestampMs: 1033}), true);
+  assert.equal(shouldSolveFrame(resuelto, {...clave, frame: frame.slice()}), true);
+  assert.equal(shouldSolveFrame(resuelto, {...clave, view: 'espejo'}), true);
+  assert.equal(shouldSolveFrame(resuelto, {...clave, retarget: 'anchors'}), true);
+  assert.equal(shouldSolveFrame(resuelto, {...clave, rig: {}}), true);
+  // Escritura fuera de aplicarFrame (reposo, calibracion, filtros
+  // reiniciados): el visor invalida la clave y el mismo frame se resuelve.
+  assert.equal(shouldSolveFrame(null, {...clave}), true);
+  assert.equal(shouldSolveFrame(undefined, {...clave}), true);
 });

@@ -20,6 +20,13 @@ class ConversationProfile {
   /// Perfil de quien usa este teléfono.
   static ProfileType? mine;
 
+  /// true cuando [mine] lo eligió quien tiene el teléfono PRESTADO (la
+  /// tarjeta "Prestaré mi Celular" o "No soy yo"), no su dueña. Es la única
+  /// señal fiable: comparar con el perfil guardado no distingue a un
+  /// prestado con el mismo perfil que la dueña. Lo usa el mensaje de SOS
+  /// para no poner el nombre de la dueña en la ayuda de otra persona.
+  static bool prestado = false;
+
   /// Perfil de la persona con la que se está comunicando.
   static ProfileType? other;
 
@@ -43,6 +50,7 @@ class ConversationProfile {
   /// [PerfilGuardado.olvidar].
   static void reset() {
     mine = null;
+    prestado = false;
     other = null;
     mineKnowsLsm = false;
     otherKnowsLsm = false;

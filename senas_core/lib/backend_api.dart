@@ -7,10 +7,17 @@ import 'package:http/http.dart' as http;
 
 import 'config_backend.dart';
 import 'motion_contract.dart';
+import 'red.dart';
 
-class BackendError implements Exception {
+class BackendError implements Exception, ErrorHumano {
+  /// Texto tecnico (para el equipo).
   final String mensaje;
-  BackendError(this.mensaje);
+  final String? _humano;
+  BackendError(this.mensaje, {String? humano}) : _humano = humano;
+
+  @override
+  String get mensajeHumano => _humano ?? kMsgGenerico;
+
   @override
   String toString() => mensaje;
 }
@@ -59,17 +66,25 @@ class BackendApi {
       throw BackendError('AI Engine no configurado.');
     }
     final secuencia = MotionSequenceV2.fromFrames(frames);
-    final response = await _http.post(
-      Uri.parse('$baseUrl/v1/classify'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'norm_version': secuencia.normVersion,
-        'frames': secuencia.frames,
-      }),
-    );
+    final http.Response response;
+    try {
+      response = await redPost(
+        _http,
+        Uri.parse('$baseUrl/v1/classify'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'norm_version': secuencia.normVersion,
+          'frames': secuencia.frames,
+        }),
+      );
+    } on FalloRed catch (e) {
+      throw BackendError('AI Engine: ${e.mensaje} (${e.tecnico})',
+          humano: e.mensaje);
+    }
     if (response.statusCode >= 400) {
-      throw BackendError(
-          'AI Engine falló (HTTP ${response.statusCode}): ${response.body}');
+      // El cuerpo no se copia: puede traer detalles internos del servidor.
+      throw BackendError('AI Engine falló (HTTP ${response.statusCode})',
+          humano: mensajeDeEstado(response.statusCode));
     }
     final raw = jsonDecode(response.body);
     if (raw is! Map) throw BackendError('Respuesta inválida del AI Engine.');
@@ -78,8 +93,12 @@ class BackendApi {
 
   Future<bool> saludable() async {
     if (!configurado) return false;
-    final response = await _http.get(Uri.parse('$baseUrl/health'));
-    return response.statusCode == 200;
+    try {
+      final response = await redGet(_http, Uri.parse('$baseUrl/health'));
+      return response.statusCode == 200;
+    } on FalloRed {
+      return false;
+    }
   }
 
   void cerrar() => _http.close();

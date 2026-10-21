@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/perfil_guardado.dart';
+import '../services/permiso_camara.dart';
 import '../services/tarjeta_perfil.dart';
 
-const Color _kFondo = Color(0xFFF7F2FA);
 const Color _kGris = Color(0xFF6B6478);
-const Color _kMorado = Color(0xFF6C63FF);
 
 /// Muestra el código de quien usa este teléfono, para que la otra
 /// persona lo escanee.
@@ -47,10 +45,10 @@ class _MostrarMiCodigoScreenState extends State<MostrarMiCodigoScreen> {
     final tarjeta = PerfilGuardado.miTarjeta;
 
     return Scaffold(
-      backgroundColor: _kFondo,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        backgroundColor: _kFondo,
-        foregroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        foregroundColor: Theme.of(context).colorScheme.onSurface,
         elevation: 0,
         title: const Text('Mi código'),
       ),
@@ -98,10 +96,10 @@ class _MostrarMiCodigoScreenState extends State<MostrarMiCodigoScreen> {
                   child: Text(
                     tarjeta.resumen,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF1A1A2E),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                 ),
@@ -135,7 +133,7 @@ class _MostrarMiCodigoScreenState extends State<MostrarMiCodigoScreen> {
                   child: ElevatedButton(
                     onPressed: _guardarNombre,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _kMorado,
+                      backgroundColor: Theme.of(context).colorScheme.primary,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(24),
@@ -182,12 +180,14 @@ class _EscanearCodigoScreenState extends State<EscanearCodigoScreen> {
   @override
   void initState() {
     super.initState();
-    _pedirPermiso();
+    // La hoja con la explicación necesita contexto ya montado.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pedirPermiso());
   }
 
   Future<void> _pedirPermiso() async {
-    final estado = await Permission.camera.request();
-    if (!mounted || estado.isGranted) return;
+    if (!mounted) return;
+    final permitido = await pedirPermisoCamara(context);
+    if (!mounted || permitido) return;
     Navigator.of(context).pop();
   }
 

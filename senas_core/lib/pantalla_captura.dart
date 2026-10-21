@@ -154,14 +154,14 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
 
       if (captura == null) {
         _mostrar(
-          'No se capturó nada. Asegurate de que se vean los hombros y las manos en cámara.',
+          'No se capturó nada. Asegúrate de que se vean los hombros y las manos en cámara.',
           error: true,
         );
         return;
       }
       if (framesLeidos < kMinFramesUtiles) {
         _mostrar(
-          'Grabación demasiado corta ($framesLeidos frames). No se guardó — hacé la seña completa antes de detener.',
+          'Grabación demasiado corta ($framesLeidos frames). No se guardó — haz la seña completa antes de detener.',
           error: true,
         );
         return;
@@ -281,12 +281,12 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
           const SizedBox(height: 6),
           if (_camposCompletos)
             Text(
-              'Se guardará como $_glosa  ·  ya tenés $yaTiene muestra(s)',
+              'Se guardará como $_glosa  ·  ya tienes $yaTiene muestra(s)',
               style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
             )
           else
             Text(
-              'Completá palabra, tu nombre y categoría (los tres son '
+              'Completa palabra, tu nombre y categoría (los tres son '
               'obligatorios) para poder grabar.',
               style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
             ),

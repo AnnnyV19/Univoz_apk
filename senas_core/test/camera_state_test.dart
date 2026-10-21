@@ -5,6 +5,7 @@ import 'package:senas_core/camera_bridge.dart';
 import 'package:senas_core/controlador_captura.dart';
 
 void main() {
+  _erroresNativos();
   test('camera startup exposes every observable lifecycle phase', () {
     expect(
         EstadoCamara.values,
@@ -43,5 +44,37 @@ void main() {
       ),
       contains('Revisa el encuadre'),
     );
+  });
+}
+
+void _erroresNativos() {
+  test('errores del stream nativo se traducen a un texto amable', () {
+    for (final code in ['mediapipe', 'analisis']) {
+      final message = mensajeErrorCamara(
+        PlatformException(code: code, message: 'IllegalStateException: x'),
+      );
+      expect(message, 'Hubo un problema con la cámara.');
+    }
+  });
+
+  test('cada codigo conocido tiene su texto y ninguno filtra detalles', () {
+    const codigos = [
+      'camera_permission',
+      'camera_busy',
+      'camera_unavailable',
+      'camera_start_cancelled',
+      'camera_start_failed',
+      'mediapipe',
+      'analisis',
+    ];
+    final textos = {
+      for (final c in codigos)
+        c: mensajeErrorCamara(PlatformException(code: c, message: 'secreto')),
+    };
+    for (final t in textos.values) {
+      expect(t, isNot(contains('secreto')));
+    }
+    expect(textos['camera_permission'], contains('permiso'));
+    expect(textos['camera_busy'], contains('otra aplicación'));
   });
 }

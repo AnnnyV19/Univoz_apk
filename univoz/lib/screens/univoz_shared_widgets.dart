@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
-import '../services/perfiles.dart';
+import '../services/voz.dart' show LanzadorUrl, LectorVoz;
 import 'profile_selection_screen.dart';
 import 'qr_perfil.dart';
+import 'sos.dart';
 
-enum _AccionPerfil { miCodigo, cambiar, prestar }
+enum _AccionPerfil { miCodigo, contacto, cambiar, prestar }
 
 /// Chip con el perfil de quien está usando la app y un menú para
 /// cambiarlo. Se usa en la barra morada de [UnivozHeader] y también en
@@ -43,6 +45,12 @@ class _MenuPerfilState extends State<MenuPerfil> {
       case _AccionPerfil.miCodigo:
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const MostrarMiCodigoScreen()),
+        );
+        break;
+      case _AccionPerfil.contacto:
+        Navigator.of(context).push(
+          MaterialPageRoute(
+              builder: (_) => const PantallaContactoEmergencia()),
         );
         break;
       case _AccionPerfil.cambiar:
@@ -111,6 +119,19 @@ class _MenuPerfilState extends State<MenuPerfil> {
             ),
           ),
         ),
+        PopupMenuItem<_AccionPerfil>(
+          value: _AccionPerfil.contacto,
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.emergency_outlined),
+            title: Text('Contacto de emergencia'),
+            subtitle: Text(
+              'A quién avisa el botón SOS',
+              style: TextStyle(fontSize: 11),
+            ),
+          ),
+        ),
         PopupMenuDivider(),
         PopupMenuItem<_AccionPerfil>(
           value: _AccionPerfil.cambiar,
@@ -138,8 +159,8 @@ class _MenuPerfilState extends State<MenuPerfil> {
       child: Semantics(
         button: true,
         label: prestado
-            ? 'Celular prestado, perfil en uso: $desc. Tocá para cambiarlo.'
-            : 'Mi perfil: $desc. Tocá para cambiarlo.',
+            ? 'Celular prestado, perfil en uso: $desc. Toca para cambiarlo.'
+            : 'Mi perfil: $desc. Toca para cambiarlo.',
         child: ExcludeSemantics(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -188,16 +209,26 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
 
   const UnivozHeader({super.key, this.subtitle});
 
+  // Alto fijo (el Scaffold lo exige): holgado para texto al 130 %.
   @override
-  Size get preferredSize => Size.fromHeight(subtitle == null ? 70 : 92);
+  Size get preferredSize => Size.fromHeight(subtitle == null ? 80 : 120);
 
   @override
   Widget build(BuildContext context) {
+    // La barra no crece con el texto grande del sistema: se limita a 1.3 para
+    // que nunca desborde (el contenido de la pantalla sí escala completo).
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.3,
+      child: _contenido(context),
+    );
+  }
+
+  Widget _contenido(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6)],
+          colors: [Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary],
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
         ),
@@ -212,6 +243,7 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
                 IconButton(
                   icon: const Icon(Icons.chevron_left,
                       color: Colors.white, size: 28),
+                  tooltip: 'Regresar',
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
                 const Text(
@@ -251,32 +283,164 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
 
 /// Botón rojo de SOS / Emergencia, presente en todas las pantallas
 /// principales de la app.
-class SosButton extends StatelessWidget {
-  const SosButton({super.key});
+///
+/// Un toque solo avisa cómo se usa; hay que mantenerlo presionado
+/// [duracionPresion] para abrir [PantallaSos]. Así un roce en el bolsillo
+/// o un toque sin querer no abre una pantalla de emergencia.
+///
+/// [lanzador] y [lector] solo se pasan en pruebas (los recibe PantallaSos).
+class SosButton extends StatefulWidget {
+  final LanzadorUrl? lanzador;
+  final LectorVoz? lector;
+
+  const SosButton({super.key, this.lanzador, this.lector});
+
+  /// Cuánto hay que mantenerlo presionado.
+  static const Duration duracionPresion = Duration(milliseconds: 800);
+
+  @override
+  State<SosButton> createState() => _SosButtonState();
+}
+
+class _SosButtonState extends State<SosButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _progreso = AnimationController(
+    vsync: this,
+    duration: SosButton.duracionPresion,
+    // Con "quitar animaciones" del sistema el controlador por defecto
+    // acelera x20 y los 0.8 s serían 40 ms: se abriría con cualquier roce.
+    animationBehavior: AnimationBehavior.preserve,
+  )..addStatusListener(_alCambiarEstado);
+
+  /// Ya se abrió la pantalla en esta presión; al soltar no cuenta como toque.
+  bool _abierto = false;
+
+  @override
+  void dispose() {
+    _progreso.dispose();
+    super.dispose();
+  }
+
+  void _alCambiarEstado(AnimationStatus estado) {
+    if (estado != AnimationStatus.completed || _abierto) return;
+    _abierto = true;
+    _abrirSos();
+  }
+
+  void _abrirSos() {
+    HapticFeedback.heavyImpact();
+    aperturasSos.value++;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            PantallaSos(lanzador: widget.lanzador, lector: widget.lector),
+      ),
+    );
+  }
+
+  void _soltar({required bool fueToque}) {
+    final yaAbierto = _abierto;
+    _abierto = false;
+    _progreso.reset();
+    if (fueToque && !yaAbierto) _mostrarPista();
+  }
+
+  void _mostrarPista() {
+    final m = ScaffoldMessenger.maybeOf(context);
+    if (m == null) return;
+    m.hideCurrentSnackBar();
+    m.showSnackBar(const SnackBar(content: Text('Mantén presionado para SOS')));
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      height: 52,
-      child: ElevatedButton.icon(
-        onPressed: () {
-          // TODO: activar flujo de emergencia (contacto de confianza,
-          // ubicación, alerta visual/sonora según el perfil del usuario).
-        },
-        icon: const Icon(Icons.warning_amber_rounded, color: Colors.white),
-        label: const Text(
-          'SOS (Emergencia)',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 15,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFFE85D5D),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(26),
+    final colores = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: 'SOS, emergencia',
+      hint: 'Mantén presionado para abrir la pantalla de ayuda',
+      onTap: _mostrarPista,
+      onLongPress: _abrirSos,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: 'Mantén presionado para SOS',
+        // Con el disparo por defecto (mantener presionado) el tooltip
+        // compite con nuestro propio mantener-presionado y se lo gana.
+        triggerMode: TooltipTriggerMode.manual,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => _progreso.forward(from: 0),
+          onTapUp: (_) => _soltar(fueToque: true),
+          onTapCancel: () => _soltar(fueToque: false),
+          child: AnimatedBuilder(
+            animation: _progreso,
+            builder: (context, _) => Container(
+              width: double.infinity,
+              // Mínimo 52: con texto grande el rótulo pasa a dos renglones.
+              constraints: const BoxConstraints(minHeight: 52),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: colores.error,
+                borderRadius: BorderRadius.circular(26),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  // Relleno que avanza mientras se mantiene presionado.
+                  Positioned.fill(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: _progreso.value,
+                        child: ColoredBox(
+                          color: colores.onError.withValues(alpha: 0.22),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Center(
+                    heightFactor: 1,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 30,
+                          height: 30,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Icon(Icons.warning_amber_rounded,
+                                  color: colores.onError),
+                              if (_progreso.value > 0)
+                                CircularProgressIndicator(
+                                  key: const ValueKey('anillo-sos'),
+                                  value: _progreso.value,
+                                  strokeWidth: 3,
+                                  color: colores.onError,
+                                  backgroundColor:
+                                      colores.onError.withValues(alpha: 0.3),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            'SOS (Emergencia)',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: colores.onError,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

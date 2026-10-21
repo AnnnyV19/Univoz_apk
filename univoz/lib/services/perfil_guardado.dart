@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
+import 'package:senas_core/escritura_atomica.dart';
 
+import 'contacto_emergencia.dart';
 import 'conversation_profile.dart';
 import 'perfiles.dart';
 import 'tarjeta_perfil.dart';
@@ -40,7 +42,14 @@ class PerfilGuardado {
   static ProfileType? _tipo;
   static bool _sabeLsm = false;
   static String? _nombre;
+  static ContactoEmergencia? _contacto;
+  static bool _mencionarCondicion = true;
+  static String? _mensajeSos;
   static bool _cargado = false;
+
+  /// Solo para pruebas: carpeta donde vive el archivo, en vez de la de
+  /// documentos de la app. Si lanza, se comporta como "sin disco".
+  static Future<Directory> Function()? directorioParaPruebas;
 
   static bool get hayPerfil => _tipo != null;
   static ProfileType? get tipo => _tipo;
@@ -51,6 +60,24 @@ class PerfilGuardado {
   /// persona ve el perfil sin nombre.
   static String? get nombre => _nombre;
 
+  /// A quién avisa el botón SOS. null si todavía no se configuró.
+  ///
+  /// Vive junto al perfil pero no depende de él: el teléfono puede tener
+  /// contacto de emergencia sin que nadie haya elegido perfil, y quien lo
+  /// presta no deja de querer que SOS llame a la misma persona.
+  static ContactoEmergencia? get contactoEmergencia => _contacto;
+
+  /// Tope del mensaje de emergencia personalizado.
+  static const int kMaxMensajeSos = 280;
+
+  /// Si el mensaje de SOS dice la condición de la persona (sorda, ciega...).
+  /// Por defecto sí; apagado, el mensaje es el neutro.
+  static bool get mencionarCondicion => _mencionarCondicion;
+
+  /// Mensaje propio que reemplaza al sugerido en pantalla y en voz alta.
+  /// null si se usa el sugerido.
+  static String? get mensajeSosPersonalizado => _mensajeSos;
+
   /// Lo que se dibuja como QR. null si todavia no hay perfil elegido: no
   /// hay nada que mostrar.
   static TarjetaPerfil? get miTarjeta => _tipo == null
@@ -58,7 +85,9 @@ class PerfilGuardado {
       : TarjetaPerfil(nombre: _nombre, tipo: _tipo!, sabeLsm: _sabeLsm);
 
   static Future<File> _ruta() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = directorioParaPruebas != null
+        ? await directorioParaPruebas!()
+        : await getApplicationDocumentsDirectory();
     return File('${dir.path}/$_kArchivo');
   }
 
@@ -77,6 +106,10 @@ class PerfilGuardado {
       if (!await f.exists()) return;
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
       if ((j['v'] as num?)?.toInt() != _kVersion) return;
+      // Los archivos de antes no traen contacto: queda en null.
+      _contacto = ContactoEmergencia.desdeJson(j['contacto']);
+      _mencionarCondicion = j['sos_condicion'] as bool? ?? true;
+      _mensajeSos = _limpiarMensaje(j['sos_mensaje']);
       final t = _porNombre(j['tipo'] as String?);
       // prestarCelular no es un perfil de persona: es un camino que en
       // _onContinue ya se traduce al perfil real. Si apareciera aquí, el
@@ -94,6 +127,9 @@ class PerfilGuardado {
       _tipo = null;
       _sabeLsm = false;
       _nombre = null;
+      _contacto = null;
+      _mencionarCondicion = true;
+      _mensajeSos = null;
     }
     aplicar();
   }
@@ -106,6 +142,7 @@ class PerfilGuardado {
     if (_tipo == null) return;
     ConversationProfile.mine = _tipo;
     ConversationProfile.mineKnowsLsm = _sabeLsm;
+    ConversationProfile.prestado = false;
   }
 
   static Future<void> guardar(ProfileType tipo, bool sabeLsm) async {
@@ -128,18 +165,57 @@ class PerfilGuardado {
     await _escribir();
   }
 
-  /// Escribe el archivo completo. Siempre escribe los tres campos juntos,
-  /// para que guardar el perfil no borre el nombre ni al reves.
+  /// Guarda (o, con null, quita) el contacto de emergencia, conservando el
+  /// perfil.
+  static Future<void> guardarContacto(ContactoEmergencia? contacto) async {
+    _contacto = contacto;
+    await _escribir();
+  }
+
+  /// Guarda cómo quiere la persona su mensaje de SOS. [personalizado]
+  /// vacío o null vuelve al mensaje sugerido.
+  static Future<void> guardarMensajeSos({
+    required bool mencionarCondicion,
+    String? personalizado,
+  }) async {
+    _mencionarCondicion = mencionarCondicion;
+    _mensajeSos = _limpiarMensaje(personalizado);
+    await _escribir();
+  }
+
+  static String? _limpiarMensaje(Object? crudo) {
+    if (crudo is! String) return null;
+    final t = crudo.trim();
+    if (t.isEmpty) return null;
+    return t.length <= kMaxMensajeSos ? t : t.substring(0, kMaxMensajeSos);
+  }
+
+  /// Escribe el archivo completo. Siempre escribe todos los campos juntos,
+  /// para que guardar uno no borre los demás.
   static Future<void> _escribir() async {
-    if (_tipo == null) return;
+    // Sin perfil, contacto ni preferencias de SOS no hay nada que guardar.
+    if (_tipo == null &&
+        _contacto == null &&
+        _mencionarCondicion &&
+        _mensajeSos == null) {
+      await _borrarArchivo();
+      return;
+    }
     try {
       final f = await _ruta();
-      await f.writeAsString(jsonEncode({
-        'v': _kVersion,
-        'tipo': _tipo!.name,
-        'sabe_lsm': _sabeLsm,
-        if (_nombre != null) 'nombre': _nombre,
-      }));
+      // Atómico: si la app muere a mitad, queda el perfil anterior entero
+      // y no un JSON cortado que se leería como "no hay perfil".
+      await escribirAtomico(
+          f,
+          jsonEncode({
+            'v': _kVersion,
+            if (_tipo != null) 'tipo': _tipo!.name,
+            'sabe_lsm': _sabeLsm,
+            if (_nombre != null) 'nombre': _nombre,
+            if (_contacto != null) 'contacto': _contacto!.toJson(),
+            if (!_mencionarCondicion) 'sos_condicion': false,
+            if (_mensajeSos != null) 'sos_mensaje': _mensajeSos,
+          }));
     } catch (_) {
       // Si no se pudo escribir, el perfil sigue válido en memoria para
       // esta sesión. Se vuelve a preguntar la próxima vez que se abra la
@@ -147,19 +223,37 @@ class PerfilGuardado {
     }
   }
 
-  /// "No soy yo": borra el perfil del disco y de memoria.
+  /// "No soy yo": borra el perfil del disco y de memoria. El contacto de
+  /// emergencia se queda: es del teléfono, no de quien lo esté usando.
   static Future<void> olvidar() async {
     _tipo = null;
     _sabeLsm = false;
     _nombre = null;
     ConversationProfile.mine = null;
     ConversationProfile.mineKnowsLsm = false;
+    ConversationProfile.prestado = false;
+    await _escribir();
+  }
+
+  static Future<void> _borrarArchivo() async {
     try {
       final f = await _ruta();
       if (await f.exists()) await f.delete();
     } catch (_) {
       // Ídem: en memoria ya quedó olvidado.
     }
+  }
+
+  /// Solo para pruebas: deja la clase como recién abierta la app, para
+  /// que [cargar] vuelva a leer el archivo.
+  static void restablecerParaPruebas() {
+    _tipo = null;
+    _sabeLsm = false;
+    _nombre = null;
+    _contacto = null;
+    _mencionarCondicion = true;
+    _mensajeSos = null;
+    _cargado = false;
   }
 
   static ProfileType? _porNombre(String? nombre) {

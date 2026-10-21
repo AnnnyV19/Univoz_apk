@@ -12,9 +12,11 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'modo_desarrollador.dart';
 import 'motion_contract.dart';
 import 'muestras_locales.dart';
 import 'pantalla_espejo.dart';
+import 'registro_errores.dart';
 import 'voz.dart';
 
 class PantallaAjustes extends StatefulWidget {
@@ -50,7 +52,7 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
           content: Text(
-              'Ajustes guardados. Volvé a entrar a Reconocer para aplicarlos.')),
+              'Ajustes guardados. Vuelve a entrar a Reconocer para aplicarlos.')),
     );
   }
 
@@ -75,11 +77,39 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
     );
   }
 
+  Future<void> _compartirErrores() async {
+    final archivo = await RegistroErrores.instancia.archivoParaCompartir();
+    if (archivo == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No hay errores registrados.')));
+      return;
+    }
+    await Share.shareXFiles(
+      [XFile(archivo.path, mimeType: 'application/x-ndjson')],
+      text: 'Registro de errores de Univoz',
+    );
+  }
+
+  /// Se guarda al momento (solo este ajuste): es una decision de privacidad,
+  /// no un umbral que se prueba antes de confirmar.
+  Future<void> _cambiarConsentimiento(bool v) async {
+    await _almacen.guardarAjustes(_almacen.ajustes.copiar()
+      ..consentimientoSesion = v
+      ..consentimientoPreguntado = true);
+    if (!mounted) return;
+    setState(() {
+      _a.consentimientoSesion = v;
+      _a.consentimientoPreguntado = true;
+    });
+  }
+
   Future<void> _borrarMisDatos() async {
     final dir = await _dirSesiones();
     if (await dir.exists()) await dir.delete(recursive: true);
     _a = _almacen.ajustes.copiar()
       ..consentimientoSesion = false
+      ..consentimientoPreguntado = false
       ..perfilCorporal = null;
     await _almacen.guardarAjustes(_a);
     if (!mounted) return;
@@ -113,7 +143,7 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
           _explicacion(
             'Una seña se acepta solo si la distancia está POR DEBAJO del máximo '
             'y el margen POR ENCIMA del mínimo. Si te reconoce cosas que no hiciste, '
-            'bajá la distancia máxima o subí el margen. Si no te reconoce nada, al revés.',
+            'baja la distancia máxima o sube el margen. Si no te reconoce nada, al revés.',
           ),
           _slider(
             etiqueta: 'Distancia máxima',
@@ -142,132 +172,137 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
             child: const Text('Volver a los valores por defecto (0.55 / 0.12)'),
           ),
           const Divider(height: 32),
-          _titulo('RigBody / avatar 3D'),
-          _explicacion(
-            'Ajusta cómo el espacio 3D normalizado mueve el avatar. Estos '
-            'valores no cambian vectores ni entrenamiento; solo calibran el rig.',
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Invertir profundidad Z'),
-            subtitle: const Text('Úsalo si el avatar mueve manos hacia atrás.'),
-            value: _a.rigCalibration.invertZ,
-            onChanged: (v) => setState(() =>
-                _a.rigCalibration = _a.rigCalibration.copyWith(invertZ: v)),
-          ),
-          _slider(
-            etiqueta: 'Escala del avatar',
-            valor: _a.rigCalibration.avatarScale,
-            min: 0.70,
-            max: 1.30,
-            divisiones: 60,
-            ayuda: 'ajusta tamaño visual, no datos IA',
-            onChanged: (v) => setState(() =>
-                _a.rigCalibration = _a.rigCalibration.copyWith(avatarScale: v)),
-          ),
-          _slider(
-            etiqueta: 'Ganancia brazo izquierdo',
-            valor: _a.rigCalibration.leftArmGain,
-            min: 0.50,
-            max: 1.50,
-            divisiones: 50,
-            ayuda: 'respuesta del IK izquierdo',
-            onChanged: (v) => setState(() =>
-                _a.rigCalibration = _a.rigCalibration.copyWith(leftArmGain: v)),
-          ),
-          _slider(
-            etiqueta: 'Ganancia brazo derecho',
-            valor: _a.rigCalibration.rightArmGain,
-            min: 0.50,
-            max: 1.50,
-            divisiones: 50,
-            ayuda: 'respuesta del IK derecho',
-            onChanged: (v) => setState(() => _a.rigCalibration =
-                _a.rigCalibration.copyWith(rightArmGain: v)),
-          ),
-          _slider(
-            etiqueta: 'Sensibilidad de dedos',
-            valor: _a.rigCalibration.fingerSensitivity,
-            min: 0.50,
-            max: 1.50,
-            divisiones: 50,
-            ayuda: 'amplitud de flexión de falanges',
-            onChanged: (v) => setState(() => _a.rigCalibration =
-                _a.rigCalibration.copyWith(fingerSensitivity: v)),
-          ),
-          _slider(
-            etiqueta: 'Límite mínimo de codo',
-            valor: _a.rigCalibration.ikMin,
-            min: 0.0,
-            max: 1.50,
-            divisiones: 30,
-            ayuda: 'evita soluciones IK demasiado cerradas',
-            onChanged: (v) => setState(() {
-              final max =
-                  _a.rigCalibration.ikMax < v ? v : _a.rigCalibration.ikMax;
-              _a.rigCalibration =
-                  _a.rigCalibration.copyWith(ikMin: v, ikMax: max);
-            }),
-          ),
-          _slider(
-            etiqueta: 'Límite máximo de codo',
-            valor: _a.rigCalibration.ikMax,
-            min: _a.rigCalibration.ikMin,
-            max: 3.14,
-            divisiones: 62,
-            ayuda: 'evita soluciones IK imposibles',
-            onChanged: (v) => setState(
-                () => _a.rigCalibration = _a.rigCalibration.copyWith(ikMax: v)),
-          ),
-          _slider(
-            etiqueta: 'Compensación de muñeca',
-            valor: _a.rigCalibration.wristCompensation,
-            min: -1.0,
-            max: 1.0,
-            divisiones: 40,
-            ayuda: 'corrección angular de palma',
-            onChanged: (v) => setState(() => _a.rigCalibration =
-                _a.rigCalibration.copyWith(wristCompensation: v)),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Restablecer mano si se pierde'),
-            subtitle: const Text(
-                'Tras un margen breve, devuelve dedos y muñeca a reposo; '
-                'evita dejar una mano congelada o deformada.'),
-            value: _a.rigCalibration.resetHandOnLoss,
-            onChanged: (v) => setState(() => _a.rigCalibration =
-                _a.rigCalibration.copyWith(resetHandOnLoss: v)),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Modo diagnóstico RigBody'),
-            subtitle: const Text(
-                'Muestra FPS, skew, tracks, contacto y errores. Apagado por defecto; '
-                'guarda hasta 300 frames sin video.'),
-            value: _a.rigDiagnosticMode,
-            onChanged: (v) => setState(() => _a.rigDiagnosticMode = v),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.pan_tool_alt_outlined, size: 18),
-              label: const Text('Calibrar pulgares con cámara'),
-              onPressed: _calibrarPulgares,
+          // Calibración del avatar: solo para quien desarrolla (modo
+          // desarrollador, ver modo_desarrollador.dart).
+          if (ModoDesarrollador.activo) ...[
+            _titulo('RigBody / avatar 3D'),
+            _explicacion(
+              'Ajusta cómo el espacio 3D normalizado mueve el avatar. Estos '
+              'valores no cambian vectores ni entrenamiento; solo calibran el rig.',
             ),
-          ),
-          TextButton(
-            onPressed: () =>
-                setState(() => _a.rigCalibration = const RigCalibration()),
-            child: const Text('Restablecer calibración RigBody'),
-          ),
-          const Divider(height: 32),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Invertir profundidad Z'),
+              subtitle:
+                  const Text('Úsalo si el avatar mueve manos hacia atrás.'),
+              value: _a.rigCalibration.invertZ,
+              onChanged: (v) => setState(() =>
+                  _a.rigCalibration = _a.rigCalibration.copyWith(invertZ: v)),
+            ),
+            _slider(
+              etiqueta: 'Escala del avatar',
+              valor: _a.rigCalibration.avatarScale,
+              min: 0.70,
+              max: 1.30,
+              divisiones: 60,
+              ayuda: 'ajusta tamaño visual, no datos IA',
+              onChanged: (v) => setState(() => _a.rigCalibration =
+                  _a.rigCalibration.copyWith(avatarScale: v)),
+            ),
+            _slider(
+              etiqueta: 'Ganancia brazo izquierdo',
+              valor: _a.rigCalibration.leftArmGain,
+              min: 0.50,
+              max: 1.50,
+              divisiones: 50,
+              ayuda: 'respuesta del IK izquierdo',
+              onChanged: (v) => setState(() => _a.rigCalibration =
+                  _a.rigCalibration.copyWith(leftArmGain: v)),
+            ),
+            _slider(
+              etiqueta: 'Ganancia brazo derecho',
+              valor: _a.rigCalibration.rightArmGain,
+              min: 0.50,
+              max: 1.50,
+              divisiones: 50,
+              ayuda: 'respuesta del IK derecho',
+              onChanged: (v) => setState(() => _a.rigCalibration =
+                  _a.rigCalibration.copyWith(rightArmGain: v)),
+            ),
+            _slider(
+              etiqueta: 'Sensibilidad de dedos',
+              valor: _a.rigCalibration.fingerSensitivity,
+              min: 0.50,
+              max: 1.50,
+              divisiones: 50,
+              ayuda: 'amplitud de flexión de falanges',
+              onChanged: (v) => setState(() => _a.rigCalibration =
+                  _a.rigCalibration.copyWith(fingerSensitivity: v)),
+            ),
+            _slider(
+              etiqueta: 'Límite mínimo de codo',
+              valor: _a.rigCalibration.ikMin,
+              min: 0.0,
+              max: 1.50,
+              divisiones: 30,
+              ayuda: 'evita soluciones IK demasiado cerradas',
+              onChanged: (v) => setState(() {
+                final max =
+                    _a.rigCalibration.ikMax < v ? v : _a.rigCalibration.ikMax;
+                _a.rigCalibration =
+                    _a.rigCalibration.copyWith(ikMin: v, ikMax: max);
+              }),
+            ),
+            _slider(
+              etiqueta: 'Límite máximo de codo',
+              valor: _a.rigCalibration.ikMax,
+              min: _a.rigCalibration.ikMin,
+              max: 3.14,
+              divisiones: 62,
+              ayuda: 'evita soluciones IK imposibles',
+              onChanged: (v) => setState(() =>
+                  _a.rigCalibration = _a.rigCalibration.copyWith(ikMax: v)),
+            ),
+            _slider(
+              etiqueta: 'Compensación de muñeca',
+              valor: _a.rigCalibration.wristCompensation,
+              min: -1.0,
+              max: 1.0,
+              divisiones: 40,
+              ayuda: 'corrección angular de palma',
+              onChanged: (v) => setState(() => _a.rigCalibration =
+                  _a.rigCalibration.copyWith(wristCompensation: v)),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Restablecer mano si se pierde'),
+              subtitle: const Text(
+                  'Tras un margen breve, devuelve dedos y muñeca a reposo; '
+                  'evita dejar una mano congelada o deformada.'),
+              value: _a.rigCalibration.resetHandOnLoss,
+              onChanged: (v) => setState(() => _a.rigCalibration =
+                  _a.rigCalibration.copyWith(resetHandOnLoss: v)),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Modo diagnóstico RigBody'),
+              subtitle: const Text(
+                  'Muestra FPS, skew, tracks, contacto y errores. Apagado por defecto; '
+                  'guarda hasta 300 frames sin video.'),
+              value: _a.rigDiagnosticMode,
+              onChanged: (v) => setState(() => _a.rigDiagnosticMode = v),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.pan_tool_alt_outlined, size: 18),
+                label: const Text('Calibrar pulgares con cámara'),
+                onPressed: _calibrarPulgares,
+              ),
+            ),
+            TextButton(
+              onPressed: () =>
+                  setState(() => _a.rigCalibration = const RigCalibration()),
+              child: const Text('Restablecer calibración RigBody'),
+            ),
+            const Divider(height: 32),
+          ],
           _titulo('Cámara'),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Usar cámara frontal'),
             subtitle: const Text(
-                'La trasera evita la ambigüedad del espejo, pero necesitás que alguien sostenga el teléfono.'),
+                'La trasera evita la ambigüedad del espejo, pero necesitas que alguien sostenga el teléfono.'),
             value: _a.camaraFrontal,
             onChanged: (v) => setState(() => _a.camaraFrontal = v),
           ),
@@ -278,7 +313,7 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
             title: const Text('Decir el resultado en voz alta'),
             subtitle: const Text(
                 'Apenas se reconoce una seña con confianza, el teléfono dice la palabra. '
-                'Apagalo para que quede solo en pantalla.'),
+                'Apágalo para que quede solo en pantalla.'),
             value: _a.hablarResultado,
             onChanged: (v) => setState(() => _a.hablarResultado = v),
           ),
@@ -306,7 +341,7 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
             subtitle: const Text(
                 'Cubre a quien seña con la otra mano sin grabar de nuevo '
                 '(muestras, paquete y diccionario sincronizado). '
-                'Desactivalo solo si alguna seña usa izquierda/derecha como parte del significado.'),
+                'Desactívalo solo si alguna seña usa izquierda/derecha como parte del significado.'),
             value: _a.espejoAutomatico,
             onChanged: (v) => setState(() => _a.espejoAutomatico = v),
           ),
@@ -316,12 +351,27 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
               ? 'Cada sesión de cámara se mide y se registra en este teléfono '
                   '(puntos, nunca video).'
               : 'Sin consentimiento: no se registra ni se mide nada.'),
-          ListTile(
+          SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.ios_share),
-            title: const Text('Compartir última sesión'),
-            onTap: _compartirUltimaSesion,
+            title:
+                const Text('Guardar sesiones para mejorar el reconocimiento'),
+            value: _a.consentimientoSesion,
+            onChanged: _cambiarConsentimiento,
           ),
+          if (ModoDesarrollador.activo)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.ios_share),
+              title: const Text('Compartir última sesión'),
+              onTap: _compartirUltimaSesion,
+            ),
+          if (ModoDesarrollador.activo)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.bug_report_outlined),
+              title: const Text('Compartir registro de errores'),
+              onTap: _compartirErrores,
+            ),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.delete_outline),
@@ -352,7 +402,9 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
   Widget _explicacion(String t) => Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: Text(t,
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+            style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
       );
 
   Widget _slider({
@@ -386,7 +438,9 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
           onChanged: onChanged,
         ),
         Text(ayuda,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
         const SizedBox(height: 12),
       ],
     );

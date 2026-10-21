@@ -18,7 +18,9 @@ import 'package:path_provider/path_provider.dart';
 import 'body_profile.dart' show BodyProfile;
 import 'camera_bridge.dart';
 import 'controlador_captura.dart' show CapturaMovimiento;
+import 'escritura_atomica.dart';
 import 'motion_contract.dart';
+import 'paquete_sync.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 import 'supabase_api.dart' show PlantillaRemota;
 
@@ -61,6 +63,10 @@ class Ajustes {
   /// (puntos, nunca video). Se pide una vez; se revoca en ajustes.
   bool consentimientoSesion;
 
+  /// Ya se le pregunto por el consentimiento (acepto o dijo No): no se
+  /// vuelve a mostrar el dialogo; se cambia en Ajustes.
+  bool consentimientoPreguntado;
+
   /// Ultimo perfil corporal medido (local, borrable).
   BodyProfile? perfilCorporal;
 
@@ -74,6 +80,7 @@ class Ajustes {
     this.rigCalibration = const RigCalibration(),
     this.rigDiagnosticMode = false,
     this.consentimientoSesion = false,
+    this.consentimientoPreguntado = false,
     this.perfilCorporal,
   });
 
@@ -87,6 +94,7 @@ class Ajustes {
         rigCalibration: rigCalibration,
         rigDiagnosticMode: rigDiagnosticMode,
         consentimientoSesion: consentimientoSesion,
+        consentimientoPreguntado: consentimientoPreguntado,
         perfilCorporal: perfilCorporal,
       );
 
@@ -100,6 +108,7 @@ class Ajustes {
         'rig_calibration': rigCalibration.toJson(),
         'rig_diagnostic_mode': rigDiagnosticMode,
         'consentimiento_sesion': consentimientoSesion,
+        'consentimiento_preguntado': consentimientoPreguntado,
         if (perfilCorporal != null) 'body_profile': perfilCorporal!.toJson(),
       };
 
@@ -115,6 +124,9 @@ class Ajustes {
                 const {}),
         rigDiagnosticMode: j['rig_diagnostic_mode'] as bool? ?? false,
         consentimientoSesion: j['consentimiento_sesion'] as bool? ?? false,
+        // Archivos viejos solo guardaban el Si: ese ya fue preguntado.
+        consentimientoPreguntado: j['consentimiento_preguntado'] as bool? ??
+            (j['consentimiento_sesion'] as bool? ?? false),
         perfilCorporal: _perfilDe(j['body_profile']),
       );
 
@@ -285,13 +297,22 @@ String aGlosa(String palabra) {
   for (final c in palabra.trim().toLowerCase().split('')) {
     buf.write(acentos[c] ?? c);
   }
-  return buf
+  final glosa = buf
       .toString()
       .replaceAll(RegExp(r'[^a-z0-9\s_]'), '')
       .trim()
       .replaceAll(RegExp(r'[\s_]+'), '_')
       .toUpperCase();
+  // Maximo 64: es el limite que acepta la base (sql/006_beta_limites.sql). Un
+  // corte no deja un "_" colgando al final. Vacia queda vacia: la pantalla
+  // no deja grabar sin glosa.
+  return glosa.length <= kMaxGlosa
+      ? glosa
+      : glosa.substring(0, kMaxGlosa).replaceAll(RegExp(r'_+$'), '');
 }
+
+/// Largo maximo de una glosa (ver aGlosa).
+const int kMaxGlosa = 64;
 
 /// Lo que se le muestra a la persona, a partir de la glosa y del español
 /// que escribió.
@@ -425,8 +446,13 @@ class AlmacenMuestras extends ChangeNotifier {
         } catch (_) {
           // Archivo corrupto o de una version incompatible: se ignora y se
           // arranca limpio. Perder muestras locales es malo, pero dejar la
-          // app inutilizable por un JSON roto es peor -- y el original sigue
-          // en disco por si hay que recuperarlo a mano.
+          // app inutilizable por un JSON roto es peor. El siguiente guardado
+          // escribiria encima, asi que el original se aparta antes para
+          // poder recuperarlo a mano.
+          try {
+            await f.rename(
+                '${f.path}.corrupto-${DateTime.now().millisecondsSinceEpoch}');
+          } catch (_) {}
         }
       }
     } catch (_) {
@@ -434,8 +460,20 @@ class AlmacenMuestras extends ChangeNotifier {
       // the next explicit save retry on a supported platform.
     }
     await _cargarSincronizadas();
+    await _barrerTmp();
     _cargado = true;
     notifyListeners();
+  }
+
+  /// Restos de escrituras atomicas interrumpidas (ver escritura_atomica.dart)
+  /// en la carpeta de datos y en la de landmarks crudos.
+  Future<void> _barrerTmp() async {
+    if (kIsWeb) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      await barrerTmpHuerfanos(dir);
+      await barrerTmpHuerfanos(Directory('${dir.path}/$kDirectorioRaw'));
+    } catch (_) {}
   }
 
   Future<void> _cargarSincronizadas() async {
@@ -445,18 +483,34 @@ class AlmacenMuestras extends ChangeNotifier {
       final f = File('${dir.path}/$kNombreArchivoSync');
       if (!await f.exists()) return;
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      // Los archivos guardados antes de que se escribieran t_frames y
+      // frame_dim no los traen: sin ellos se confia en norm_version. Si
+      // vienen, tienen que coincidir.
       if (j['norm_version'] != kNormVersion ||
-          (j['t_frames'] as num?)?.toInt() != kTFrames ||
-          (j['frame_dim'] as num?)?.toInt() != kFrameDim) return;
+          ((j['t_frames'] as num?)?.toInt() ?? kTFrames) != kTFrames ||
+          ((j['frame_dim'] as num?)?.toInt() ?? kFrameDim) != kFrameDim) return;
+      // Se lee todo ANTES de tocar lo cargado: un archivo a medias no debe
+      // dejar el diccionario vacio.
+      final nuevas = [
+        for (final p in (j['plantillas'] as List?) ?? const [])
+          PlantillaRemota.fromJson((p as Map).cast<String, dynamic>()),
+      ];
       sincronizadoEn = j['sincronizado_en'] as String?;
       sincronizadas
         ..clear()
-        ..addAll(((j['plantillas'] as List?) ?? const []).map((p) =>
-            PlantillaRemota.fromJson((p as Map).cast<String, dynamic>())));
+        ..addAll(nuevas);
     } catch (_) {
       // Sin cache se sigue reconociendo con el paquete del APK y las
       // muestras propias; la proxima sincronizacion la reconstruye.
     }
+  }
+
+  /// Vuelve a leer plantillas_sync.json (lo escribio la sincronizacion de
+  /// fondo) y avisa a quien escuche. La proxima vez que una pantalla llame a
+  /// cargarDiccionario() ya usa el diccionario nuevo.
+  Future<void> recargarSincronizadas() async {
+    await _cargarSincronizadas();
+    notifyListeners();
   }
 
   /// Reemplaza la cache del diccionario con lo que se acaba de bajar.
@@ -475,11 +529,8 @@ class AlmacenMuestras extends ChangeNotifier {
     sincronizadas
       ..clear()
       ..addAll(plantillas);
-    await f.writeAsString(jsonEncode({
-      'norm_version': kNormVersion,
-      'sincronizado_en': sincronizadoEn,
-      'plantillas': plantillas.map((p) => p.toJson()).toList(),
-    }));
+    await escribirAtomico(
+        f, construirPaqueteSync(plantillas, DateTime.parse(sincronizadoEn!)));
     notifyListeners();
   }
 
@@ -521,7 +572,7 @@ class AlmacenMuestras extends ChangeNotifier {
   Future<void> _guardar() async {
     if (kIsWeb) return;
     final f = _archivo ??= await _rutaArchivo();
-    await f.writeAsString(jsonEncode({
+    await escribirAtomico(f, jsonEncode({
       'version': kVersionArchivo,
       'norm_version': kNormVersion,
       't_frames': kTFrames,
@@ -551,8 +602,8 @@ class AlmacenMuestras extends ChangeNotifier {
       rawFramesPath = '$kDirectorioRaw/$id.json.gz';
       final raw = jsonEncode(
           captura.framesCrudos.map((frame) => frame.toJson()).toList());
-      await File('${dir.path}/$id.json.gz')
-          .writeAsBytes(gzip.encode(utf8.encode(raw)), flush: true);
+      await escribirAtomicoBytes(
+          File('${dir.path}/$id.json.gz'), gzip.encode(utf8.encode(raw)));
     }
     final m = MuestraLocal(
       id: id,

@@ -69,7 +69,6 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
   // pregunta para saber si conoce LSM (ver _buildExpandedCard).
   bool? _prestadoConoceLsm;
 
-  static const Color _bgColor = Color(0xFFF7F2FA);
   static const Color _grayText = Color(0xFF6B6478);
 
   @override
@@ -197,6 +196,8 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
   }) {
     final bool debeGuardar =
         !esPrestado && widget.modo != ModoSeleccionPerfil.prestado;
+    // Lo que no se guarda es de quien tiene el teléfono prestado.
+    ConversationProfile.prestado = !debeGuardar;
     if (debeGuardar) {
       // Sin await a proposito: escribir unos pocos bytes no debe frenar la
       // navegacion, y PerfilGuardado deja el valor en memoria de forma
@@ -233,7 +234,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgColor,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -255,12 +256,12 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 'Elige tu perfil',
                 style: TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF1A1A2E),
+                  color: Theme.of(context).colorScheme.onSurface,
                   height: 1.2,
                 ),
               ),
@@ -475,6 +476,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
                 ),
                 IconButton(
                   icon: Icon(Icons.close, color: config.textColor),
+                  tooltip: 'Cerrar',
                   onPressed: _collapseCard,
                 ),
               ],

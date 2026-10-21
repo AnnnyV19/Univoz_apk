@@ -4,4 +4,9 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Solo debug: permite http:// al backend de IA en la red local (ver
+         UNIVOZ_BACKEND_URL en senas_core/lib/config_backend.dart). El
+         manifest principal no lo declara, así que release queda solo con
+         https. -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>

@@ -7,7 +7,8 @@ library camera_bridge;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/services.dart';
 
 import 'sign_norm.dart';
@@ -40,13 +41,27 @@ class UnsupportedFeatureException implements Exception {
       : feature = 'camara',
         message = 'La cámara de señas está disponible en Android.';
 
+  /// iPhone todavia no tiene plugin nativo de captura (fase 2, ver
+  /// docs/16-ios-fase2.md): el canal no existe y Flutter lo reporta como
+  /// MissingPluginException. No es un fallo de camara ni de permisos.
+  const UnsupportedFeatureException.iosProximamente()
+      : feature = 'camara_ios',
+        message = 'El reconocimiento de señas llegará pronto a iPhone.';
+
   @override
   String toString() => message;
 }
 
+/// Texto del vigilante de estancamiento (ControladorCaptura): la camara
+/// venia mandando frames y se callo. Ya es el texto para la persona.
+const String kCamaraSinRespuesta = 'La cámara dejó de responder.';
+
 /// Maps platform failures to safe, user-facing messages.
 String mensajeErrorCamara(Object error) {
   if (error is UnsupportedFeatureException) return error.message;
+  if (error is StateError && error.message == kCamaraSinRespuesta) {
+    return kCamaraSinRespuesta;
+  }
   if (error is StateError &&
       error.message == 'La cámara se conectó pero no envió imagen.') {
     return 'La cámara se conectó pero no envió imagen. Revisa el encuadre y reintenta.';
@@ -59,10 +74,46 @@ String mensajeErrorCamara(Object error) {
       'camera_unavailable' =>
         'La cámara no está disponible en este dispositivo.',
       'camera_start_cancelled' => 'El inicio de cámara fue cancelado.',
+      // Errores que llegan por el stream de landmarks (sink?.error nativo).
+      'mediapipe' || 'analisis' => 'Hubo un problema con la cámara.',
       _ => 'No se pudo iniciar la cámara. Revisa permisos y reintenta.',
     };
   }
   return 'No se pudo iniciar la cámara. Revisa permisos y reintenta.';
+}
+
+/// Que tanto afecta un error del stream de landmarks.
+enum GravedadError { fatal, transitorio }
+
+/// Clasifica por codigo lo que emite el lado nativo por el stream
+/// (`sink?.error`): `mediapipe` (una inferencia fallo: holistic/manos/pose) y
+/// `analisis` (un frame fallo, o `tier_rebind_failed`: la camara sigue con la
+/// resolucion anterior) son transitorios. Todo lo demas (apertura o enlace de
+/// camara, permiso, desconocidos) es fatal.
+GravedadError clasificarErrorStream(Object error) {
+  if (error is PlatformException &&
+      (error.code == 'mediapipe' || error.code == 'analisis')) {
+    return GravedadError.transitorio;
+  }
+  return GravedadError.fatal;
+}
+
+/// Decide cuando errores transitorios dejan de serlo: si llevan [ventanaMs]
+/// llegando sin que haya pasado ningun frame valido, hay que avisar.
+class VigilanteErrores {
+  final int ventanaMs;
+  int? _primerErrorMs;
+
+  VigilanteErrores({this.ventanaMs = 3000});
+
+  /// Un frame llego bien: los errores aislados no cuentan.
+  void frameValido() => _primerErrorMs = null;
+
+  /// Registra un error transitorio en [ahoraMs]; true si ya hay que escalar.
+  bool registrarTransitorio(int ahoraMs) {
+    final primero = _primerErrorMs ??= ahoraMs;
+    return ahoraMs - primero >= ventanaMs;
+  }
 }
 
 /// Un frame crudo tal como llega del lado nativo.
@@ -425,10 +476,20 @@ class CameraBridge {
   Future<CamaraIniciada> iniciar({bool frontal = true}) async {
     if (kIsWeb) throw const UnsupportedFeatureException.camara();
     final session = ++_session;
-    final r = await _metodos.invokeMapMethod<String, Object?>(
-      'iniciar',
-      {'frontal': frontal, 'session': session},
-    );
+    final Map<String, Object?>? r;
+    try {
+      r = await _metodos.invokeMapMethod<String, Object?>(
+        'iniciar',
+        {'frontal': frontal, 'session': session},
+      );
+    } on MissingPluginException {
+      // En iPhone el lado nativo aun no existe: mensaje propio, no el
+      // generico de "revisa permisos".
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        throw const UnsupportedFeatureException.iosProximamente();
+      }
+      rethrow;
+    }
     if (r == null) throw StateError('la camara no devolvio textura');
     return CamaraIniciada(
       (r['textureId'] as num).toInt(),
@@ -449,10 +510,12 @@ class CameraBridge {
       // without native camera registration.
     } on PlatformException {
       // Native shutdown errors must not turn route disposal into a crash.
-    } finally {
-      _stream = null;
-      _streamPreview = null;
     }
+    // Los streams NO se sueltan: son broadcast y viven lo que el puente. Quien
+    // los escucha (avatar, detector automatico) sigue suscrito despues de
+    // voltear la camara; si se crearan nuevos, el receiveBroadcastStream
+    // nuevo reemplazaria el manejador del canal y las suscripciones viejas
+    // se quedarian mudas para siempre.
   }
 
   /// Stream de frames FUSIONADOS: pose y manos garantizadas del mismo

@@ -6,6 +6,7 @@ import kotlin.math.abs
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.components.containers.Landmark
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
@@ -125,22 +126,15 @@ class LandmarkEngine(
     // Compuertas de backpresion INDEPENDIENTES: cada modelo se libera con
     // su propio resultado, no con el del otro. Asi las manos no esperan al
     // torso ni viceversa.
-    private val manosLock = Any()
-    private var manosEnVuelo = false
-    private var manosDesdeNs = 0L
-
-    private val poseLock = Any()
-    private var poseEnVuelo = false
-    private var poseDesdeNs = 0L
-
-    private val timeoutNs = 2_000_000_000L // 2s de seguridad por si un resultado nunca llega
+    // Cada compuerta se libera con el resultado, con el error del modelo o,
+    // por seguridad, a los 2 s si ninguno de los dos llega.
+    private val manosVuelo = VueloInferencia()
+    private val poseVuelo = VueloInferencia()
 
     private var handLandmarker: HandLandmarker? = null
     private var poseLandmarker: PoseLandmarker? = null
     private var holisticLandmarker: HolisticLandmarker? = null
-    private val holisticLock = Any()
-    private var holisticEnVuelo = false
-    private var holisticDesdeNs = 0L
+    private val holisticVuelo = VueloInferencia()
 
     /** Errores al crear Holistic (se reportan en el primer frame). */
     private val erroresCreacion = mutableListOf<Map<String, String>>()
@@ -181,7 +175,10 @@ class LandmarkEngine(
                     // el subgrafo de blendshapes no es necesario.
                     .setOutputFaceBlendshapes(false)
                     .setResultListener { result, _ -> onHolistic(result) }
-                    .setErrorListener { e -> onError("holistic: ${e.message}") }
+                    .setErrorListener { e ->
+                        holisticVuelo.liberar()
+                        onError("holistic: ${e.message}")
+                    }
                     .build()
                 val creado = HolisticLandmarker.createFromOptions(context, options)
                 gpuOk = delegate == Delegate.GPU
@@ -231,7 +228,10 @@ class LandmarkEngine(
                     .setMinTrackingConfidence(0.3f)
                     .setMinHandPresenceConfidence(0.4f)
                     .setResultListener { result, _ -> onManos(result) }
-                    .setErrorListener { e -> onError("manos: ${e.message}") }
+                    .setErrorListener { e ->
+                        manosVuelo.liberar()
+                        onError("manos: ${e.message}")
+                    }
                     .build())
         }
         poseLandmarker = crear("pose") { delegate ->
@@ -244,60 +244,71 @@ class LandmarkEngine(
                     .setMinTrackingConfidence(0.3f)
                     .setMinPosePresenceConfidence(0.4f)
                     .setResultListener { result, _ -> onPose(result) }
-                    .setErrorListener { e -> onError("pose: ${e.message}") }
+                    .setErrorListener { e ->
+                        poseVuelo.liberar()
+                        onError("pose: ${e.message}")
+                    }
                     .build())
         }
         gpuOk = enGpu && handLandmarker != null && poseLandmarker != null
     }
 
-    fun holisticOcupado(): Boolean = synchronized(holisticLock) {
-        holisticEnVuelo && (System.nanoTime() - holisticDesdeNs < timeoutNs)
-    }
+    fun holisticOcupado(): Boolean = holisticVuelo.ocupado(System.nanoTime())
 
     /** [timestampMs] estrictamente creciente. False si ya hay un frame en vuelo. */
-    fun analizarHolistic(bitmap: Bitmap, timestampMs: Long): Boolean {
+    fun analizarHolistic(bitmap: Bitmap, timestampMs: Long, rotacionGrados: Int = 0): Boolean {
         val tarea = holisticLandmarker ?: return false
-        synchronized(holisticLock) {
-            val ahora = System.nanoTime()
-            if (holisticEnVuelo && ahora - holisticDesdeNs < timeoutNs) return false
-            holisticEnVuelo = true
-            holisticDesdeNs = ahora
+        return detectar(holisticVuelo) {
+            val imagen = BitmapImageBuilder(bitmap).build()
+            if (rotacionGrados == 0) tarea.detectAsync(imagen, timestampMs)
+            else tarea.detectAsync(imagen, opcionesRotacion(rotacionGrados), timestampMs)
         }
-        tarea.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
-        return true
     }
 
-    fun manosOcupadas(): Boolean = synchronized(manosLock) {
-        manosEnVuelo && (System.nanoTime() - manosDesdeNs < timeoutNs)
-    }
+    fun manosOcupadas(): Boolean = manosVuelo.ocupado(System.nanoTime())
 
-    fun poseOcupada(): Boolean = synchronized(poseLock) {
-        poseEnVuelo && (System.nanoTime() - poseDesdeNs < timeoutNs)
-    }
+    fun poseOcupada(): Boolean = poseVuelo.ocupado(System.nanoTime())
 
     /** [timestampMs] estrictamente creciente. Devuelve false si ya hay manos en vuelo. */
-    fun analizarManos(bitmap: Bitmap, timestampMs: Long): Boolean {
-        synchronized(manosLock) {
-            val ahora = System.nanoTime()
-            if (manosEnVuelo && ahora - manosDesdeNs < timeoutNs) return false
-            manosEnVuelo = true
-            manosDesdeNs = ahora
-        }
+    fun analizarManos(bitmap: Bitmap, timestampMs: Long, rotacionGrados: Int = 0): Boolean {
+        // El modelo se revisa ANTES de tomar la compuerta: sin modelo no hay
+        // resultado que la libere y quedaria tomada hasta el timeout.
         val tarea = handLandmarker ?: return false
-        tarea.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
-        return true
+        return detectar(manosVuelo) {
+            val imagen = BitmapImageBuilder(bitmap).build()
+            if (rotacionGrados == 0) tarea.detectAsync(imagen, timestampMs)
+            else tarea.detectAsync(imagen, opcionesRotacion(rotacionGrados), timestampMs)
+        }
     }
 
     /** [timestampMs] estrictamente creciente. Devuelve false si ya hay pose en vuelo. */
-    fun analizarPose(bitmap: Bitmap, timestampMs: Long): Boolean {
-        synchronized(poseLock) {
-            val ahora = System.nanoTime()
-            if (poseEnVuelo && ahora - poseDesdeNs < timeoutNs) return false
-            poseEnVuelo = true
-            poseDesdeNs = ahora
-        }
+    fun analizarPose(bitmap: Bitmap, timestampMs: Long, rotacionGrados: Int = 0): Boolean {
         val tarea = poseLandmarker ?: return false
-        tarea.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
+        return detectar(poseVuelo) {
+            val imagen = BitmapImageBuilder(bitmap).build()
+            if (rotacionGrados == 0) tarea.detectAsync(imagen, timestampMs)
+            else tarea.detectAsync(imagen, opcionesRotacion(rotacionGrados), timestampMs)
+        }
+    }
+
+    /** Rotacion que aplica MediaPipe por dentro (sin copiar el bitmap). */
+    private fun opcionesRotacion(grados: Int) = ImageProcessingOptions.builder()
+        .setRotationDegrees(grados)
+        .build()
+
+    /**
+     * Toma la compuerta y envia. Si detectAsync lanza (modelo ya cerrado,
+     * timestamp no creciente) la libera y relanza: no habra resultado que lo
+     * haga, y el plugin ya reporta la excepcion.
+     */
+    private fun detectar(vuelo: VueloInferencia, enviar: () -> Unit): Boolean {
+        if (!vuelo.intentarIniciar(System.nanoTime())) return false
+        try {
+            enviar()
+        } catch (e: Exception) {
+            vuelo.liberar()
+            throw e
+        }
         return true
     }
 
@@ -412,10 +423,7 @@ class LandmarkEngine(
         }
 
     private fun onHolistic(result: HolisticLandmarkerResult) {
-        val inferMs = synchronized(holisticLock) {
-            holisticEnVuelo = false
-            (System.nanoTime() - holisticDesdeNs) / 1e6
-        }
+        val inferMs = holisticVuelo.terminar(System.nanoTime())
         ultimaInferenciaMs = inferMs
         onInferencia(inferMs)
         val t = result.timestampMs()
@@ -468,7 +476,7 @@ class LandmarkEngine(
     }
 
     private fun onPose(result: PoseLandmarkerResult) {
-        synchronized(poseLock) { poseEnVuelo = false }
+        poseVuelo.liberar()
 
         val t = result.timestampMs()
         val lm = result.landmarks().firstOrNull()
@@ -490,10 +498,7 @@ class LandmarkEngine(
     }
 
     private fun onManos(result: HandLandmarkerResult) {
-        val inferMs = synchronized(manosLock) {
-            manosEnVuelo = false
-            (System.nanoTime() - manosDesdeNs) / 1e6
-        }
+        val inferMs = manosVuelo.terminar(System.nanoTime())
         ultimaInferenciaMs = inferMs
         onInferencia(inferMs)
 
@@ -544,14 +549,14 @@ class LandmarkEngine(
         handLandmarker?.close()
         poseLandmarker?.close()
         holisticLandmarker?.close()
-        synchronized(holisticLock) { holisticEnVuelo = false }
+        holisticVuelo.liberar()
         synchronized(ultimoLock) {
             ultimaPose = null
             ultimaPoseMundo = null
             ultimoTimestampPose = Long.MIN_VALUE
             captura.reset()
         }
-        synchronized(manosLock) { manosEnVuelo = false }
-        synchronized(poseLock) { poseEnVuelo = false }
+        manosVuelo.liberar()
+        poseVuelo.liberar()
     }
 }

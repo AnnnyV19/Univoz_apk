@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
 import 'pantalla_ajustes.dart';
 import 'pantalla_avatar.dart';
@@ -9,8 +10,12 @@ import 'pantalla_espejo.dart';
 import 'pantalla_muestras.dart';
 import 'pantalla_sync.dart';
 import 'skeleton_painter.dart';
+import 'tema_univoz.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Esta app es la herramienta de desarrollo: siempre con diagnosticos.
+  ModoDesarrollador.forzarActivo();
   runApp(const UnivozApp());
 }
 
@@ -21,10 +26,7 @@ class UnivozApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'UNIVOZ',
-      theme: ThemeData(
-        colorSchemeSeed: Colors.blue,
-        useMaterial3: true,
-      ),
+      theme: temaUnivoz(),
       home: const PantallaMenu(),
     );
   }
@@ -107,7 +109,9 @@ class _PantallaMenuState extends State<PantallaMenu> {
                 Text(
                   'Sin cámara no se pueden ni reconocer ni grabar señas.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
@@ -141,7 +145,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             icono: Icons.record_voice_over,
             color: Colors.blue,
             titulo: 'Reconocer seña',
-            detalle: 'Hacé una seña frente a la cámara y ver qué palabra es.',
+            detalle: 'Haz una seña frente a la cámara y mira qué palabra es.',
             onTap: () => _ir(const PantallaDeTranslacion()),
           ),
           _tarjeta(
@@ -149,7 +153,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.green,
             titulo: 'Agregar muestras',
             detalle:
-                'Grabá una seña y etiquetala con su palabra. Cuantas más muestras, mejor reconoce.',
+                'Graba una seña y etiquétala con su palabra. Cuantas más muestras, mejor reconoce.',
             onTap: () => _ir(const PantallaCaptura()),
           ),
           _tarjeta(
@@ -175,7 +179,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.indigo,
             titulo: 'Avatar 3D',
             detalle:
-                'Escribí, elegí de una lista o decí una palabra en voz alta y un avatar hace la seña.',
+                'Escribe, elige de una lista o di una palabra en voz alta y un avatar hace la seña.',
             onTap: () => _ir(const PantallaAvatar()),
           ),
           _tarjeta(
@@ -183,7 +187,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.pink,
             titulo: 'Espejo',
             detalle:
-                'Movéte frente a la cámara y el avatar te copia en vivo. Sirve para ver si el seguimiento te lee bien.',
+                'Muévete frente a la cámara y el avatar te copia en vivo. Sirve para ver si el seguimiento te lee bien.',
             onTap: () => _ir(const PantallaEspejo()),
           ),
           _tarjeta(
@@ -198,11 +202,13 @@ class _PantallaMenuState extends State<PantallaMenu> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Text(
-              'Las muestras que grabás acá cuentan para el reconocimiento al '
-              'instante, sin internet. Desde "Sincronizar" las subís a la base '
-              'del equipo (quedan pendientes de aprobación) y te bajás el '
+              'Las muestras que grabas aquí cuentan para el reconocimiento al '
+              'instante, sin internet. Desde "Sincronizar" las subes a la base '
+              'del equipo (quedan pendientes de aprobación) y te bajas el '
               'diccionario aprobado para usarlo offline.',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ),
         ],
@@ -242,11 +248,15 @@ class _PantallaMenuState extends State<PantallaMenu> {
                     const SizedBox(height: 4),
                     Text(detalle,
                         style: TextStyle(
-                            fontSize: 13, color: Colors.grey.shade700)),
+                            fontSize: 13,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, color: Colors.grey.shade400),
+              Icon(Icons.chevron_right,
+                  color: Theme.of(context).colorScheme.outline),
             ],
           ),
         ),

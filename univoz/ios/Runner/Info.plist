@@ -26,6 +26,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Univoz usa la cámara para ver tus manos y reconocer señas. El video no sale de tu teléfono.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Univoz usa el micrófono para los comandos de voz del modo de accesibilidad para personas ciegas.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
