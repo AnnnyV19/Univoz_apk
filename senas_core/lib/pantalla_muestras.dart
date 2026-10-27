@@ -1,4 +1,4 @@
-/// Lista de las muestras grabadas en este telefono: cuantas hay de cada
+﻿/// Lista de las muestras grabadas en este telefono: cuantas hay de cada
 /// palabra, borrar las que salieron mal, y exportar todo para subirlo a
 /// Supabase desde la PC (tools/importar_muestras.py).
 library pantalla_muestras;
@@ -124,12 +124,12 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
               Icon(Icons.videocam_off_outlined, size: 56, color: Colors.grey.shade400),
               const SizedBox(height: 16),
               const Text(
-                'Todavía no grabaste ninguna muestra en este teléfono.',
+                'Todavía no has grabado ninguna muestra en este teléfono.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               Text(
-                'Andá a "Agregar muestras", escribí la palabra y grabá la seña varias veces.',
+                'Ve a "Agregar muestras", escribe la palabra y graba la seña varias veces.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
               ),
@@ -161,8 +161,8 @@ class _PantallaMuestrasState extends State<PantallaMuestras> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Text(
-            'Para subirlas a la base usá "Sincronizar" en el menú — es directo, '
-            'sin pasar por la PC. El ícono de compartir de acá arriba es la vía '
+            'Para subirlas a la base usa "Sincronizar" en el menú — es directo, '
+            'sin pasar por la PC. El ícono de compartir de aquí arriba es la vía '
             'alternativa: exporta un archivo para importar con '
             'tools/importar_muestras.py, útil si no hay internet en el teléfono. '
             'Las muestras funcionan en el teléfono aunque no las subas.',

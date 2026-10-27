@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:senas_core/pantalla_ajustes.dart';
 import 'package:senas_core/pantalla_captura.dart';
@@ -9,7 +9,7 @@ import 'univoz_shared_widgets.dart';
 /// Pantalla "Configuración" del apartado de señas: agregar muestras nuevas,
 /// modo espejo, ajustes de reconocimiento y sincronizar con el equipo.
 /// "Reconocer seña" (la cámara que traduce una seña suelta) y "Avatar 3D"
-/// ya no viven acá — el primero se abre directo desde "Traducir una seña"
+/// ya no viven aquí — el primero se abre directo desde "Traducir una seña"
 /// en el menú principal (ver PurposeScreen._abrirCamaraTraductora) y el
 /// segundo es la pestaña "Aprender" de MainShellScreen — así que esta
 /// pantalla se llega solo como la 4ta opción "Configuración" del menú
@@ -79,7 +79,7 @@ class _TraducirSenasScreenState extends State<TraducirSenasScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Agregá muestras nuevas, probá el modo espejo o ajustá cómo '
+                'Agrega muestras nuevas, prueba el modo espejo o ajusta cómo '
                 'la cámara reconoce tus señas.',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
               ),
@@ -91,7 +91,7 @@ class _TraducirSenasScreenState extends State<TraducirSenasScreen> {
                       icono: Icons.add_a_photo_outlined,
                       color: Colors.green,
                       titulo: 'Agregar muestras',
-                      detalle: 'Grabá una seña nueva y etiquetala con su '
+                      detalle: 'Graba una seña nueva y etiquétala con su '
                           'palabra para mejorar el reconocimiento.',
                       onTap: () => _abrirConCamara(const PantallaCaptura()),
                     ),

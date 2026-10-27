@@ -1,4 +1,4 @@
-/// Pintor del esqueleto y pantalla de reconocimiento en vivo.
+﻿/// Pintor del esqueleto y pantalla de reconocimiento en vivo.
 ///
 /// El pintor se usa con un ValueNotifier<LandmarkFrame> para que solo se
 /// repinte cuando cambian los landmarks, no en cada setState.
@@ -319,7 +319,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       setState(() {
         _dicc = d;
         _errorDiccionario = d.resumen.vacio
-            ? 'El diccionario está vacío. Grabá muestras en "Agregar muestras", '
+            ? 'El diccionario está vacío. Agrega muestras en "Agregar muestras", '
                 'o exportá el paquete desde la PC con tools/exportar_paquete.py.'
             : null;
       });
@@ -475,12 +475,12 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
 
     final dicc = _dicc;
     if (dicc == null) {
-      setState(() => _aviso = 'El diccionario todavía no cargó.');
+      setState(() => _aviso = 'El diccionario aún no se ha cargado.');
       return;
     }
     if (seq == null) {
       setState(() => _aviso =
-          'No se capturó nada. Revisá que se vean los hombros y las manos en cámara.');
+          'No se capturó nada. Asegúrate de que se vean los hombros y las manos en cámara.');
       return;
     }
 

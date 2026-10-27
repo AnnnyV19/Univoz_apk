@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'muestras_locales.dart';
@@ -141,7 +141,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             icono: Icons.record_voice_over,
             color: Colors.blue,
             titulo: 'Reconocer seña',
-            detalle: 'Hacé una seña frente a la cámara y ver qué palabra es.',
+            detalle: 'Haz una seña frente a la cámara para ver qué palabra es.',
             onTap: () => _ir(const PantallaDeTranslacion()),
           ),
           _tarjeta(
@@ -149,7 +149,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.green,
             titulo: 'Agregar muestras',
             detalle:
-                'Grabá una seña y etiquetala con su palabra. Cuantas más muestras, mejor reconoce.',
+                'Graba una seña y etiquétala con su palabra. Cuantas más muestras, mejor reconoce.',
             onTap: () => _ir(const PantallaCaptura()),
           ),
           _tarjeta(
@@ -157,7 +157,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.deepPurple,
             titulo: 'Mis muestras',
             detalle: total == 0
-                ? 'Todavía no grabaste ninguna en este teléfono.'
+                ? 'Todavía no has grabado ninguna en este teléfono.'
                 : '$total muestras · $palabras palabras. Revisar, borrar o exportar.',
             onTap: () => _ir(const PantallaMuestras()),
           ),
@@ -175,7 +175,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.indigo,
             titulo: 'Avatar 3D',
             detalle:
-                'Escribí, elegí de una lista o decí una palabra en voz alta y un avatar hace la seña.',
+                'Escribe, elige de una lista o di una palabra en voz alta y un avatar hace la seña.',
             onTap: () => _ir(const PantallaAvatar()),
           ),
           _tarjeta(
@@ -183,7 +183,7 @@ class _PantallaMenuState extends State<PantallaMenu> {
             color: Colors.pink,
             titulo: 'Espejo',
             detalle:
-                'Movéte frente a la cámara y el avatar te copia en vivo. Sirve para ver si el seguimiento te lee bien.',
+                'Muévete frente a la cámara y el avatar te copia en tiempo real. Sirve para ver si el seguimiento te lee bien.',
             onTap: () => _ir(const PantallaEspejo()),
           ),
           _tarjeta(
@@ -198,8 +198,8 @@ class _PantallaMenuState extends State<PantallaMenu> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Text(
-              'Las muestras que grabás acá cuentan para el reconocimiento al '
-              'instante, sin internet. Desde "Sincronizar" las subís a la base '
+              'Las muestras que grabas aquí cuentan para el reconocimiento al '
+              'instante, sin internet. Desde "Sincronizar" las subes a la base '
               'del equipo (quedan pendientes de aprobación) y te bajás el '
               'diccionario aprobado para usarlo offline.',
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
