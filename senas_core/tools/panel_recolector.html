@@ -133,6 +133,31 @@
   .pesos i { display: block; height: 12px; border-radius: 6px; }
   .pesos .eje { border-left: 1px solid var(--tinta-suave); height: 18px; }
   .resumen { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .marca { justify-content: space-between; flex-wrap: wrap; }
+  #bCelular { background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.35);
+              border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13.5px;
+              font-weight: 600; cursor: pointer; }
+  #bCelular:hover { background: rgba(255,255,255,.26); }
+  .velo { position: fixed; inset: 0; background: rgba(41,35,47,.55); display: flex;
+          align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .modal { background: #fff; border-radius: 14px; padding: 22px; max-width: 380px; width: 100%;
+           text-align: center; box-shadow: var(--sombra); }
+  .modal h3 { margin: 0 0 4px; color: var(--morado-osc); }
+  #qr { margin: 14px auto; width: 240px; height: 240px; }
+  #qr img, #qr svg { width: 100%; height: 100%; }
+  .modal code { display: block; word-break: break-all; background: var(--morado-tenue);
+                border-radius: 8px; padding: 8px; font-size: 12.5px; margin: 8px 0; }
+  @media (max-width: 640px) {
+    header { padding: 10px 14px 0; }
+    .marca span { font-size: 16px; }
+    nav { overflow-x: auto; }
+    nav button { padding: 9px 11px; white-space: nowrap; }
+    main { padding: 12px 10px 32px; }
+    .tarjeta { padding: 14px; }
+    .resumen, .contadores { grid-template-columns: repeat(2, 1fr) !important; }
+    .pasos { flex-wrap: wrap; }
+    button.b { padding: 12px 14px; }
+  }
   @media (max-width: 1000px) {
     .vivo, .rev, .apr { grid-template-columns: 1fr; }
     .vistas, .controles { grid-template-columns: 1fr; }
@@ -141,7 +166,8 @@
 </head>
 <body>
 <header>
-  <div class="marca"><b>UNIVOZ</b><span>Recolector de señas</span><span id="demo" class="sub oculta" style="color:#fff">· modo demo</span></div>
+  <div class="marca"><b>UNIVOZ</b><span>Recolector de señas</span><span id="demo" class="sub oculta" style="color:#fff">· modo demo</span>
+    <button id="bCelular" class="oculta" title="Abrir este panel en tu celular">Abrir en el celular</button></div>
   <nav>
     <button data-tab="vivo" class="activa">En vivo</button>
     <button data-tab="revisar">Revisar <span id="nPend" class="badge oculta">0</span></button>
@@ -225,6 +251,19 @@
     </div>
   </section>
 </main>
+
+<div id="veloCel" class="velo oculta">
+  <div class="modal">
+    <h3>Abrir en el celular</h3>
+    <div class="sub">Conecta el celular al mismo Wi-Fi que esta PC y escanea el código con la cámara.</div>
+    <div id="qr"></div>
+    <code id="urlCel"></code>
+    <div class="sub" id="otrasCel"></div>
+    <div class="sub" style="margin-top:8px">La clave va dentro del link: no lo compartas. Funciona mientras la ventana negra del panel siga abierta.</div>
+    <button class="b sec" style="margin-top:14px" onclick="document.getElementById('veloCel').classList.add('oculta')">Cerrar</button>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -361,7 +400,7 @@ async function cargarLista(mantener) {
   if (!items.length) lista.append(el('div', {class: 'nada'},
     filtro === 'pendientes' ? 'No hay nada por revisar.' : 'Nada aquí todavía.'));
   items.forEach((m, i) => lista.append(el('button', {
-    class: 'item' + (sel && sel.sample_id === m.sample_id ? ' sel' : ''), onclick: () => elegir(i)},
+    class: 'item' + (sel && sel.sample_id === m.sample_id ? ' sel' : ''), onclick: () => elegir(i, true)},
     el('div', {class: 't'}, el('span', {}, m.gloss), veredicto(m)),
     el('div', {class: 'd'}, (m.titulo || '') + (m.canal ? ' · ' + m.canal : '')),
     el('div', {class: 'd'}, m.motivo || ''))));
@@ -448,8 +487,11 @@ function animar(canvas, seq, getSuave) {
 }
 
 let motivosSel = new Set(), verSuave = false, trabajoTimer = null;
-async function elegir(i) {
+async function elegir(i, tocada = false) {
   sel = items[i]; motivosSel = new Set(); verSuave = false;
+  // En el celular la lista va arriba del detalle: al tocar, baja a verlo.
+  if (tocada && window.matchMedia('(max-width: 1000px)').matches)
+    setTimeout(() => $('#detalle').scrollIntoView({behavior: 'smooth', block: 'start'}), 50);
   document.querySelectorAll('#lista .item').forEach((x, k) => x.classList.toggle('sel', k === i));
   const m = sel, d = $('#detalle'); d.innerHTML = '';
   const distRel = m.distancia != null && m.max_distancia ? m.distancia / m.max_distancia : null;
@@ -602,6 +644,29 @@ async function cargarAprendizaje(forzar) {
   }
 }
 $('#bReaprender').onclick = () => cargarAprendizaje(true);
+
+// ---------------------------------------------------------------- celular
+(async () => {
+  let red;
+  try { red = await api('/api/red'); } catch (_) { return; }
+  if (!red.activa || !(red.urls || []).length) return;
+  const b = $('#bCelular');
+  b.classList.remove('oculta');
+  b.onclick = () => {
+    const url = red.urls[0];
+    $('#urlCel').textContent = url;
+    $('#otrasCel').textContent = red.urls.length > 1
+      ? 'Si no abre, prueba: ' + red.urls.slice(1).join('  ·  ') : '';
+    const caja = $('#qr'); caja.innerHTML = '';
+    if (window.qrcode) {
+      const q = qrcode(0, 'M'); q.addData(url); q.make();
+      caja.innerHTML = q.createSvgTag({cellSize: 6, margin: 2, scalable: true});
+    } else {
+      caja.textContent = 'Sin internet no puedo dibujar el código; escribe el link en el celular.';
+    }
+    $('#veloCel').classList.remove('oculta');
+  };
+})();
 </script>
 </body>
 </html>

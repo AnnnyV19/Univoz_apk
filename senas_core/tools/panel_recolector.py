@@ -30,6 +30,9 @@ se validan contra la carpeta del proyecto.
 """
 import argparse
 import datetime as dt
+import hmac
+import secrets
+import socket
 import json
 import math
 import mimetypes
@@ -500,6 +503,55 @@ def exportar():
     return _trabajo(fn)
 
 
+# ----------------------------------------------------------------- red
+
+COOKIE = "panel_clave"
+_RED = {"activa": False, "clave": None, "urls": []}
+
+
+def clave_panel():
+    """Clave para entrar desde el celular. Se crea una vez y se guarda en
+    datasets_lsm/recolector/clave_panel.txt (borrar ese archivo = clave nueva)."""
+    p = os.path.join(DATOS, "clave_panel.txt")
+    try:
+        with open(p, encoding="utf-8") as f:
+            c = f.read().strip()
+        if len(c) >= 8:
+            return c
+    except OSError:
+        pass
+    c = secrets.token_urlsafe(9)
+    os.makedirs(DATOS, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(c)
+    return c
+
+
+def ips_locales():
+    """IPs de esta PC en la red de la casa (sin mandar nada: un socket UDP
+    'conectado' solo elige la interfaz)."""
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in ips and not ip.startswith("127."):
+                ips.append(ip)
+    except OSError:
+        pass
+    return ips
+
+
+def es_local(ip):
+    return ip in ("127.0.0.1", "::1") or ip.startswith("127.")
+
+
 # ----------------------------------------------------------------- servidor
 
 def crear_manejador(base, demo):
@@ -518,6 +570,43 @@ def crear_manejador(base, demo):
 
         def _error(self, mensaje, codigo=400):
             self._json({"error": mensaje}, codigo)
+
+        def _autorizado(self, q):
+            """Desde esta PC siempre. Desde otro aparato (modo red) solo con
+            la clave: la primera vez llega en el link (?clave=) y se guarda
+            como cookie; sin ella no se ve nada."""
+            if es_local(self.client_address[0]):
+                return True
+            if not _RED["activa"]:
+                return False
+            clave = _RED["clave"]
+            for parte in (self.headers.get("Cookie") or "").split(";"):
+                k, _, v = parte.strip().partition("=")
+                if k == COOKIE and hmac.compare_digest(v, clave):
+                    return True
+            dada = (q.get("clave") or [""])[0]
+            if dada and hmac.compare_digest(dada, clave):
+                # Guarda la cookie y quita la clave de la barra de direcciones.
+                self.send_response(303)
+                self.send_header("Set-Cookie", f"{COOKIE}={clave}; Path=/; Max-Age=2592000; "
+                                 "HttpOnly; SameSite=Strict")
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            return False
+
+        def _sin_permiso(self):
+            cuerpo = ("<!doctype html><meta charset=utf-8><meta name=viewport "
+                      "content='width=device-width,initial-scale=1'><title>Recolector UNIVOZ</title>"
+                      "<body style='font:17px system-ui;padding:32px;color:#29232F'>"
+                      "<h2 style='color:#5B1493'>Falta la clave</h2><p>Abre el link completo "
+                      "que aparece en el panel de tu PC (o escanea su código QR).</p>").encode("utf-8")
+            self.send_response(403)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(cuerpo)))
+            self.end_headers()
+            self.wfile.write(cuerpo)
 
         def _cuerpo(self):
             largo = int(self.headers.get("Content-Length") or 0)
@@ -572,7 +661,19 @@ def crear_manejador(base, demo):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             ruta = u.path
+            ok = self._autorizado(q)
+            if ok is None:
+                return
+            if not ok:
+                return self._sin_permiso()
             try:
+                if ruta == "/api/red":
+                    local = es_local(self.client_address[0])
+                    return self._json({
+                        "activa": _RED["activa"],
+                        "urls": [f"{u_}?clave={_RED['clave']}" for u_ in _RED["urls"]]
+                        if local and _RED["activa"] else [],
+                        "desde_celular": not local})
                 if ruta in ("/", "/index.html"):
                     with open(PAGINA, "rb") as f:
                         cuerpo = f.read()
@@ -610,7 +711,10 @@ def crear_manejador(base, demo):
                 self._error(str(ex), 500)
 
         def do_POST(self):
-            ruta = urlparse(self.path).path
+            u = urlparse(self.path)
+            ruta = u.path
+            if not self._autorizado({}):
+                return self._error("falta la clave", 403)
             try:
                 c = self._cuerpo()
                 if ruta == "/api/revisar":
@@ -646,6 +750,8 @@ def main():
     ap.add_argument("--demo", action="store_true", help="datos inventados, sin base")
     ap.add_argument("--puerto", type=int, default=PUERTO)
     ap.add_argument("--sin-navegador", action="store_true")
+    ap.add_argument("--red", action="store_true",
+                    help="también se abre desde el celular en la misma red Wi-Fi (con clave)")
     args = ap.parse_args()
     if args.demo:
         DATOS = os.path.join(RAIZ, "datasets_lsm", "recolector_demo")
@@ -653,9 +759,21 @@ def main():
         base = BaseDemo()
     else:
         base = BaseReal()
-    srv = ThreadingHTTPServer(("127.0.0.1", args.puerto), crear_manejador(base, args.demo))
+    host = "127.0.0.1"
+    if args.red:
+        host = "0.0.0.0"
+        _RED["activa"] = True
+        _RED["clave"] = clave_panel()
+        _RED["urls"] = [f"http://{ip}:{args.puerto}/" for ip in ips_locales()]
+    srv = ThreadingHTTPServer((host, args.puerto), crear_manejador(base, args.demo))
     url = f"http://127.0.0.1:{args.puerto}"
     print(f"Panel del recolector en {url}  (Ctrl+C para cerrar)")
+    if args.red:
+        print("\nDesde el celular (misma red Wi-Fi), abre:")
+        for u_ in _RED["urls"]:
+            print(f"   {u_}?clave={_RED['clave']}")
+        print("o escanea el código QR que sale en el panel de esta PC.")
+        print("Si Windows pregunta por el Firewall, permite solo 'Redes privadas'.\n")
     if not args.sin_navegador:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
