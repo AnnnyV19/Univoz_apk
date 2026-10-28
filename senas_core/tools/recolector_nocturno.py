@@ -25,6 +25,15 @@ QUÉ HACE, en orden:
      plantillas.json al día).
   8. Deja un reporte CSV por noche en datasets_lsm/recolector/.
 
+EN VIVO Y APRENDIZAJE (panel_recolector.py):
+  - estado.json: en qué va (fase, seña, video, contadores, últimas líneas).
+  - eventos.jsonl: una línea por video con todo lo medido.
+  - Si existe el archivo "detener", termina después del video en curso.
+  - aprendizaje.json (aprendizaje_recolector.py, a partir de lo que la dueña
+    revisa en el panel): canales y señas que ya no se buscan en YouTube,
+    calidad mínima, suavizado y, con suficientes revisiones, la IA que
+    decide qué aprobar solo.
+
 DERECHOS: solo licencia Creative Commons (YouTube) o la que declare la entrada
 de Wikisigns. Nada se publica: las muestras viven en la base de la dueña.
 
@@ -54,6 +63,77 @@ ENLACES_WIKISIGNS = os.path.join(RAIZ, "videos", "enlaces_wikisigns.txt")
 def sin_acentos(texto):
     t = unicodedata.normalize("NFD", texto or "")
     return "".join(c for c in t if unicodedata.category(c) != "Mn").lower()
+
+
+class Bitacora:
+    """Lo que el panel lee para mostrar en vivo qué está haciendo."""
+
+    def __init__(self, carpeta, modo):
+        self.carpeta = carpeta
+        self.ruta = os.path.join(carpeta, "estado.json")
+        self.eventos = os.path.join(carpeta, "eventos.jsonl")
+        self.datos = {
+            "corriendo": True, "pid": os.getpid(), "modo": modo,
+            "inicio": dt.datetime.now().isoformat(timespec="seconds"),
+            "fase": "arrancando", "actual": None,
+            "contadores": {"senas": 0, "candidatos": 0, "videos": 0,
+                           "hechos": 0, "aprobadas": 0, "pendientes": 0,
+                           "fallos": 0},
+            "log": [],
+        }
+        self._ultimo = 0.0
+        self.guardar(forzar=True)
+
+    def decir(self, texto=""):
+        print(texto, flush=True)
+        for linea in str(texto).splitlines() or [""]:
+            self.datos["log"].append(linea)
+        del self.datos["log"][:-300]
+        self.guardar()
+
+    def fase(self, fase, actual=None):
+        self.datos["fase"] = fase
+        self.datos["actual"] = actual
+        self.guardar(forzar=True)
+
+    def contar(self, **kw):
+        for k, v in kw.items():
+            self.datos["contadores"][k] = self.datos["contadores"].get(k, 0) + v
+        self.guardar()
+
+    def poner(self, **kw):
+        self.datos["contadores"].update(kw)
+        self.guardar(forzar=True)
+
+    def evento(self, dato):
+        from aprendizaje_recolector import agregar_jsonl
+        agregar_jsonl(self.eventos, dato)
+
+    def terminar(self, fase="terminó"):
+        self.datos["corriendo"] = False
+        self.datos["fase"] = fase
+        self.datos["actual"] = None
+        self.datos["fin"] = dt.datetime.now().isoformat(timespec="seconds")
+        self.guardar(forzar=True)
+
+    def guardar(self, forzar=False):
+        ahora = time.time()
+        if not forzar and ahora - self._ultimo < 0.5:
+            return
+        self._ultimo = ahora
+        self.datos["actualizado"] = dt.datetime.now().isoformat(timespec="seconds")
+        try:
+            os.makedirs(self.carpeta, exist_ok=True)
+            tmp = self.ruta + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.datos, f, ensure_ascii=False)
+            os.replace(tmp, self.ruta)
+        except OSError:
+            pass                      # el panel abierto puede bloquearlo un instante
+
+
+def pidieron_detener():
+    return os.path.exists(os.path.join(DATOS, "detener"))
 
 
 def palabra_de(gloss, espanol):
@@ -97,7 +177,8 @@ def titulo_sirve(titulo, palabra):
 # ------------------------------------------------------------------ fuentes
 
 def buscar_youtube(palabra, n, max_segundos, espera):
-    """Candidatos de YouTube para `palabra` (sin bajar): [(url, licencia, título)]."""
+    """Candidatos de YouTube para `palabra` (sin bajar):
+    [(url, licencia, título, canal)]."""
     from descargar import _cargar_yt_dlp
     YoutubeDL = _cargar_yt_dlp()
     consulta = f"ytsearch{n}:{palabra} LSM lengua de señas mexicana"
@@ -132,7 +213,8 @@ def buscar_youtube(palabra, n, max_segundos, espera):
             continue
         if (info.get("duration") or 0) > max_segundos:
             continue
-        out.append((url, licencia, titulo))
+        canal = info.get("channel") or info.get("uploader") or ""
+        out.append((url, licencia, titulo, canal))
     return out
 
 
@@ -154,7 +236,7 @@ def candidatos_wikisigns(glosas_buscadas):
     for gloss, palabra in glosas_buscadas.items():
         urls = por_palabra.get(sin_acentos(palabra), [])
         if urls:
-            out[gloss] = [(u, "Wikisigns", palabra) for u in urls]
+            out[gloss] = [(u, "Wikisigns", palabra, "Wikisigns") for u in urls]
     return out
 
 
@@ -208,11 +290,45 @@ def main():
     import db
     import sign_norm as sn
     from dtw import DtwClassifier
+    import aprendizaje_recolector as ar
 
     load_dotenv()
     os.makedirs(DATOS, exist_ok=True)
+    try:
+        os.remove(os.path.join(DATOS, "detener"))   # un "detener" viejo no cuenta
+    except OSError:
+        pass
     hoy = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
-    print(f"== Recolector nocturno {hoy}")
+    modo = "seco" if args.seco else ("auto-aprobar" if args.auto_aprobar else "pendientes")
+    bit = Bitacora(DATOS, modo)
+    try:
+        _correr(args, bit, hoy, db, sn, DtwClassifier, ar)
+    except BaseException as ex:
+        bit.decir(f"ERROR: {ex}")
+        bit.terminar("falló")
+        raise
+    detenido = pidieron_detener()
+    bit.terminar("detenido" if detenido else "terminó")
+    if detenido:
+        try:
+            os.remove(os.path.join(DATOS, "detener"))
+        except OSError:
+            pass
+
+
+def _correr(args, bit, hoy, db, sn, DtwClassifier, ar):
+    print = bit.decir                           # todo lo que dice va al panel
+    # Lo aprendido de las revisiones (antes de empezar, con lo último).
+    apr = ar.aprender(ar.leer_jsonl(os.path.join(DATOS, "eventos.jsonl")),
+                      ar.leer_jsonl(os.path.join(DATOS, "revisiones.jsonl")))
+    ar.guardar(DATOS, apr)
+    max_segundos = min(args.max_segundos, apr.get("max_segundos", args.max_segundos))
+    bloqueados = set(apr.get("canales_bloqueados") or [])
+    sin_youtube = set(apr.get("glosas_sin_youtube") or [])
+    print(f"== Recolector nocturno {hoy} ({bit.datos['modo']})")
+    for l in apr.get("lecciones") or []:
+        print(f"   aprendido: {l}")
+    bit.fase("contando muestras")
 
     conn = db.conectar()
     # 1. Cuántas aprobadas tiene cada seña, y el reconocedor con todas ellas.
@@ -231,6 +347,7 @@ def main():
             conteo.setdefault(gloss, 0)
             espanol_de.setdefault(gloss, espanol or "")
     print(f"   {len(conteo)} señas; {sum(conteo.values())} muestras aprobadas")
+    bit.fase("eligiendo señas")
 
     # 2. Las que tienen menos, primero. Sin letras sueltas (sus videos casi
     #    nunca se titulan con la letra sola).
@@ -239,22 +356,35 @@ def main():
     elegidas = {g: palabra_de(g, espanol_de.get(g)) for _, g in faltan[:args.max_glosas]}
     print(f"   {len(faltan)} señas con menos de {args.objetivo}; "
           f"esta noche se buscan {len(elegidas)}")
+    bit.poner(senas=len(elegidas))
 
     # 3-4. Candidatos nuevos.
     vistos = cargar_vistos()
     cand = []
     if not args.sin_wikisigns:
+        bit.fase("buscando en Wikisigns")
         for g, lista in candidatos_wikisigns(elegidas).items():
-            for url, lic, tit in lista:
-                cand.append((g, url, lic, tit, "wikisigns"))
+            for url, lic, tit, canal in lista:
+                cand.append((g, url, lic, tit, "wikisigns", canal))
     if not args.sin_youtube:
-        for g, palabra in elegidas.items():
+        for k, (g, palabra) in enumerate(elegidas.items(), start=1):
+            if pidieron_detener():
+                break
+            if g in sin_youtube:
+                print(f"   {g}: no se busca en YouTube (aprendido)")
+                continue
+            bit.fase("buscando en YouTube", {"i": k, "n": len(elegidas),
+                                             "gloss": g, "palabra": palabra})
             try:
-                for url, lic, tit in buscar_youtube(
-                        palabra, args.por_busqueda, args.max_segundos, args.espera):
-                    cand.append((g, url, lic, tit, "youtube"))
+                for url, lic, tit, canal in buscar_youtube(
+                        palabra, args.por_busqueda, max_segundos, args.espera):
+                    if canal in bloqueados:
+                        print(f"   {g}: salto el canal {canal} (aprendido)")
+                        continue
+                    cand.append((g, url, lic, tit, "youtube", canal))
             except Exception as ex:
                 print(f"   busqueda de {palabra}: {ex}")
+            bit.poner(candidatos=len(cand))
             time.sleep(args.espera)
     nuevos, ya = [], set()
     for c in cand:
@@ -264,13 +394,14 @@ def main():
         nuevos.append(c)
     nuevos = nuevos[:args.max_videos]
     print(f"   {len(nuevos)} videos nuevos para revisar")
+    bit.poner(candidatos=len(cand), videos=len(nuevos))
 
     reporte = os.path.join(DATOS, f"reporte_{hoy}.csv")
     filas = []
     if args.seco:
-        for g, url, lic, tit, fuente in nuevos:
+        for g, url, lic, tit, fuente, canal in nuevos:
             filas.append({"gloss": g, "url": url, "fuente": fuente, "licencia": lic,
-                          "titulo": tit, "decision": "(seco)"})
+                          "titulo": tit, "canal": canal, "decision": "(seco)"})
             print(f"   {g:<24} {fuente:<9} {url}")
     else:
         from descargar import descargar
@@ -280,20 +411,38 @@ def main():
         extractor = ExtractorLandmarks(args.pose_model, args.hand_model)
         aprobadas = 0
         try:
-            for i, (g, url, lic, tit, fuente) in enumerate(nuevos, start=1):
+            for i, (g, url, lic, tit, fuente, canal) in enumerate(nuevos, start=1):
+                if pidieron_detener():
+                    print("\nDetenido desde el panel.")
+                    break
                 print(f"\n[{i}/{len(nuevos)}] {g} <- {url}")
+                actual = {"i": i, "n": len(nuevos), "gloss": g, "url": url,
+                          "titulo": tit, "canal": canal, "fuente": fuente}
                 fila = {"gloss": g, "url": url, "fuente": fuente,
-                        "licencia": lic, "titulo": tit}
+                        "licencia": lic, "titulo": tit, "canal": canal}
+                ev = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
+                      "noche": hoy, "gloss": g, "espanol": elegidas[g],
+                      "url": url, "fuente": fuente, "canal": canal,
+                      "licencia": lic, "titulo": tit}
                 try:
+                    bit.fase("descargando", actual)
                     vid = url.rsplit("=", 1)[-1].rsplit("/", 1)[-1][:16]
                     video = descargar(url, nombre=f"{g}_{vid}")
+                    ev["video"] = os.path.relpath(video, RAIZ)
+                    bit.fase("sacando landmarks", actual)
                     r = ingest_un_video(
                         conn, extractor, video_path=video, gloss=g,
                         espanol=elegidas[g], signer=args.signer, aprobar=False)
                     conn.commit()
                     fila.update(sample_id=r["sample_id"],
                                 calidad=round(r["quality_score"], 3))
+                    ev.update(sample_id=str(r["sample_id"]),
+                              calidad=round(r["quality_score"], 4),
+                              n_frames=r.get("n_frames"),
+                              frames_invalidos=r.get("frames_invalidos"),
+                              fps=r.get("fps"))
                     # 6. Verificación con el reconocedor.
+                    bit.fase("reconociendo", actual)
                     with conn.cursor() as cur:
                         cur.execute(
                             "SELECT data, frame_dim FROM sample_landmarks "
@@ -301,13 +450,33 @@ def main():
                             (r["sample_id"], sn.NORM_VERSION))
                         data, frame_dim = cur.fetchone()
                     seq = sn.unpack_f16(bytes(data), frame_dim)
+                    if apr.get("suavizar"):
+                        # Aprendido: quitar brincos de un cuadro (mediana de 3).
+                        seq = ar.suavizar_mediana(seq)
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE sample_landmarks SET data = %s "
+                                "WHERE sample_id = %s AND norm_version = %s",
+                                (sn.pack_f16(seq), r["sample_id"], sn.NORM_VERSION))
+                        conn.commit()
+                        ev["suavizada"] = True
                     p = clasif.classify(seq)
-                    decision, motivo = decidir(
+                    ev.update(prediccion=p.gloss,
+                              distancia=round(p.distance, 5) if p.distance != float("inf") else None,
+                              margen=round(p.margin, 4), aceptada=bool(p.aceptada),
+                              max_distancia=clasif.max_distance,
+                              min_margen=clasif.min_margin,
+                              hay_aprobadas=conteo.get(g, 0) > 0)
+                    fija = decidir(
                         p.gloss, g, p.distance, p.margin, p.aceptada,
                         r["quality_score"],
                         max_distancia=clasif.max_distance,
                         min_margen=clasif.min_margin,
                         hay_aprobadas=conteo.get(g, 0) > 0)
+                    decision, motivo = ar.decidir_aprendido(ev, apr, fija)
+                    prob = ar.probabilidad_evento(apr, ev)
+                    if prob is not None:
+                        ev["prob_ia"] = round(prob, 3)
                     if decision == "aprobar" and args.auto_aprobar:
                         with conn.cursor() as cur:
                             cur.execute("UPDATE sign_samples SET estado = 'aprobada' "
@@ -319,11 +488,16 @@ def main():
                         estado = "pendiente"
                     fila.update(prediccion=p.gloss, distancia=round(p.distance, 4),
                                 margen=round(p.margin, 3), decision=estado, motivo=motivo)
+                    ev.update(decision=estado, motivo=motivo)
+                    bit.contar(hechos=1, **{"aprobadas" if estado == "aprobada" else "pendientes": 1})
                     print(f"   {estado}: {motivo}")
                 except Exception as ex:
                     conn.rollback()
                     fila.update(decision="fallo", motivo=str(ex)[:200])
+                    ev.update(decision="fallo", motivo=str(ex)[:300])
+                    bit.contar(hechos=1, fallos=1)
                     print(f"   FALLO: {ex}")
+                bit.evento(ev)
                 vistos.add(url)
                 guardar_vistos(vistos)
                 filas.append(fila)
@@ -331,12 +505,13 @@ def main():
             extractor.cerrar()
         # 7. Moderación y plantillas.json si cambió lo aprobado.
         if aprobadas:
+            bit.fase("exportando plantillas")
             print(f"\n{aprobadas} aprobadas solas: moderando y exportando...")
             subprocess.run([sys.executable, os.path.join(HERE, "moderar_senas.py"),
                             "--exportar"], check=False)
     conn.close()
 
-    campos = ["gloss", "url", "fuente", "licencia", "titulo", "sample_id",
+    campos = ["gloss", "url", "fuente", "canal", "licencia", "titulo", "sample_id",
               "calidad", "prediccion", "distancia", "margen", "decision", "motivo"]
     with open(reporte, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=campos, extrasaction="ignore")
