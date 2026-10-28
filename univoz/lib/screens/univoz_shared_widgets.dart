@@ -235,8 +235,10 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
     final colores = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: colores.surface,
+      color: colores.surface,
+      // La línea va encima (foregroundDecoration), sin quitarle alto al
+      // contenido: la barra tiene alto fijo y con texto grande no cabía.
+      foregroundDecoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: colores.outlineVariant, width: 1.5),
         ),
