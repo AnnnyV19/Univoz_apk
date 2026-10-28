@@ -9,6 +9,8 @@ Rama `integracion-final`. Esto es lo que pidió la dueña después de probar la 
 - **Modelo:** `MODELO_UNIVOZ_v0.vrm` (el `univozM` se veía difícil).
 - **Señas que se ven mal.** Medición de la mezcla en las 541 señas (`herramientas/auditoria_manos`): la muñeca casi no se separa de los datos (máximo por seña, mediana 0.9 cm; Karim solo 13.8 cm). La palma en las peores señas sigue como en Karim (p90 por seña: 62° en el 10 % peor; el visor anterior de UNIVOZ daba 26°) y hay 68 latigazos de palma. La lista de [senas_que_se_ven_mal.csv](senas_que_se_ven_mal.csv) (152) se hizo con el visor de Karim; muchas vienen de tomas con la palma volteada y hay que regrabarlas.
 
+- **Dedos derechos que apuntaban hacia quien mira** (2026-10-28). El visor medía cada falange con el ángulo sin signo entre dos segmentos, así que la abertura lateral (el índice sale ~20° de la línea del metacarpo) y la punta un poco hacia atrás contaban como doblez hacia la palma. Ahora la flexión de los dedos largos va con signo sobre la normal de la palma (`rig_manos.mjs`, `flexionesConSigno`, interruptor `cal.flexionConSigno`). Si una toma viene espejada se detecta y se corrige. Medido en las 541 señas, en los dedos que el video muestra derechos: el avatar los doblaba más de 30° en el 73 % de los cuadros; ahora en el 5.8 %. Muñeca y palma, sin cambios.
+
 ## Reconocimiento
 
 - **El detector no arrancaba en la vista previa.** La cámara del teléfono manda cuadros con manos alternados con cuadros de solo cuerpo, y el movimiento se medía contra el cuadro anterior, que muchas veces no tenía manos. Ahora cada mano se compara con la última vez que se vio (hasta 250 ms).
