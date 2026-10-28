@@ -586,11 +586,11 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
           _buildDetectedCard(profileConfigs[_detectedProfile]!),
         ],
         const SizedBox(height: 14),
-        Row(
+        const Row(
           children: [
-            const Expanded(child: Divider()),
+            Expanded(child: Divider()),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              padding: EdgeInsets.symmetric(horizontal: 10),
               child: Text(
                 'o elige',
                 semanticsLabel: 'o selecciona su perfil manualmente',
@@ -601,7 +601,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 ),
               ),
             ),
-            const Expanded(child: Divider()),
+            Expanded(child: Divider()),
           ],
         ),
         const SizedBox(height: 12),

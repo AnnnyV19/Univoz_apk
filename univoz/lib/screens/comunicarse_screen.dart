@@ -885,69 +885,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     );
   }
 
-  /// Inserta [letter] en la posición actual del cursor (en vez de siempre
-  /// al final), y mantiene el cursor justo después de la letra insertada.
-  void _insertLetter(String letter) {
-    final text = _controller.text;
-    final selection = _controller.selection;
-    final start = selection.start >= 0 ? selection.start : text.length;
-    final end = selection.end >= 0 ? selection.end : text.length;
-    final newText = text.replaceRange(start, end, letter);
-    _controller.value = _controller.value.copyWith(
-      text: newText,
-      selection: TextSelection.collapsed(offset: start + letter.length),
-      composing: TextRange.empty,
-    );
-  }
-
-  Widget _buildSimpleKeyboard() {
-    const rows = [
-      'QWERTYUIOP',
-      'ASDFGHJKL',
-      'ZXCVBNM',
-    ];
-    return Column(
-      children: rows
-          .map(
-            (row) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: row.split('').map((letter) {
-                  return Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      // Alto de 48 dp (toque cómodo); el ancho lo reparte la fila.
-                      child: SizedBox(
-                        height: 48,
-                        child: Material(
-                          color: ColoresUnivoz.moradoTenue,
-                          borderRadius: BorderRadius.circular(6),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(6),
-                            onTap: () => _insertLetter(letter),
-                            child: Semantics(
-                              label: 'Letra $letter',
-                              button: true,
-                              excludeSemantics: true,
-                              child: Center(
-                                child: Text(letter,
-                                    style: const TextStyle(fontSize: 12)),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          )
-          .toList(),
-    );
-  }
-
   Widget _segmentButton({
     required String label,
     required bool selected,
