@@ -7,13 +7,14 @@ Rama `integracion-final`. Esto es lo que pidió la dueña después de probar la 
 - **Mezcla: movimiento de Karim + preparación de UNIVOZ.** El visor (`index.html` y los `rig_*.mjs`) vuelve a ser el de la integración (Karim = Javier Karim Andrade, `Xavier82h8`), con lo que hacía bien el de la dueña: suavizado, reparación de palmas volteadas, anticipación y frases unidas (`reproducirFrase` nativo).
 - **Separadores apagados.** `separarCuerpo` y `separarManos` quedan en `false` en `cal`: eran los que empujaban las manos hacia el fondo.
 - **Modelo:** `MODELO_UNIVOZ_v0.vrm` (el `univozM` se veía difícil).
-- **Cámara de Traducir.** Ya no voltea la imagen ni los puntos, igual que la versión de Karim.
 - **Señas que se ven mal.** Medición de la mezcla en las 541 señas (`herramientas/auditoria_manos`): la muñeca casi no se separa de los datos (máximo por seña, mediana 0.9 cm; Karim solo 13.8 cm). La palma en las peores señas sigue como en Karim (p90 por seña: 62° en el 10 % peor; el visor anterior de UNIVOZ daba 26°) y hay 68 latigazos de palma. La lista de [senas_que_se_ven_mal.csv](senas_que_se_ven_mal.csv) (152) se hizo con el visor de Karim; muchas vienen de tomas con la palma volteada y hay que regrabarlas.
 
 ## Reconocimiento
 
 - **El detector no arrancaba en la vista previa.** La cámara del teléfono manda cuadros con manos alternados con cuadros de solo cuerpo, y el movimiento se medía contra el cuadro anterior, que muchas veces no tenía manos. Ahora cada mano se compara con la última vez que se vio (hasta 250 ms).
 - **Estado visible.** Arriba de la cámara: "Haz tu seña" → "Leyendo la seña..." → "Reconociendo..." → la palabra, o "No la reconocí. Repite la seña".
+- **Sin avatar, el automático no cortaba.** Antes el visor del avatar decidía cuándo había movimiento. Al quitar el avatar de Traducir y de la pantalla partida quedaba el detector por píxeles. Ahora `MovimientoTipoVisor` (en `controlador_captura.dart`) calcula en Dart lo mismo que el visor (`rig_math.mjs`), sobre los frames fusionados.
+- **Cámara en espejo otra vez** con la frontal (imagen y esqueleto). Sin espejo, al mover el brazo derecho se movía uno del lado izquierdo.
 
 ## Comunicarse
 
@@ -55,6 +56,8 @@ Además:
 ## Recolector nocturno
 
 `senas_core/tools/recolector_nocturno.py` busca cada noche videos con licencia Creative Commons (YouTube) y de Wikisigns para las señas con menos de 10 muestras, saca los landmarks y los guarda como pendientes. Solo aprueba los que el reconocedor confirma como la misma seña con distancia, margen y calidad holgados; el resto queda para revisión. Reporte en `datasets_lsm/recolector/reporte_<fecha>.csv`. La tarea de Windows se registra a mano con `registrar_recolector.bat` (3:17 a. m.).
+
+**Panel** (`panel_recolector.bat` → http://127.0.0.1:8731): en vivo (fase, seña, video, contadores, lo que va diciendo; correr y detener), revisar (video junto al esqueleto guardado; aprobar, aprobar suavizada, rechazar con motivo, recortar y volver a sacar) y lo que aprendió. `aprendizaje_recolector.py` aprende de esas revisiones: canales y señas que ya no se buscan en YouTube, calidad mínima, suavizado automático (mediana de 3 cuadros, no mueve alturas) y, desde 20 revisiones, una regresión logística que decide qué aprobar solo con un umbral que en sus revisiones da ≥ 95 % de acierto.
 
 ## Pendiente
 - Probar en el teléfono la pantalla partida, cámara y avatar a la vez.
