@@ -138,6 +138,17 @@ ComunicacionModo resolverComunicacionModo() {
   // "other" (tú eres ciego/a, hablando con alguien sordo/a que sabe
   // LSM): las dos combinaciones tienen exactamente la misma barrera que
   // resolver, solo cambia de qué lado del teléfono está cada quien.
+  // Oyente con sordo/a que no sabe LSM: nadie firma y la persona sorda no
+  // oye, así que no hay voz que valga: se escriben y se leen.
+  final bool oyenteConSordoSinLsm =
+      (mine == ProfileType.oyente &&
+              other == ProfileType.sordo &&
+              !ConversationProfile.otherKnowsLsm) ||
+          (other == ProfileType.oyente &&
+              mine == ProfileType.sordo &&
+              !ConversationProfile.mineKnowsLsm);
+  if (oyenteConSordoSinLsm) return ComunicacionModo.soloTexto;
+
   final bool haceFaltaAvatar =
       (esPerfilSordoOMudo(mine) && ConversationProfile.mineKnowsLsm) ||
           (esPerfilSordoOMudo(other) && ConversationProfile.otherKnowsLsm);

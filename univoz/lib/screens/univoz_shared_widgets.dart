@@ -303,7 +303,12 @@ class SosButton extends StatefulWidget {
   final LanzadorUrl? lanzador;
   final LectorVoz? lector;
 
-  const SosButton({super.key, this.lanzador, this.lector});
+  /// true: círculo rojo chico con el ícono (encima de la cámara en
+  /// Comunicarse, para no tapar); igual se mantiene presionado.
+  final bool compacto;
+
+  const SosButton(
+      {super.key, this.lanzador, this.lector, this.compacto = false});
 
   /// Cuánto hay que mantenerlo presionado.
   static const Duration duracionPresion = Duration(milliseconds: 800);
@@ -362,6 +367,44 @@ class _SosButtonState extends State<SosButton>
     m.showSnackBar(const SnackBar(content: Text('Mantén presionado para SOS')));
   }
 
+  Widget _circulo(ColorScheme colores) {
+    return Container(
+      width: 52,
+      height: 52,
+      decoration: BoxDecoration(
+        color: colores.error,
+        shape: BoxShape.circle,
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            'SOS',
+            style: TextStyle(
+              color: colores.onError,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          if (_progreso.value > 0)
+            SizedBox(
+              width: 48,
+              height: 48,
+              child: CircularProgressIndicator(
+                key: const ValueKey('anillo-sos'),
+                value: _progreso.value,
+                strokeWidth: 3,
+                color: colores.onError,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colores = Theme.of(context).colorScheme;
@@ -386,7 +429,9 @@ class _SosButtonState extends State<SosButton>
             animation: _progreso,
             // El relleno que avanza va ENCIMA del botón, del mismo tamaño;
             // el contenido va centrado (antes se pegaba arriba del rojo).
-            builder: (context, _) => ClipRRect(
+            builder: (context, _) => widget.compacto
+                ? _circulo(colores)
+                : ClipRRect(
               borderRadius: BorderRadius.circular(26),
               child: Stack(
                 children: [

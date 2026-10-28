@@ -157,7 +157,7 @@ export class RigDiagnosticBuffer {
       schema: 'RigDiagnosticReportV1',
       created_at_ms: Date.now(),
       platform: this.metadata.platform ?? 'unknown',
-      avatar: this.metadata.avatar ?? 'univozM',
+      avatar: this.metadata.avatar ?? 'MODELO_UNIVOZ_v0',
       norm_version: '2.0.0',
       frame_dim: FRAME_DIM,
       calibration: calibration ? JSON.parse(JSON.stringify(calibration)) : null,

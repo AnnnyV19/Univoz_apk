@@ -429,8 +429,13 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       _listening = true;
       _voiceStatus = 'Escuchando...';
     });
+    // La instrucción hablada solo si quien dicta no ve la pantalla (la otra
+    // persona es ciega, o el modo por voz está encendido). A una persona
+    // oyente o sorda que toca el micrófono no se le habla.
+    final hablarInstruccion = BlindNarrator.talkBackFlow ||
+        ConversationProfile.other == ProfileType.ciego;
     final heard = await BlindNarrator.askMessage(
-      'Dime tu mensaje.',
+      hablarInstruccion ? 'Dime tu mensaje.' : '',
       maxAttempts: 1,
       onPartialResult: (partial) {
         if (mounted && partial.isNotEmpty) {
@@ -536,10 +541,11 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   /// [_runVoiceComposeFlow] sigue narrando y componiendo el mensaje por
   /// voz por encima de esta misma pantalla.
   Widget _buildLsmVariant() {
-    // Una persona sabe LSM y la otra no. Sin desplazar, la pantalla se parte
-    // en dos: arriba la cámara (quien firma: su seña se vuelve texto y, si
-    // del otro lado alguien oye, voz) y abajo el avatar (lo que la otra
-    // persona escribe o dice, el avatar lo firma).
+    // Una persona sabe LSM y la otra no. Sin desplazar: arriba el avatar (lo
+    // que la otra persona escribe o dice, el avatar lo firma) y abajo la
+    // cámara, grande, como FONDO de los controles (quien firma: su seña se
+    // vuelve texto y, si del otro lado alguien oye, voz). Los controles van
+    // encima, chicos y semitransparentes, para no tapar la seña.
     final colores = Theme.of(context).colorScheme;
     // En camaraSenas las dos personas son sordas/mudas: nadie dicta ni
     // escucha, se escribe.
@@ -552,25 +558,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           const SizedBox(height: 6),
         ],
         Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: _camaraActiva
-                ? PantallaDeTranslacion(
-                    conAvatar: false,
-                    embebida: true,
-                    hablarResultado: conVoz,
-                    onReconocido: (texto) {
-                      final espera = _esperaSena;
-                      if (espera != null && !espera.isCompleted) {
-                        espera.complete(texto);
-                      }
-                    },
-                  )
-                : _botonActivarCamara(),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Expanded(
+          flex: 4,
           child: Container(
             width: double.infinity,
             decoration: BoxDecoration(
@@ -637,27 +625,72 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: _segmentButton(
-                label: 'Deletreo',
-                selected: _isSpelling,
-                // Antes verde; ahora el morado del diseño de Lucía.
-                color: ColoresUnivoz.morado,
-                onTap: () => setState(() => _isSpelling = true),
-              ),
+        Expanded(
+          flex: 6,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (_camaraActiva)
+                  PantallaDeTranslacion(
+                    conAvatar: false,
+                    embebida: true,
+                    hablarResultado: conVoz,
+                    onReconocido: (texto) {
+                      final espera = _esperaSena;
+                      if (espera != null && !espera.isCompleted) {
+                        espera.complete(texto);
+                      }
+                    },
+                  )
+                else
+                  _botonActivarCamara(),
+                // SOS chico arriba a la derecha (se mantiene presionado).
+                const Positioned(
+                  top: 56,
+                  right: 10,
+                  child: SosButton(compacto: true),
+                ),
+                // Controles encima de la cámara, abajo.
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 8,
+                  child: _controlesSobreCamara(conVoz),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _segmentButton(
-                label: 'Palabra',
-                selected: !_isSpelling,
-                color: const Color(0xFFE85DA0),
-                onTap: () => setState(() => _isSpelling = false),
-              ),
-            ),
-          ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Deletreo/Palabra, el mensaje, Señar y el micrófono: chicos y
+  /// semitransparentes sobre la cámara.
+  Widget _controlesSobreCamara(bool conVoz) {
+    final colores = Theme.of(context).colorScheme;
+    final translucido = Colors.white.withValues(alpha: 0.88);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _pastillaModo('Deletreo', _isSpelling,
+                  () => setState(() => _isSpelling = true)),
+              _pastillaModo('Palabra', !_isSpelling,
+                  () => setState(() => _isSpelling = false)),
+            ],
+          ),
         ),
         const SizedBox(height: 6),
         Row(
@@ -667,14 +700,21 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                 controller: _controller,
                 textInputAction: TextInputAction.send,
                 onSubmitted: _firmar,
+                style: const TextStyle(fontSize: 15),
                 decoration: InputDecoration(
                   hintText: 'Escribe aquí...',
+                  isDense: true,
                   filled: true,
-                  fillColor: Colors.white,
+                  fillColor: translucido,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide:
-                        const BorderSide(color: ColoresUnivoz.bordeControl),
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide.none,
                   ),
                 ),
               ),
@@ -685,25 +725,47 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               onPressed: () => _firmar(_controller.text),
               icon: const Icon(Icons.play_arrow_rounded),
               tooltip: 'Señar',
-              iconSize: 28,
             ),
-            if (conVoz) ...[
-              const SizedBox(width: 4),
+            if (conVoz)
               IconButton.filled(
                 onPressed: _listening ? null : _dictarMensaje,
                 icon: Icon(_listening ? Icons.mic : Icons.mic_none),
                 tooltip: 'Hablar para que el avatar firme',
-                iconSize: 26,
                 style: IconButton.styleFrom(
                   backgroundColor: colores.secondary,
                 ),
               ),
-            ],
           ],
         ),
-        const SizedBox(height: 8),
-        const SosButton(),
       ],
+    );
+  }
+
+  Widget _pastillaModo(String texto, bool elegida, VoidCallback alTocar) {
+    return Semantics(
+      button: true,
+      selected: elegida,
+      child: GestureDetector(
+        onTap: alTocar,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          constraints: const BoxConstraints(minHeight: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: elegida ? ColoresUnivoz.morado : Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Text(
+            texto,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -794,7 +856,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Escribir directamente',
+          'Escribe y lee',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
@@ -808,6 +870,8 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             maxLines: null,
             expands: true,
             textAlignVertical: TextAlignVertical.top,
+            // Letra grande: la otra persona lo lee en la pantalla.
+            style: const TextStyle(fontSize: 22, height: 1.3),
             decoration: InputDecoration(
               hintText: 'Escribe aquí tu mensaje...',
               filled: true,
@@ -882,34 +946,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _segmentButton({
-    required String label,
-    required bool selected,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? color : color.withValues(alpha: 0.25),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: selected
-                ? Colors.white
-                : Theme.of(context).colorScheme.onSurface,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
     );
   }
 }

@@ -5939,7 +5939,7 @@ void main() {
             schema: 'RigDiagnosticReportV1',
             created_at_ms: Date.now(),
             platform: this.metadata.platform ?? 'unknown',
-            avatar: this.metadata.avatar ?? 'univozM',
+            avatar: this.metadata.avatar ?? 'MODELO_UNIVOZ_v0',
             norm_version: '2.0.0',
             frame_dim: FRAME_DIM,
             calibration: calibration ? JSON.parse(JSON.stringify(calibration)) : null,
@@ -10011,7 +10011,7 @@ void main() {
     // 1800 frames = ~60 s a 30 FPS: entra una sesion completa del protocolo
     // de camara sin perder el inicio.
     const rigDiagnostics = new RigDiagnosticBuffer({
-      platform: standaloneWeb ? 'web' : 'android', avatar: 'univozM',
+      platform: standaloneWeb ? 'web' : 'android', avatar: 'MODELO_UNIVOZ_v0',
     }, 1800);
     rigDiagnostics.setEnabled(false);
     // Telemetría numérica efímera. Nunca guarda video ni imágenes y funciona
@@ -10443,7 +10443,7 @@ void main() {
     // WebView. Este modo carga el mismo VRM desde el servidor estatico y
     // habilita MediaPipe web al pulsar "Iniciar cámara".
     if (standaloneWeb) {
-      fetch('../avatar/univozM.vrm')
+      fetch('../avatar/MODELO_UNIVOZ_v0.vrm')
         .then((response) => {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.arrayBuffer();

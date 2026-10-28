@@ -93,8 +93,39 @@ def tache(cx, cy, r):
     d = r*0.4
     return (f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{TS}"/>'
             f'<path d="M{cx-d} {cy-d} L{cx+d} {cy+d} M{cx+d} {cy-d} L{cx-d} {cy+d}" stroke="{W}" stroke-width="{r*0.26}" stroke-linecap="round"/>')
-ilus['lsm_si'] = svg(mano(108, 112, SK2, s=1.9) + palomita(166, 52, 24))
-ilus['lsm_no'] = svg(mano(108, 112, SK1, s=1.9) + tache(166, 52, 24))
+# Las letras L, S y M del abecedario de LSM, una mano por letra.
+def mano_l(x, y, piel, s=1.0):
+    # índice arriba y pulgar de lado: forma de L
+    return (f'<g transform="translate({x},{y}) scale({s})">'
+            f'<rect x="-14" y="-6" width="28" height="30" rx="10" fill="{piel}"/>'
+            f'<rect x="-12" y="-40" width="8" height="38" rx="4" fill="{piel}"/>'
+            f'<rect x="-34" y="-2" width="26" height="8" rx="4" fill="{piel}"/>'
+            + ''.join(f'<rect x="{-3+i*7}" y="-12" width="7" height="12" rx="3.5" fill="{piel}"/>' for i in range(3)) +
+            f'<path d="M-3 -2 L18 -2" stroke="#00000022" stroke-width="2"/>'
+            '</g>')
+def mano_s(x, y, piel, s=1.0):
+    # puño con el pulgar cruzado al frente
+    return (f'<g transform="translate({x},{y}) scale({s})">'
+            f'<rect x="-17" y="-20" width="34" height="44" rx="12" fill="{piel}"/>'
+            + ''.join(f'<path d="M{-17+i*8.5} -20 L{-17+i*8.5} -6" stroke="#00000026" stroke-width="2"/>' for i in range(1, 4)) +
+            f'<rect x="-18" y="-6" width="30" height="10" rx="5" fill="{piel}" stroke="#00000022" stroke-width="1.5"/>'
+            '</g>')
+def mano_m(x, y, piel, s=1.0):
+    # tres dedos hacia abajo sobre el pulgar
+    return (f'<g transform="translate({x},{y}) scale({s})">'
+            f'<rect x="-15" y="-26" width="30" height="28" rx="10" fill="{piel}"/>'
+            + ''.join(f'<rect x="{-14+i*9.5}" y="-4" width="8" height="30" rx="4" fill="{piel}"/>' for i in range(3)) +
+            f'<rect x="12" y="-14" width="7" height="18" rx="3.5" fill="{piel}" transform="rotate(25 15 -5)"/>'
+            '</g>')
+def letras_lsm(piel):
+    return (mano_l(62, 92, piel, 1.05) + mano_s(120, 92, piel, 1.05) + mano_m(178, 92, piel, 1.05) +
+            ''.join(f'<text x="{x}" y="158" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="800" fill="{M}">{t}</text>'
+                    for x, t in ((58, 'L'), (120, 'S'), (178, 'M'))))
+def prohibido(cx, cy, r):
+    return (f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#DC2626" stroke-width="11"/>'
+            f'<path d="M{cx-r*0.7} {cy-r*0.7} L{cx+r*0.7} {cy+r*0.7}" stroke="#DC2626" stroke-width="11" stroke-linecap="round"/>')
+ilus['lsm_si'] = svg(letras_lsm(SK2))
+ilus['lsm_no'] = svg(letras_lsm(SK1) + prohibido(120, 92, 78))
 # 11-12. Usa lector de pantalla / no: teléfono que habla, o callado
 def telefono(x, y):
     return (f'<rect x="{x}" y="{y}" width="64" height="120" rx="12" fill="{T}"/>'

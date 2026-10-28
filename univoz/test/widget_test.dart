@@ -18,7 +18,7 @@ void main() {
     addTearDown(() => TutorialVisto.directorioParaPruebas = null);
     await tester.pumpWidget(const MaterialApp(home: WelcomeScreen()));
 
-    await tester.tap(find.text('COMENZAR'));
+    await tester.tap(find.text('Comenzar'));
     await tester.pumpAndSettle();
     expect(find.byType(TutorialScreen), findsOneWidget);
     for (var i = 0; i < 4; i++) {
@@ -35,8 +35,8 @@ void main() {
     TutorialVisto.restablecerParaPruebas(visto: true);
     await tester.pumpWidget(const MaterialApp(home: WelcomeScreen()));
 
-    expect(find.text('COMENZAR'), findsOneWidget);
-    await tester.tap(find.text('COMENZAR'));
+    expect(find.text('Comenzar'), findsOneWidget);
+    await tester.tap(find.text('Comenzar'));
     await tester.pumpAndSettle();
 
     expect(find.byType(PurposeScreen), findsOneWidget);
@@ -68,7 +68,7 @@ void main() {
     await tester.pump();
 
     expect(find.byType(MaterialApp), findsOneWidget);
-    expect(find.text('COMENZAR'), findsOneWidget);
+    expect(find.text('Comenzar'), findsOneWidget);
     expect(find.text('¿Cómo funciona?'), findsOneWidget);
   });
 }

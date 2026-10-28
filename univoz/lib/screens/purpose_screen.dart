@@ -180,6 +180,10 @@ class _PurposeScreenState extends State<PurposeScreen> {
     // voz justo a quien lo necesita.
     if (PerfilGuardado.tipo == ProfileType.ciego) {
       BlindNarrator.activateManualBlindMode();
+    } else if (BlindNarrator.talkBackFlow) {
+      // El perfil guardado no es "ciego": la voz para ciegos no aplica
+      // (aunque el teléfono reporte un servicio de accesibilidad).
+      BlindNarrator.disable();
     }
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),

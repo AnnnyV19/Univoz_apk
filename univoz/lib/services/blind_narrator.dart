@@ -380,9 +380,13 @@ class BlindNarrator {
     var currentPrompt = prompt;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       if (isCancelled != null && isCancelled()) return '';
-      await _ensureTts();
-      await _tts.stop();
-      await _hablarTts(currentPrompt);
+      // Prompt vacío: escuchar sin decir nada (quien toca el micrófono
+      // ve la pantalla; la instrucción hablada es solo para quien no ve).
+      if (currentPrompt.isNotEmpty) {
+        await _ensureTts();
+        await _tts.stop();
+        await _hablarTts(currentPrompt);
+      }
       if (isCancelled != null && isCancelled()) return '';
       final bool micReady = await ensureMicrophoneReady();
       if (!micReady) return '';
