@@ -73,7 +73,7 @@ void main() {
   group('SosButton', () {
     testWidgets('un toque solo muestra la pista', (tester) async {
       await tester.pumpWidget(conBoton());
-      await tester.tap(find.text('SOS (Emergencia)'));
+      await tester.tap(find.text('SOS'));
       await tester.pump();
       expect(find.text('Mantén presionado para SOS'), findsWidgets);
       expect(find.byType(PantallaSos), findsNothing);
@@ -82,7 +82,7 @@ void main() {
     testWidgets('mantenerlo presionado 0.8 s abre PantallaSos', (tester) async {
       await tester.pumpWidget(conBoton());
       final gesto = await tester
-          .startGesture(tester.getCenter(find.text('SOS (Emergencia)')));
+          .startGesture(tester.getCenter(find.text('SOS')));
       // El toque se confirma tras kPressTimeout (100 ms).
       await tester.pump(const Duration(milliseconds: 150));
       await tester.pump(const Duration(milliseconds: 300));
@@ -102,7 +102,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(conBoton());
       final gesto = await tester
-          .startGesture(tester.getCenter(find.text('SOS (Emergencia)')));
+          .startGesture(tester.getCenter(find.text('SOS')));
       await tester.pump(const Duration(milliseconds: 300));
       await gesto.up();
       await tester.pumpAndSettle();
@@ -119,7 +119,7 @@ void main() {
           tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
       await tester.pumpWidget(conBoton());
       final gesto = await tester
-          .startGesture(tester.getCenter(find.text('SOS (Emergencia)')));
+          .startGesture(tester.getCenter(find.text('SOS')));
       await tester.pump(const Duration(milliseconds: 150));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(PantallaSos), findsNothing);

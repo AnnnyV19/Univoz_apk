@@ -539,11 +539,11 @@ function cargarBuffer(buf) {
 
 // Por defecto toma el modelo del proyecto. Si la pagina se abrio con doble
 // clic (file://) esto falla, y el mensaje lo explica.
-fetch('../assets/avatar/MODELO_UNIVOZ_v0.vrm')
+fetch('../assets/avatar/univozM.vrm')
   .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
   .then(cargarBuffer)
   .catch(() => avisar(
-    'No se encontró assets/avatar/MODELO_UNIVOZ_v0.vrm.\n\n' +
+    'No se encontró assets/avatar/univozM.vrm.\n\n' +
     'Si abriste el archivo con doble clic, no va a funcionar: hay que servirlo por HTTP.\n' +
     'Desde D:\\univoz\\senas_core ejecutá:\n' +
     '    python -m http.server 8000\n' +

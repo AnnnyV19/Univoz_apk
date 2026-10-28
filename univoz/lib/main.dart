@@ -8,6 +8,7 @@ import 'package:senas_core/sincronizador_plantillas.dart';
 import 'package:senas_core/tema_univoz.dart';
 import 'screens/welcome_screen.dart';
 import 'services/perfil_guardado.dart';
+import 'services/tutorial_visto.dart';
 
 Future<void> main() async {
   // ensureInitialized antes de cualquier await: PerfilGuardado usa
@@ -24,6 +25,8 @@ Future<void> main() async {
   // Igual de pequeño: un bool en un archivo. Decide si Configuración y el
   // reconocedor muestran las herramientas de diagnóstico.
   await ModoDesarrollador.cargar();
+  // Un archivo vacío: si ya se vio el tutorial de primer uso.
+  await TutorialVisto.cargar();
   runApp(const MyApp());
   // Diccionario aprobado: se renueva solo si pasaron más de 24 h, sin
   // esperar a nadie. Un fallo (sin red) deja el que ya hay.

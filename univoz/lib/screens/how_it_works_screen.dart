@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'main_shell_screen.dart';
+import 'purpose_screen.dart';
 import '../services/blind_narrator.dart';
 import 'package:senas_core/componentes_univoz.dart';
 import 'package:senas_core/tema_univoz.dart';
@@ -151,7 +151,9 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => const MainShellScreen(),
+                            // Al menú de ¿para qué quieres usar Univoz?, no directo a
+                            // Aprender.
+                            builder: (_) => const PurposeScreen(),
                           ),
                         );
                       },

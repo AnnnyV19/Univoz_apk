@@ -158,8 +158,10 @@ class _LeccionScreenState extends State<LeccionScreen> {
             Expanded(
               child: enPantalla == null
                   ? const SizedBox.shrink()
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                  // Sin desplazar: el avatar toma el alto que dejan las
+                  // opciones.
+                  : Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
                       child: _contenido(enPantalla),
                     ),
             ),
@@ -187,7 +189,7 @@ class _LeccionScreenState extends State<LeccionScreen> {
                 value: _sesion.progreso,
                 minHeight: 12,
                 backgroundColor: ColoresUnivoz.lavanda,
-                valueColor: const AlwaysStoppedAnimation<Color>(_kVerde),
+                valueColor: const AlwaysStoppedAnimation<Color>(_kMorado),
               ),
             ),
           ),
@@ -207,6 +209,10 @@ class _LeccionScreenState extends State<LeccionScreen> {
 
   // ---------------------------------------------------------------- cuerpo
 
+  /// El avatar en el alto que quede (nada se desliza).
+  Widget _visorFlexible({String? etiqueta}) =>
+      VisorSena(controlador: _visor, alto: null, etiqueta: etiqueta);
+
   Widget _contenido(Ejercicio e) {
     switch (e.tipo) {
       case TipoEjercicio.miraYElige:
@@ -222,26 +228,19 @@ class _LeccionScreenState extends State<LeccionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          tipo.toUpperCase(),
-          style: const TextStyle(
-            color: _kMoradoOscuro,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
-          ),
-        ),
-        const SizedBox(height: 6),
+        // Solo la pregunta, corta; el tipo de ejercicio lo lee TalkBack.
         Text(
           titulo,
+          semanticsLabel: '$tipo. $titulo',
+          maxLines: 2,
           style: const TextStyle(
             color: _kTexto,
-            fontSize: 23,
+            fontSize: 21,
             fontWeight: FontWeight.w800,
-            height: 1.25,
+            height: 1.2,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
       ],
     );
   }
@@ -262,8 +261,8 @@ class _LeccionScreenState extends State<LeccionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _encabezado('Mira y elige', '¿Qué seña es ésta?'),
-        VisorSena(controlador: _visor, alto: 240),
-        const SizedBox(height: 14),
+        Expanded(child: _visorFlexible()),
+        const SizedBox(height: 12),
         for (final o in e.opciones)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
@@ -283,8 +282,8 @@ class _LeccionScreenState extends State<LeccionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _encabezado('Elige la seña', '¿Cuál es la seña de “$palabra”?'),
-        VisorSena(controlador: _visor, alto: 190),
-        const SizedBox(height: 14),
+        Expanded(child: _visorFlexible()),
+        const SizedBox(height: 12),
         GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,
@@ -307,16 +306,6 @@ class _LeccionScreenState extends State<LeccionScreen> {
               ),
           ],
         ),
-        const SizedBox(height: 12),
-        const Text(
-          'Toca cada seña para verla. Elige la que crees que es y comprueba.',
-          style: TextStyle(
-            color: _kGris,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            height: 1.4,
-          ),
-        ),
       ],
     );
   }
@@ -326,20 +315,20 @@ class _LeccionScreenState extends State<LeccionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _encabezado('Deletrea', 'Mira las letras y arma el nombre'),
+        _encabezado('Deletrea', 'Arma el nombre'),
         // El rótulo cambia mientras el avatar avanza de letra, así que este
         // pedazo se redibuja con el visor.
-        AnimatedBuilder(
-          animation: _visor,
-          builder: (context, _) => VisorSena(
-            controlador: _visor,
-            alto: 200,
-            etiqueta: _visor.reproduciendo
-                ? 'Letra ${_visor.posicion} de ${_visor.total}'
-                : '$n letras',
+        Expanded(
+          child: AnimatedBuilder(
+            animation: _visor,
+            builder: (context, _) => _visorFlexible(
+              etiqueta: _visor.reproduciendo
+                  ? 'Letra ${_visor.posicion} de ${_visor.total}'
+                  : '$n letras',
+            ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         // Wrap y no Row: un nombre de 8 letras no cabe en una sola fila.
         Wrap(
           alignment: WrapAlignment.center,
@@ -359,7 +348,7 @@ class _LeccionScreenState extends State<LeccionScreen> {
               ),
           ],
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 12),
         GridView.count(
           crossAxisCount: 5,
           shrinkWrap: true,

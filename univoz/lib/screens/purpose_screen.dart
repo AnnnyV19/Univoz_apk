@@ -192,7 +192,8 @@ class _PurposeScreenState extends State<PurposeScreen> {
     if (mounted) setState(() => _pidiendoPermisoCamara = false);
     if (!permitido || !mounted) return;
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const PantallaDeTranslacion()),
+      MaterialPageRoute(
+          builder: (_) => const PantallaDeTranslacion(conAvatar: false)),
     );
   }
 

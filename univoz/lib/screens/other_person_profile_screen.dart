@@ -194,7 +194,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     if (answer == ProfileType.oyente) {
       ConversationProfile.otherKnowsLsm = false;
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
             initialIndex: 1,
@@ -220,7 +220,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     }
     ConversationProfile.otherKnowsLsm = knowsLsm;
     if (!isCurrent() || !mounted) return;
-    Navigator.of(context).pushReplacement(
+    Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MainShellScreen(
           initialIndex: 1,
@@ -312,7 +312,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     if (_selectedOyente) {
       ConversationProfile.other = ProfileType.oyente;
       ConversationProfile.otherKnowsLsm = false;
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
             initialIndex: 1,
@@ -332,7 +332,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
       final bool otherKnowsLsm = _expandedOptionIndex == 1;
       ConversationProfile.other = _expandedProfile;
       ConversationProfile.otherKnowsLsm = otherKnowsLsm;
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
             initialIndex: 1,
@@ -406,8 +406,41 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     });
   }
 
+  /// Preguntas que no cambian nada y se saltan:
+  ///  - de una persona ciega no importa si usa lector de pantalla (el
+  ///    teléfono es el tuyo);
+  ///  - si tú eres sordo/a o mudo/a y sabes LSM, la otra persona sorda o
+  ///    muda con la que necesitas la app es porque NO sabe LSM (si supiera,
+  ///    se entenderían firmando).
+  bool _preguntaSobra(ProfileType type) {
+    if (type == ProfileType.ciego) return true;
+    final mine = ConversationProfile.mine;
+    final yoFirmo = (mine == ProfileType.sordo || mine == ProfileType.mudo) &&
+        ConversationProfile.mineKnowsLsm;
+    return yoFirmo && (type == ProfileType.sordo || type == ProfileType.mudo);
+  }
+
   void _expandCard(ProfileType type) {
     BlindNarrator.interruptFlow();
+    if (_preguntaSobra(type)) {
+      ConversationProfile.other = type;
+      ConversationProfile.otherKnowsLsm = false;
+      setState(() {
+        _expandedProfile = null;
+        _expandedOptionIndex = null;
+        _selectedOyente = false;
+        _detectedProfile = null;
+      });
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => MainShellScreen(
+            initialIndex: 1,
+            modo: resolverComunicacionModo(),
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       _expandedProfile = type;
       _expandedOptionIndex = null;

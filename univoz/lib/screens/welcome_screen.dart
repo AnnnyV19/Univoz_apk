@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'purpose_screen.dart';
+import 'tutorial_screen.dart';
+import '../services/tutorial_visto.dart';
 import 'how_it_works_screen.dart';
 import 'profile_selection_screen.dart' show ProfileType;
 import '../services/blind_narrator.dart';
@@ -246,9 +248,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(16),
                           onTap: () => _avanzarPorToque(() {
+                            // La primera vez, el tutorial con dibujos; él
+                            // lleva luego al menú.
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => const PurposeScreen(),
+                                builder: (_) => TutorialVisto.visto
+                                    ? const PurposeScreen()
+                                    : const TutorialScreen(),
                               ),
                             );
                           }),

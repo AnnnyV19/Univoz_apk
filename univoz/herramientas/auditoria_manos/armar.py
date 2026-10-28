@@ -28,7 +28,7 @@ src = src[:k] + open(os.path.join(AQUI, 'hook.js'), encoding='utf-8').read() + '
 www = os.path.join(AQUI, 'www')
 os.makedirs(os.path.join(www, 'avatar_viewer'), exist_ok=True)
 os.makedirs(os.path.join(www, 'avatar'), exist_ok=True)
-for vrm in ('MODELO_UNIVOZ_v0.vrm',):
+for vrm in ('MODELO_UNIVOZ_v0.vrm', 'univozM.vrm'):
     o = os.path.join(AQUI, '..', '..', 'assets', 'avatar', vrm)
     d = os.path.join(www, 'avatar', vrm)
     if os.path.exists(o) and not os.path.exists(d): shutil.copyfile(o, d)

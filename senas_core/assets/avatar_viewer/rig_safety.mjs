@@ -87,7 +87,7 @@ export function createRigSafetyGate(options = {}) {
   const maxAgeMs = Math.max(0, Number(options.maxAgeMs ?? DEFAULT_MAX_AGE_MS));
   const maxSourceSkewMs = Math.max(
     0, Number(options.maxSourceSkewMs ?? DEFAULT_MAX_SKEW_MS));
-  let maxAngularVelocityRadS = Math.max(
+  const maxAngularVelocityRadS = Math.max(
     0, Number(options.maxAngularVelocityRadS ?? DEFAULT_MAX_ANGULAR_VELOCITY));
   const boneLengthTolerance = Math.max(
     0, Number(options.boneLengthTolerance ?? .15));
@@ -391,13 +391,6 @@ export function createRigSafetyGate(options = {}) {
     check,
     reset() {
       states.clear();
-    },
-    // Para que la reproduccion de una seña grabada (datos limpios, sin
-    // sensor) pueda usar un limite mas holgado que el modo en vivo
-    // (aportado por la rama app-limpia).
-    setMaxAngularVelocity(valor) {
-      const v = Number(valor);
-      if (Number.isFinite(v) && v >= 0) maxAngularVelocityRadS = v;
     },
     state(jointId) {
       const value = states.get(String(jointId));

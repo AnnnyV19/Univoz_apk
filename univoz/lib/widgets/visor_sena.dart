@@ -195,7 +195,10 @@ class ControladorVisor extends ChangeNotifier {
 /// olvidarla.
 class VisorSena extends StatelessWidget {
   final ControladorVisor controlador;
-  final double alto;
+
+  /// Alto del recuadro del avatar. null: el que quede (va dentro de un
+  /// Expanded), para pantallas que no se desplazan.
+  final double? alto;
 
   /// Texto chiquito arriba a la izquierda ("Letra 3 de 4").
   final String? etiqueta;
@@ -212,10 +215,7 @@ class VisorSena extends StatelessWidget {
     return AnimatedBuilder(
       animation: controlador,
       builder: (context, _) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
+        final recuadro = Container(
               height: alto,
               width: double.infinity,
               decoration: BoxDecoration(
@@ -289,7 +289,11 @@ class VisorSena extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
+            );
+        return Column(
+          mainAxisSize: alto == null ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            if (alto == null) Expanded(child: recuadro) else recuadro,
             const SizedBox(height: 6),
             BarraVelocidadSenas(controlador: controlador),
           ],

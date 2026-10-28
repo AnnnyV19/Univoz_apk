@@ -40,19 +40,14 @@ MODULES = ["rig_math", "rig_metrics", "rig_diagnostics", "rig_safety",
            "rig_retarget", "rig_holistic", "rig_holistic_worker", "rig_face",
            "rig_hand_gate", "rig_session", "rig_avatar_state",
            "rig_device_tier", "rig_embedded_perf", "rig_motion_frame",
-           "rig_hand_capture",
-           # Aportados por la rama app-limpia (docs/17). rig_mano_ik.mjs (ManoIK)
-           # NO se inlinea: no esta conectado a este visor.
-           "rig_cuerpo", "rig_manos", "rig_replay", "rig_frase",
-           "rig_encuadre"]
+           "rig_hand_capture"]
 # Modulos nuevos: exponen todos sus exports. Los historicos conservan la
 # lista de nombres de su bloque (algunos exports no se usan en la pagina).
 EXPORT_ALL = {"rig_sign_space", "rig_mirror", "rig_body_profile",
               "rig_retarget", "rig_holistic", "rig_holistic_worker", "rig_face",
               "rig_hand_gate", "rig_session", "rig_avatar_state",
               "rig_device_tier", "rig_embedded_perf", "rig_motion_frame",
-              "rig_hand_capture", "rig_cuerpo", "rig_manos", "rig_replay",
-              "rig_frase", "rig_encuadre"}
+              "rig_hand_capture"}
 INDENT = "      "
 VENDOR = os.path.join(VIEWER, "vendor", "univoz_vendor.min.js")
 VENDOR_INICIO = "  <!-- inicio univoz_vendor.min.js -->"

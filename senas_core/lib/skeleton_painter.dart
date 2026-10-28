@@ -328,7 +328,29 @@ const int kPreRollMs = 200;
 const int kColaMs = 100;
 
 class PantallaDeTranslacion extends StatefulWidget {
-  const PantallaDeTranslacion({Key? key}) : super(key: key);
+  const PantallaDeTranslacion(
+      {Key? key,
+      this.conAvatar = true,
+      this.embebida = false,
+      this.hablarResultado,
+      this.onReconocido})
+      : super(key: key);
+
+  /// Se llama con el texto de cada seña reconocida y aceptada.
+  final void Function(String texto)? onReconocido;
+
+  /// Si se dice en voz alta la seña reconocida. null: lo que diga Ajustes.
+  /// Comunicarse lo fija según quién escucha del otro lado.
+  final bool? hablarResultado;
+
+  /// true: va dentro de otra pantalla (la mitad de Comunicarse), sin su
+  /// barra de título; el resto (modo, cámara, resultado) es igual.
+  final bool embebida;
+
+  /// false: solo cámara y resultado, sin el avatar que copia a la persona.
+  /// Así la usa "Traducir una seña" de univoz (el avatar solo hace falta
+  /// para pasar de texto a seña).
+  final bool conAvatar;
 
   @override
   State<PantallaDeTranslacion> createState() => _PantallaDeTranslacionState();
@@ -340,7 +362,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   final _almacen = AlmacenMuestras.instancia;
   final _voz = LectorVoz.instancia;
   final _backend = BackendApi();
-  final _bridge = AvatarBridge();
+  late final AvatarBridge _bridge =
+      widget.conAvatar ? AvatarBridge() : AvatarBridge.apagado();
   late final _alimentador = AlimentadorAvatar(
     enviar: _bridge.mostrarFrame,
     perfilMedidas: () => _almacen.ajustes.perfilCorporal?.measures,
@@ -519,7 +542,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   /// Avatar en vista espejo (eres tú), con los frames fusionados como en
   /// Espejo, sin modo diagnóstico.
   Future<void> _iniciarAvatar(bool sesionActiva) async {
-    if (!_bridge.disponible) return;
+    if (!_usarAvatar) return;
     try {
       await _bridge.configurarSesion(sesionActiva);
       await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
@@ -548,8 +571,10 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   void _errorStream(Object error, StackTrace _) =>
       debugPrint('stream de landmarks: $error');
 
+  bool get _usarAvatar => widget.conAvatar && _bridge.disponible;
+
   bool get _visorListo =>
-      _bridge.disponible && _bridge.estado.value == EstadoAvatar.listo;
+      _usarAvatar && _bridge.estado.value == EstadoAvatar.listo;
 
   /// Con el avatar listo, el inicio y fin de la seña salen de su quieto/
   /// movimiento adaptativo (llega por onMovimiento); sin el (sin visor,
@@ -652,9 +677,10 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
         pred: pred, candidatas: unicas, dtwMs: dtwMs);
     _consultarBackend(seq);
 
-    if (pred.aceptada && _almacen.ajustes.hablarResultado) {
+    if (pred.aceptada && _hablarResultado) {
       _hablar(pred.textoHablado);
     }
+    if (pred.aceptada) widget.onReconocido?.call(pred.textoHablado);
   }
 
   /// Evento de sesion por intento (tools/analizar_sesion.py lo resume).
@@ -760,7 +786,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       'original': original.gloss,
       'aceptada_original': original.aceptada,
     });
-    if (_almacen.ajustes.hablarResultado) _hablar(textoDePlantilla(t));
+    if (_hablarResultado) _hablar(textoDePlantilla(t));
   }
 
   /// Plantilla de lo que se muestra: la elegida o la ganadora aceptada (la
@@ -798,6 +824,9 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     _alimentador.iniciar();
   }
 
+  bool get _hablarResultado =>
+      widget.hablarResultado ?? _almacen.ajustes.hablarResultado;
+
   void _hablar(String texto) {
     _voz.decir(texto).then((error) {
       if (error == null || !mounted) return;
@@ -828,19 +857,21 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     return ValueListenableBuilder<bool>(
       valueListenable: ModoDesarrollador.notificador,
       builder: (context, dev, _) => Scaffold(
-        appBar: AppBar(
-          title: EncabezadoReconocer(
-              resumen: _dicc?.resumen, desarrollador: dev),
-          centerTitle: true,
-          toolbarHeight: dev ? 92 : 64,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.info_outline),
-              tooltip: 'Cómo funciona',
-              onPressed: _guia.abrir,
-            ),
-          ],
-        ),
+        appBar: widget.embebida
+            ? null
+            : AppBar(
+                title: EncabezadoReconocer(
+                    resumen: _dicc?.resumen, desarrollador: dev),
+                centerTitle: true,
+                toolbarHeight: dev ? 92 : 64,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.info_outline),
+                    tooltip: 'Cómo funciona',
+                    onPressed: _guia.abrir,
+                  ),
+                ],
+              ),
         body: CapaGuiaInicial(
           controlador: _guia,
           child: Column(
@@ -912,7 +943,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   Widget _contenido(bool dev) {
     if (_ctrl.error != null) return _errorCamara();
     return DisposicionReconocer(
-      avatar: _bridge.disponible ? VistaAvatar(bridge: _bridge) : null,
+      avatar: _usarAvatar ? VistaAvatar(bridge: _bridge) : null,
       camara: (compacta) => _vistaCamara(dev, compacta: compacta),
       panel: _panelResultado(dev),
       aspectoCamara: _ctrl.iniciada?.relacionAspecto ?? 3 / 4,
@@ -957,18 +988,14 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Camara frontal = vista de espejo: se voltea la imagen y, con ella,
-          // los puntos del esqueleto (solo presentacion; el reconocimiento
-          // y el avatar siguen sin voltear).
-          Transform.flip(
-            flipX: camara.frontal,
-            child: Texture(textureId: camara.textureId),
-          ),
+          // Imagen y puntos tal cual los entrega la camara, como en la
+          // version de Karim (decision de la dueña, 2026-10-28).
+          Texture(textureId: camara.textureId),
           ValueListenableBuilder<LandmarkFrame?>(
             valueListenable: _ctrl.frame,
             builder: (_, frame, __) => CustomPaint(
               painter:
-                  SkeletonPainter(frame: frame, espejo: camara.frontal),
+                  SkeletonPainter(frame: frame),
               size: Size.infinite,
             ),
           ),
@@ -1029,7 +1056,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
             onHablar: () => _hablar(elegida != null
                 ? textoDePlantilla(elegida)
                 : pred.textoHablado),
-            onVerEnAvatar: _bridge.disponible ? _verEnAvatar : null,
+            onVerEnAvatar: _usarAvatar ? _verEnAvatar : null,
           ),
         // Línea del clasificador remoto: solo con el modo desarrollador.
         if (dev && _prediccionBackend?.label != null)

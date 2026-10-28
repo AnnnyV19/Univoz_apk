@@ -219,22 +219,3 @@ test('Safety Gate recovers a confirmed palm flip over its own longer time', () =
   assert.equal(r1.state, 'RECOVERING');
   assert.equal(r2.state, 'VALID');
 });
-
-test('setMaxAngularVelocity afloja el limite de velocidad angular (replay)', () => {
-  const mover = (gate, angulo) => {
-    gate.check(valid({frameId: 1, timestampMs: 1000, nowMs: 1000,
-      rotation: [0, 0, 0]}));
-    return gate.check(valid({frameId: 2, timestampMs: 1033, nowMs: 1033,
-      rotation: [angulo, 0, 0]}));
-  };
-  // 33 ms a 24 rad/s permiten ~0.81 rad; 1.2 rad exige ~36 rad/s.
-  const vivo = createRigSafetyGate({maxAngularVelocityRadS: 24});
-  assert.equal(mover(vivo, 1.2).accepted, false);
-  const replay = createRigSafetyGate({maxAngularVelocityRadS: 24});
-  replay.setMaxAngularVelocity(40);
-  assert.equal(mover(replay, 1.2).accepted, true);
-  replay.setMaxAngularVelocity(NaN);   // valor invalido: se ignora
-  replay.setMaxAngularVelocity(-3);
-  replay.reset();
-  assert.equal(mover(replay, 1.2).accepted, true);
-});

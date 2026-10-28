@@ -263,6 +263,23 @@ List<String> variantesDePalabra(String clave) {
   return out;
 }
 
+/// Todo [texto] deletreado letra por letra (botón "Deletreo" de
+/// Comunicarse), sin buscar señas de palabras. Mayúsculas y acentos no
+/// importan; una palabra con letras que no hay va a [PlanFrase.sinSena].
+PlanFrase deletrearTexto(String texto, Map<String, String> espanolPorGlosa) {
+  final pasos = <PasoFrase>[];
+  final sinSena = <String>[];
+  for (final p in palabrasDe(texto)) {
+    pasos.addAll(_deletrear(p, espanolPorGlosa, sinSena));
+  }
+  if (pasos.length > kMaxPasosFrase) {
+    sinSena.add('(la frase es muy larga: se muestran las primeras '
+        '$kMaxPasosFrase señas)');
+    pasos.removeRange(kMaxPasosFrase, pasos.length);
+  }
+  return PlanFrase(pasos, const [], sinSena);
+}
+
 /// Deletrea [palabra]. Solo si TODAS sus letras existen: una palabra a
 /// medias se entenderia mal, asi que entonces va completa a [sinSena].
 List<PasoFrase> _deletrear(

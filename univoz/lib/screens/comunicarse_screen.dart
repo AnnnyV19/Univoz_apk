@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../services/permiso_camara.dart';
 import 'package:senas_core/avatar_bridge.dart';
+import 'package:senas_core/avatar_toma.dart'
+    show factorVelocidadSena, prepararParaAvatar;
+import 'package:senas_core/frase_a_senas.dart';
 import 'package:senas_core/avatar_vista.dart';
 import 'package:senas_core/dtw.dart';
 import 'package:senas_core/muestras_locales.dart';
@@ -18,16 +23,16 @@ import 'package:senas_core/tema_univoz.dart';
 /// [ConversationProfile]/[resolverComunicacionModo]), en vez de tener una
 /// pantalla separada por cada combinación posible:
 ///
-/// - [ComunicacionModo.avatar]      -> la otra persona es sorda y SÍ
-///   conoce LSM: se muestra el avatar firmando, deletreo/palabra y
-///   teclado en pantalla (además del texto).
+/// - [ComunicacionModo.avatar]      -> una persona firma (sorda o muda,
+///   con LSM) y la otra es ciega u oyente: pantalla partida, arriba la
+///   cámara (su seña se vuelve texto y voz) y abajo el avatar (lo que la
+///   otra persona escribe o dice, el avatar lo firma).
 /// - [ComunicacionModo.textoVoz]    -> comunicación simple de texto/voz
 ///   (ej. con una persona oyente, una sorda que no conoce LSM, o una
 ///   muda).
 /// - [ComunicacionModo.camaraSenas] -> las dos personas son sordas/mudas
-///   y solo una de las dos conoce LSM: se usa la cámara (el mismo
-///   reconocedor de "Traducir señas") para traducir a texto lo que
-///   firma quien sabe, y la respuesta se escribe directamente.
+///   y solo una conoce LSM: la misma pantalla partida, sin voz (quien no
+///   firma escribe y el avatar lo firma).
 /// - [ComunicacionModo.soloTexto]   -> las dos son sordas/mudas y
 ///   ninguna conoce LSM: se escriben directamente, sin botones de voz
 ///   (ninguna de las dos puede usarlos).
@@ -70,7 +75,6 @@ class ComunicarseScreen extends StatefulWidget {
 
 class _ComunicarseScreenState extends State<ComunicarseScreen> {
   final TextEditingController _controller = TextEditingController();
-  final TextEditingController _traducidoController = TextEditingController();
   final _avatarBridge = AvatarBridge();
   final _almacen = AlmacenMuestras.instancia;
   Diccionario? _diccionario;
@@ -78,6 +82,25 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   bool _isSpelling = true; // Deletreo vs Palabra
   bool _listening = false;
   bool _pidiendoPermisoCamara = false;
+
+  /// La mitad de cámara (quien firma) ya tiene permiso y está encendida.
+  bool _camaraActiva = false;
+
+  /// En la conversación por voz, espera la respuesta en señas de la otra
+  /// persona (la completa la cámara al reconocer una seña).
+  Completer<String>? _esperaSena;
+
+  /// La explicación larga de la conversación por voz ya se dijo en esta
+  /// sesión de la app.
+  static bool _introDicha = false;
+
+  /// Una plantilla por glosa del diccionario (la primera muestra).
+  final Map<String, Template> _porGlosa = {};
+
+  /// Avatar y cámara a la vez: una persona sabe LSM y la otra no.
+  bool get _conMitades =>
+      widget.modo == ComunicacionModo.avatar ||
+      widget.modo == ComunicacionModo.camaraSenas;
 
   // Texto de instrucciones/estado que se muestra en la variante para
   // personas ciegas, para que alguien que mire la pantalla (o un
@@ -110,6 +133,9 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       if (mounted) setState(() => _avatarReproduciendo = false);
     };
     _cargarAvatar();
+    if (_conMitades) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _activarCamara());
+    }
     if (BlindNarrator.talkBackFlow && widget.isActiveTab) {
       _startVoiceFlow();
     }
@@ -122,60 +148,90 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       // El diccionario pesa cientos de MB: solo se arma si esta pantalla va a
       // hacer señas con el avatar (en los demas modos nunca lo usa). Es el
       // mismo que comparten las demas pantallas, no una copia.
-      if (widget.modo == ComunicacionModo.avatar) {
-        final diccionario = await cargarDiccionario();
-        if (mounted) setState(() => _diccionario = diccionario);
-      }
+      if (_conMitades) await _asegurarDiccionario();
     } catch (_) {
       // El resto de la pantalla sigue disponible aunque falte diccionario.
     }
   }
 
-  Template? _buscarSena(String texto) {
-    final diccionario = _diccionario;
-    final consulta = texto.trim().toUpperCase();
-    if (diccionario == null || consulta.isEmpty) return null;
-    for (final plantilla in diccionario.clasificador.templates) {
-      if (plantilla.gloss.toUpperCase() == consulta) return plantilla;
+  Future<void> _asegurarDiccionario() async {
+    if (_diccionario != null) return;
+    try {
+      final diccionario = await cargarDiccionario();
+      _porGlosa.clear();
+      for (final t in diccionario.clasificador.templates) {
+        _porGlosa.putIfAbsent(t.gloss, () => t);
+      }
+      if (mounted) setState(() => _diccionario = diccionario);
+    } catch (_) {
+      // Sin diccionario el avatar no puede señar; el resto sigue.
     }
-    for (final plantilla in diccionario.clasificador.templates) {
-      if (plantilla.espanol.trim().toUpperCase() == consulta) return plantilla;
-    }
-    return null;
   }
 
+  /// Hace con el avatar lo escrito o dicho. En "Palabra" busca frases y
+  /// palabras guardadas (sin importar acentos ni mayúsculas: "hola, como
+  /// estas" sale HOLA + COMO_ESTAS) y deletrea lo que no tenga seña; en
+  /// "Deletreo" deletrea todo letra por letra.
   Future<bool> _firmar(String texto) async {
-    if (widget.modo != ComunicacionModo.avatar || texto.trim().isEmpty) {
-      return false;
-    }
+    if (!_conMitades || texto.trim().isEmpty) return false;
     if (!_avatarBridge.compatible) {
       if (mounted) setState(() => _voiceStatus = 'Avatar 3D no disponible.');
       return false;
     }
-    if (_diccionario == null) {
-      // El modo cambio a avatar despues de abrir la pantalla.
-      try {
-        final diccionario = await cargarDiccionario();
-        if (mounted) setState(() => _diccionario = diccionario);
-      } catch (_) {}
+    await _asegurarDiccionario();
+    final dic = {for (final e in _porGlosa.entries) e.key: e.value.espanol};
+    final plan = _isSpelling
+        ? deletrearTexto(texto, dic)
+        : planificarFrase(texto, dic);
+    final segmentos = <SegmentoFrase>[];
+    for (final paso in plan.pasos) {
+      final t = _porGlosa[paso.gloss];
+      if (t == null) continue;
+      final seq = prepararParaAvatar(t.seq);
+      // Las letras de un deletreo van más rápido, como al deletrear de
+      // verdad.
+      final factor =
+          paso.tipo == TipoPaso.letra ? 1.6 : factorVelocidadSena(seq);
+      segmentos.add(
+          SegmentoFrase(seq, (30 * factor).round().clamp(8, 60).toInt()));
     }
-    final plantilla = _buscarSena(texto);
-    if (plantilla == null) {
+    if (segmentos.isEmpty) {
       if (mounted) {
         setState(() => _voiceStatus = 'No encontré la seña de "$texto".');
       }
       return false;
     }
-    if (mounted) setState(() => _avatarReproduciendo = true);
+    if (mounted) {
+      setState(() {
+        _avatarReproduciendo = true;
+        _voiceStatus = '';
+      });
+    }
     try {
-      await _avatarBridge.reproducir(plantilla.seq);
+      await _avatarBridge.reproducirFrase(segmentos);
       return true;
     } catch (_) {
       if (mounted) {
-        setState(() => _voiceStatus = 'No se pudo reproducir la seña.');
+        setState(() {
+          _avatarReproduciendo = false;
+          _voiceStatus = 'No se pudo reproducir la seña.';
+        });
       }
       return false;
     }
+  }
+
+  /// Pide la cámara para la mitad de quien firma. Si no la dan, queda un
+  /// botón para volver a pedirla.
+  Future<void> _activarCamara() async {
+    if (!mounted || _camaraActiva || _pidiendoPermisoCamara) return;
+    setState(() => _pidiendoPermisoCamara = true);
+    final permitido = await pedirPermisoCamara(context);
+    if (!mounted) return;
+    setState(() {
+      _pidiendoPermisoCamara = false;
+      _camaraActiva = permitido;
+    });
   }
 
   @override
@@ -204,7 +260,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   void dispose() {
     _voiceFlowGeneration++;
     _controller.dispose();
-    _traducidoController.dispose();
     _avatarBridge.dispose();
     BlindNarrator.stop();
     super.dispose();
@@ -262,7 +317,10 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
     bool isCurrent() =>
         mounted && generation == _voiceFlowGeneration && widget.isActiveTab;
 
-    var prompt = _personalizedIntro();
+    // La explicación completa solo la primera vez en esta sesión de la app;
+    // después basta con "Habla ahora." (no se repite al volver a entrar).
+    var prompt = _introDicha ? 'Habla ahora.' : _personalizedIntro();
+    _introDicha = true;
     if (isCurrent()) setState(() => _voiceStatus = prompt);
     var consecutiveSilence = 0;
     while (isCurrent()) {
@@ -310,8 +368,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
           }
           return;
         }
-        prompt = 'No escuché nada. Dime el mensaje que quieres '
-            'comunicar, o di salir para salir de esta pantalla.';
+        prompt = 'No te escuché. Habla ahora.';
         if (isCurrent()) setState(() => _voiceStatus = prompt);
         continue;
       }
@@ -320,13 +377,25 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
         _controller.text = heard;
         _voiceStatus = 'Dijiste: $heard';
       });
-      await BlindNarrator.speak('Dijiste: $heard.');
       if (!isCurrent()) return;
-      if (widget.modo == ComunicacionModo.avatar) {
+      if (_conMitades) {
         final firmado = await _firmar(heard);
-        await BlindNarrator.speak(firmado
-            ? 'Tu mensaje se está mostrando firmado.'
-            : 'No encontré esa palabra en el diccionario de señas.');
+        if (!isCurrent()) return;
+        if (!firmado) {
+          await BlindNarrator.speak('No tengo esa seña.');
+        } else if (_camaraActiva) {
+          // Turno de la otra persona: no se sigue escuchando; la cámara
+          // espera su seña, que se dice en voz alta al reconocerla.
+          await BlindNarrator.speak('Ahora responde con señas.');
+          if (!isCurrent()) return;
+          setState(() => _voiceStatus = 'Esperando la seña...');
+          final espera = _esperaSena = Completer<String>();
+          await espera.future
+              .timeout(const Duration(seconds: 45), onTimeout: () => '');
+          _esperaSena = null;
+          // Deja terminar la lectura en voz alta de la seña reconocida.
+          await Future<void>.delayed(const Duration(milliseconds: 1500));
+        }
       } else {
         // Sin avatar de señas, la forma más directa de "entregar" el
         // mensaje es leerlo en voz alta, como si se lo mostráramos a la
@@ -334,20 +403,9 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
         await BlindNarrator.speak(heard);
       }
       if (!isCurrent()) return;
-      prompt = '¿Quieres decir algo más? Dime tu siguiente mensaje, o '
-          'di salir para salir de esta pantalla.';
+      prompt = 'Habla ahora.';
       setState(() => _voiceStatus = prompt);
     }
-  }
-
-  Future<void> _abrirCamaraTraductora() async {
-    setState(() => _pidiendoPermisoCamara = true);
-    final permitido = await pedirPermisoCamara(context);
-    if (mounted) setState(() => _pidiendoPermisoCamara = false);
-    if (!permitido || !mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const PantallaDeTranslacion()),
-    );
   }
 
   /// Captura un mensaje por voz con un solo intento: a diferencia de
@@ -422,7 +480,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       case ComunicacionModo.avatar:
         return _buildLsmVariant();
       case ComunicacionModo.camaraSenas:
-        return _buildCameraSenasVariant();
+        return _buildLsmVariant();
       case ComunicacionModo.soloTexto:
         return _buildSoloTextoVariant();
       case ComunicacionModo.noNecesitaApp:
@@ -478,78 +536,64 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   /// [_runVoiceComposeFlow] sigue narrando y componiendo el mensaje por
   /// voz por encima de esta misma pantalla.
   Widget _buildLsmVariant() {
-    // Sin desplazar y con poco texto: dos botones con dibujo (cámara para
-    // quien firma, micrófono para quien habla), el avatar en el alto que
-    // quede, y abajo el mensaje. El teclado de letras solo sale en
-    // "Deletreo", que es cuando se escribe letra por letra.
+    // Una persona sabe LSM y la otra no. Sin desplazar, la pantalla se parte
+    // en dos: arriba la cámara (quien firma: su seña se vuelve texto y, si
+    // del otro lado alguien oye, voz) y abajo el avatar (lo que la otra
+    // persona escribe o dice, el avatar lo firma).
+    final colores = Theme.of(context).colorScheme;
+    // En camaraSenas las dos personas son sordas/mudas: nadie dicta ni
+    // escucha, se escribe.
+    final conVoz = widget.modo == ComunicacionModo.avatar;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (BlindNarrator.talkBackFlow) ...[
           _buildVoiceStatusBanner(),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
         ],
-        SizedBox(
-          height: 84,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: _lsmActionButton(
-                  ilustracion: 'traducir',
-                  label: 'Traducir señas',
-                  lector: 'Traducir señas y leerlas en voz alta. Quien '
-                      'firma abre la cámara y se lee en voz alta lo que '
-                      'dice.',
-                  color: Theme.of(context).colorScheme.primary,
-                  busy: _pidiendoPermisoCamara,
-                  onTap: _pidiendoPermisoCamara ? null : _abrirCamaraTraductora,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _lsmActionButton(
-                  ilustracion: 'hablar',
-                  label: _listening ? 'Escuchando...' : 'Hablar',
-                  lector: _listening
-                      ? 'Escuchando'
-                      : 'Hablar para que el avatar firme. Quien habla usa '
-                          'el micrófono y el avatar lo firma en pantalla.',
-                  color: _listening
-                      ? Theme.of(context).colorScheme.error
-                      : Theme.of(context).colorScheme.secondary,
-                  busy: false,
-                  onTap: _listening ? null : _dictarMensaje,
-                ),
-              ),
-            ],
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: _camaraActiva
+                ? PantallaDeTranslacion(
+                    conAvatar: false,
+                    embebida: true,
+                    hablarResultado: conVoz,
+                    onReconocido: (texto) {
+                      final espera = _esperaSena;
+                      if (espera != null && !espera.isCompleted) {
+                        espera.complete(texto);
+                      }
+                    },
+                  )
+                : _botonActivarCamara(),
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         Expanded(
           child: Container(
             width: double.infinity,
             decoration: BoxDecoration(
               color: ColoresUnivoz.moradoTenue,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(16),
             ),
             child: Stack(
               children: [
                 Positioned.fill(
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                     child: VistaAvatar(bridge: _avatarBridge),
                   ),
                 ),
                 if (_listening)
                   Positioned(
-                    top: 12,
-                    left: 12,
+                    top: 10,
+                    left: 10,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
+                          horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.error,
+                        color: colores.error,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: const Icon(Icons.mic,
@@ -560,18 +604,39 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   ),
                 if (_avatarReproduciendo)
                   const Positioned(
-                    right: 12,
-                    bottom: 12,
+                    right: 10,
+                    bottom: 10,
                     child: Chip(
                       avatar: Icon(Icons.front_hand, size: 18),
                       label: Text('Señando...'),
+                    ),
+                  ),
+                if (_voiceStatus.isNotEmpty && !_avatarReproduciendo)
+                  Positioned(
+                    left: 10,
+                    right: 10,
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        _voiceStatus,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ),
               ],
             ),
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -594,97 +659,82 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _controller,
-          onSubmitted: _firmar,
-          decoration: InputDecoration(
-            hintText: 'Tu mensaje aquí...',
-            filled: true,
-            fillColor: Colors.white,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide.none,
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                textInputAction: TextInputAction.send,
+                onSubmitted: _firmar,
+                decoration: InputDecoration(
+                  hintText: 'Escribe aquí...',
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide:
+                        const BorderSide(color: ColoresUnivoz.bordeControl),
+                  ),
+                ),
+              ),
             ),
-          ),
+            const SizedBox(width: 6),
+            // Señar sin tener que dar Enter en el teclado.
+            IconButton.filled(
+              onPressed: () => _firmar(_controller.text),
+              icon: const Icon(Icons.play_arrow_rounded),
+              tooltip: 'Señar',
+              iconSize: 28,
+            ),
+            if (conVoz) ...[
+              const SizedBox(width: 4),
+              IconButton.filled(
+                onPressed: _listening ? null : _dictarMensaje,
+                icon: Icon(_listening ? Icons.mic : Icons.mic_none),
+                tooltip: 'Hablar para que el avatar firme',
+                iconSize: 26,
+                style: IconButton.styleFrom(
+                  backgroundColor: colores.secondary,
+                ),
+              ),
+            ],
+          ],
         ),
         const SizedBox(height: 8),
-        // El teclado en pantalla no le sirve a quien es ciego/a (no puede
-        // verlo para tocar la tecla correcta): cuando el modo por voz está
-        // activo, el cuadro de texto ya se llena hablando (ver
-        // _dictarMensaje / _runVoiceComposeFlow).
-        if (_isSpelling && !BlindNarrator.talkBackFlow) ...[
-          _buildSimpleKeyboard(),
-          const SizedBox(height: 8),
-        ],
         const SosButton(),
       ],
     );
   }
 
-  Widget _lsmActionButton({
-    required String ilustracion,
-    required String label,
-    required String lector,
-    required Color color,
-    required bool busy,
-    required VoidCallback? onTap,
-  }) {
-    return Semantics(
-      button: true,
-      label: lector,
-      excludeSemantics: true,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(6, 6, 10, 6),
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
+  /// Mitad de cámara antes de tener permiso: dibujo y un botón.
+  Widget _botonActivarCamara() {
+    return Material(
+      color: ColoresUnivoz.moradoTenue,
+      child: InkWell(
+        onTap: _pidiendoPermisoCamara ? null : _activarCamara,
+        child: Semantics(
+          button: true,
+          label: 'Activar la cámara para traducir las señas',
+          excludeSemantics: true,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Expanded(
-                flex: 5,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  padding: const EdgeInsets.all(4),
-                  child: busy
-                      ? const Center(
-                          child: SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : Image.asset(
-                          'assets/ilustraciones/$ilustracion.png',
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                        ),
+              Flexible(
+                child: Image.asset(
+                  'assets/ilustraciones/traducir.png',
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                flex: 6,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    label,
-                    maxLines: 2,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      height: 1.15,
+              const SizedBox(height: 6),
+              _pidiendoPermisoCamara
+                  ? const CircularProgressIndicator()
+                  : const Text(
+                      'Activar cámara',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800),
                     ),
-                  ),
-                ),
-              ),
+              const SizedBox(height: 10),
             ],
           ),
         ),
@@ -729,74 +779,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
         const SizedBox(height: 14),
         ControlesVozMensaje(controlador: _controller),
         const SizedBox(height: 10),
-        const SosButton(),
-      ],
-    );
-  }
-
-  /// Variante de cámara ([ComunicacionModo.camaraSenas]): las dos
-  /// personas son sordas/mudas y solo una de las dos conoce LSM. Se usa
-  /// el mismo reconocedor de señas de "Traducir señas" (cámara +
-  /// MediaPipe) para convertir a texto lo que firma quien sabe LSM; la
-  /// respuesta de quien no firma se escribe directamente, porque
-  /// ninguna de las dos personas puede oír una lectura en voz alta.
-  Widget _buildCameraSenasVariant() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Traducir señas a texto',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-            color: Theme.of(context).colorScheme.onSurface,
-          ),
-        ),
-        const SizedBox(height: 14),
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: ElevatedButton.icon(
-            onPressed: _pidiendoPermisoCamara ? null : _abrirCamaraTraductora,
-            icon: _pidiendoPermisoCamara
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : const Icon(Icons.videocam, color: Colors.white),
-            label: const Text('Abrir cámara y traducir señas',
-                style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: TextField(
-            controller: _traducidoController,
-            maxLines: null,
-            expands: true,
-            textAlignVertical: TextAlignVertical.top,
-            decoration: InputDecoration(
-              hintText: 'Aquí aparece la seña traducida, o escribe tu '
-                  'respuesta...',
-              filled: true,
-              fillColor: Colors.white,
-              contentPadding: const EdgeInsets.all(16),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
         const SosButton(),
       ],
     );

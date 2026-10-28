@@ -32,8 +32,9 @@ class _AprenderScreenState extends State<AprenderScreen> {
   static const Color _gris = ColoresUnivoz.tintaSuave;
 
   final ProgresoAprendizaje _progreso = ProgresoAprendizaje.instancia;
-  final GlobalKey _claveActual = GlobalKey();
-  bool _centrado = false;
+  /// Unidad que se ve (una a la vez, sin desplazar). null: la de la
+  /// lección que sigue.
+  int? _unidadVista;
 
   @override
   void initState() {
@@ -41,21 +42,12 @@ class _AprenderScreenState extends State<AprenderScreen> {
     _progreso.cargar();
   }
 
-  /// Al abrir, lleva la vista hasta la lección en la que se quedó.
-  void _irALaActual() {
-    if (_centrado || !_progreso.cargado) return;
-    _centrado = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final c = _claveActual.currentContext;
-      if (c != null && mounted) {
-        Scrollable.ensureVisible(
-          c,
-          alignment: 0.35,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+  int _unidadDe(Leccion? l) {
+    if (l == null) return camino.length - 1;
+    for (var i = 0; i < camino.length; i++) {
+      if (camino[i].lecciones.any((x) => x.id == l.id)) return i;
+    }
+    return 0;
   }
 
   Future<void> _abrir(Leccion l) async {
@@ -79,39 +71,66 @@ class _AprenderScreenState extends State<AprenderScreen> {
     return AnimatedBuilder(
       animation: _progreso,
       builder: (context, _) {
-        _irALaActual();
         final actual = _progreso.siguiente;
         return Scaffold(
           backgroundColor: _bgColor,
           appBar: const UnivozHeader(),
           body: SafeArea(
             top: false,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                  child: _resumen(),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                    child: Column(
-                      children: [
-                        for (final u in camino) _unidad(u, actual),
-                        if (actual == null) _todoListo(),
-                      ],
-                    ),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-                  child: SosButton(),
-                ),
-              ],
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Column(
+                children: [
+                  _resumen(),
+                  const SizedBox(height: 10),
+                  Expanded(child: _unidadPagina(actual)),
+                  const SizedBox(height: 10),
+                  const SosButton(),
+                ],
+              ),
             ),
           ),
         );
       },
+    );
+  }
+
+  /// Una unidad a la vez, con flechas para pasar a la anterior o la
+  /// siguiente (nada se desliza). Las lecciones se reparten el alto.
+  Widget _unidadPagina(Leccion? actual) {
+    final idx = (_unidadVista ?? _unidadDe(actual)).clamp(0, camino.length - 1);
+    final u = camino[idx];
+    return Column(
+      children: [
+        Row(
+          children: [
+            IconButton(
+              onPressed:
+                  idx > 0 ? () => setState(() => _unidadVista = idx - 1) : null,
+              icon: const Icon(Icons.chevron_left, size: 30),
+              tooltip: 'Unidad anterior',
+            ),
+            Expanded(child: _unidad(u, actual)),
+            IconButton(
+              onPressed: idx < camino.length - 1
+                  ? () => setState(() => _unidadVista = idx + 1)
+                  : null,
+              icon: const Icon(Icons.chevron_right, size: 30),
+              tooltip: 'Unidad siguiente',
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: Column(
+            children: [
+              for (var i = 0; i < u.lecciones.length; i++)
+                Expanded(child: _nodo(u.lecciones[i], i, actual)),
+              if (actual == null && idx == camino.length - 1) _todoListo(),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -216,11 +235,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
   Widget _unidad(Unidad u, Leccion? actual) {
     final hechas = u.lecciones.where((l) => _progreso.completada(l.id)).length;
     final abierta = u.lecciones.any((l) => _progreso.desbloqueada(l));
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 22),
-      child: Column(
-        children: [
-          Container(
+    return Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: abierta ? ColoresUnivoz.moradoTenue : Colors.white,
@@ -260,14 +275,6 @@ class _AprenderScreenState extends State<AprenderScreen> {
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      Text(
-                        u.detalle,
-                        style: const TextStyle(
-                          color: _gris,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -281,13 +288,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 16),
-          for (var i = 0; i < u.lecciones.length; i++)
-            _nodo(u.lecciones[i], i, actual),
-        ],
-      ),
-    );
+          );
   }
 
   /// Los nodos serpentean (izquierda, centro, derecha, centro...) para que
@@ -365,15 +366,14 @@ class _AprenderScreenState extends State<AprenderScreen> {
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Align(
-        alignment: Alignment(posiciones[i % posiciones.length], 0),
+    return Align(
+      alignment: Alignment(posiciones[i % posiciones.length], 0),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
         child: Semantics(
           button: true,
           label: 'Lección ${l.titulo}, $estado',
           child: GestureDetector(
-            key: esActual ? _claveActual : null,
             onTap: () => _abrir(l),
             child: ExcludeSemantics(
               child: Column(

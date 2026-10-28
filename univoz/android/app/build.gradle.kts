@@ -67,7 +67,7 @@ android {
 // senas_core declara sus assets (las dos VRM, los .task, el visor y las
 // plantillas) para su web standalone, y Flutter los vuelve a empaquetar aquí
 // como packages/senas_core/assets/...: ~68 MB duplicados. La app solo carga
-// las rutas propias (assets/avatar/MODELO_UNIVOZ_v0.vrm, assets/avatar_viewer/index.html,
+// las rutas propias (assets/avatar/univozM.vrm, assets/avatar_viewer/index.html,
 // assets/plantillas.json) y Kotlin lee los .task de src/main/assets, así que
 // esos duplicados se quedan fuera del APK. Si algún día senas_core carga un
 // asset con package:, quita esta exclusión.

@@ -119,16 +119,14 @@ test('marcoMano rejects invalid CMC without throwing', () => {
   assert.equal(ctx.marcoMano(x, y, new THREE.Vector3(NaN, 0, 1)), null);
 });
 
-test('orientarMuneca no voltea la palma segun el CMC', () => {
-  // Auditoria 2026-10-20: con landmarks 3D el vector indice->menique ya fija
-  // de que lado esta el pulgar; voltear segun el CMC (casi sobre el eje
-  // muneca->nudillo medio) giraba la palma 180 grados en ~20% de las señas.
+test('orientarMuneca converts CMC shape array before marcoMano', () => {
   const start = html.indexOf('    function orientarMuneca(');
   const end = html.indexOf('    function ponerMunecaReposo(', start);
   assert.ok(start >= 0 && end > start, 'Missing wrist orientation block');
   const block = html.slice(start, end);
-  assert.match(block, /const objetivo = marcoMano\(dedos, ancho\);/);
-  assert.doesNotMatch(block, /marcoMano\(dedos, ancho, cmc\)/);
+  // Admite vectores de trabajo opcionales (sin crear objetos por frame).
+  assert.match(block, /const cmc = vectorManoAAvatar\(puntos\[0\], base(, [\w.]+)*\);/);
+  assert.match(block, /const objetivo = marcoMano\(dedos, ancho, cmc\);/);
   assert.doesNotMatch(block, /marcoMano\(dedos, ancho, puntos\[0\]\)/);
 });
 

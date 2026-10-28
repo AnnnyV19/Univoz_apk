@@ -384,32 +384,21 @@ class _SosButtonState extends State<SosButton>
           onTapCancel: () => _soltar(fueToque: false),
           child: AnimatedBuilder(
             animation: _progreso,
-            builder: (context, _) => Container(
-              width: double.infinity,
-              // Mínimo 52: con texto grande el rótulo pasa a dos renglones.
-              constraints: const BoxConstraints(minHeight: 52),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: colores.error,
-                borderRadius: BorderRadius.circular(26),
-              ),
-              clipBehavior: Clip.antiAlias,
+            // El relleno que avanza va ENCIMA del botón, del mismo tamaño;
+            // el contenido va centrado (antes se pegaba arriba del rojo).
+            builder: (context, _) => ClipRRect(
+              borderRadius: BorderRadius.circular(26),
               child: Stack(
                 children: [
-                  // Relleno que avanza mientras se mantiene presionado.
-                  Positioned.fill(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: _progreso.value,
-                        child: ColoredBox(
-                          color: colores.onError.withValues(alpha: 0.22),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Center(
-                    heightFactor: 1,
+                  Container(
+                    width: double.infinity,
+                    // Mínimo 52: con texto grande el rótulo pasa a dos
+                    // renglones.
+                    constraints: const BoxConstraints(minHeight: 52),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    alignment: Alignment.center,
+                    color: colores.error,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -436,16 +425,31 @@ class _SosButtonState extends State<SosButton>
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
-                            'SOS (Emergencia)',
+                            'SOS',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: colores.onError,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1,
                             ),
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: _progreso.value,
+                          heightFactor: 1,
+                          child: ColoredBox(
+                            color: colores.onError.withValues(alpha: 0.22),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
