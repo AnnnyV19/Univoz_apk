@@ -14,6 +14,7 @@ import 'backend_api.dart';
 import 'camera_bridge.dart';
 import 'controlador_captura.dart';
 import 'dtw.dart';
+import 'frame_derivados.dart';
 import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
@@ -543,7 +544,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   /// Avatar en vista espejo (eres tú), con los frames fusionados como en
   /// Espejo, sin modo diagnóstico.
   Future<void> _iniciarAvatar(bool sesionActiva) async {
-    if (!_usarAvatar) return;
+    if (!_usarAvatar) return _iniciarMovimientoPropio();
     try {
       await _bridge.configurarSesion(sesionActiva);
       await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
@@ -566,6 +567,29 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     }, onError: _errorStream);
   }
 
+  /// Sin avatar (Traducir de univoz, la mitad de Comunicarse): el mismo
+  /// quieto/movimiento que mandaba el visor, medido aquí sobre los frames
+  /// fusionados, para que el modo automático corte las señas igual que
+  /// cuando el avatar estaba en pantalla.
+  final _medidor = MovimientoTipoVisor();
+
+  Future<void> _iniciarMovimientoPropio() async {
+    _medidor.reiniciar();
+    await _subAvatar?.cancel();
+    _subAvatar = _ctrl.camara.frames.listen((f) {
+      if (!_modoAuto) return;
+      final v = normalizarRenderCacheado(f) ?? normalizarCacheado(f);
+      if (v == null) return;
+      final hay = _medidor.alFrame(v, f.timestampMs);
+      if (hay == null) return;
+      _fuente.alMovimientoVisor(hayMovimiento: hay, timestampMs: f.timestampMs);
+    }, onError: _errorStream);
+    await _subSinMano?.cancel();
+    _subSinMano = _ctrl.camara.framesPreview.listen((f) {
+      if (_modoAuto) _fuente.alPreviewSinMano(f);
+    }, onError: _errorStream);
+  }
+
   /// Error del stream nativo. El controlador lo clasifica, lo registra en la
   /// sesion y, si es grave, deja la camara en error (texto amable +
   /// Reintentar en [_contenido]); aqui solo se evita que llegue sin manejar.
@@ -574,8 +598,10 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
 
   bool get _usarAvatar => widget.conAvatar && _bridge.disponible;
 
-  bool get _visorListo =>
-      _usarAvatar && _bridge.estado.value == EstadoAvatar.listo;
+  /// Fuente de quieto/movimiento lista: el visor cuando hay avatar; sin
+  /// avatar, el medidor propio ([MovimientoTipoVisor]) siempre lo está.
+  bool get _visorListo => !_usarAvatar ||
+      _bridge.estado.value == EstadoAvatar.listo;
 
   /// Con el avatar listo, el inicio y fin de la seña salen de su quieto/
   /// movimiento adaptativo (llega por onMovimiento); sin el (sin visor,
@@ -972,11 +998,15 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              Texture(textureId: camara.textureId),
+              // Espejo con la frontal, como la vista normal de Traducir.
+              Transform.flip(
+                flipX: camara.frontal,
+                child: Texture(textureId: camara.textureId),
+              ),
               ValueListenableBuilder<LandmarkFrame?>(
                 valueListenable: _ctrl.frame,
                 builder: (_, frame, __) => CustomPaint(
-                  painter: SkeletonPainter(frame: frame),
+                  painter: SkeletonPainter(frame: frame, espejo: camara.frontal),
                   size: Size.infinite,
                 ),
               ),
@@ -1089,14 +1119,19 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Imagen y puntos tal cual los entrega la camara, como en la
-          // version de Karim (decision de la dueña, 2026-10-28).
-          Texture(textureId: camara.textureId),
+          // Camara frontal = vista de espejo: se voltea la imagen y, con ella,
+          // los puntos del esqueleto (solo presentacion; el reconocimiento
+          // y el avatar siguen sin voltear). Sin esto, al mover el brazo
+          // derecho se ve moverse uno del lado izquierdo.
+          Transform.flip(
+            flipX: camara.frontal,
+            child: Texture(textureId: camara.textureId),
+          ),
           ValueListenableBuilder<LandmarkFrame?>(
             valueListenable: _ctrl.frame,
             builder: (_, frame, __) => CustomPaint(
               painter:
-                  SkeletonPainter(frame: frame),
+                  SkeletonPainter(frame: frame, espejo: camara.frontal),
               size: Size.infinite,
             ),
           ),

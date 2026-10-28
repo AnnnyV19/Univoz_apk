@@ -9,6 +9,7 @@ library controlador_captura;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
@@ -25,6 +26,11 @@ import 'sign_norm.dart'
         fillGaps,
         isotropizarSecuencia,
         kAspectoAnalisisApp,
+        kOffLocL,
+        kOffPresL,
+        kOffPresR,
+        kOffShapeL,
+        kOffShapeR,
         kTFrames,
         resample;
 import 'suavizado_landmarks.dart';
@@ -593,6 +599,61 @@ class ControladorCaptura extends ChangeNotifier {
 /// laboratorio web). Si el visor no esta listo (cargando, error, tiempo
 /// agotado, renderer caido) no manda motion: el detector se alimenta de los
 /// frames de preview con su umbral propio. Nunca las dos fuentes a la vez.
+/// El mismo "quieto/movimiento" que el visor del avatar le manda a Traducir
+/// (rig_math.mjs, createResponsiveRigFilter.motionDiagnostics + el criterio
+/// de index.html), calculado en Dart sobre los frames FUSIONADOS ya
+/// normalizados. Así el modo automático funciona igual con o sin avatar:
+/// antes, sin el visor, se caía al detector por pixeles del preview, que
+/// casi nunca arrancaba ni cortaba bien.
+class MovimientoTipoVisor {
+  MovimientoTipoVisor({this.intervaloMs = 33});
+
+  /// Igual que kIntervaloEnvio: el visor medía entre frames recibidos a
+  /// este ritmo, no entre todos los de la cámara.
+  final int intervaloMs;
+
+  List<double>? _anterior;
+  int? _anteriorMs;
+
+  void reiniciar() {
+    _anterior = null;
+    _anteriorMs = null;
+  }
+
+  /// null si el frame se salta por el ritmo; si no, si hay movimiento.
+  bool? alFrame(List<double> v, int timestampMs) {
+    final antMs = _anteriorMs;
+    if (antMs != null && timestampMs - antMs < intervaloMs && timestampMs >= antMs) {
+      return null;
+    }
+    final ant = _anterior;
+    _anterior = List<double>.of(v);
+    _anteriorMs = timestampMs;
+    if (ant == null || ant.length != v.length || v.length < kOffShapeR + 60) {
+      return false;
+    }
+    var cuerpo = 0.0, muneca = 0.0, forma = 0.0;
+    for (var i = 0; i < v.length; i++) {
+      final d = v[i] - ant[i];
+      final d2 = d * d;
+      if (i == kOffPresL || i == kOffPresR) continue;
+      if (i >= kOffShapeL) {
+        forma += d2;
+      } else if (i >= kOffLocL) {
+        muneca += d2;
+      } else {
+        cuerpo += d2;
+      }
+    }
+    double c(double x) => x < 0 ? 0 : (x > 1 ? 1 : x);
+    // Umbrales "intentional" del filtro: cuerpo .08, muñeca .06, dedos .08.
+    final puntaje = math.max(c(math.sqrt(cuerpo) / 0.08), c(math.sqrt(muneca) / 0.06));
+    final dedos = c(math.sqrt(forma) / 0.08);
+    final conMano = v[kOffPresL] >= .5 || v[kOffPresR] >= .5;
+    return conMano && (puntaje >= .8 || dedos >= .8);
+  }
+}
+
 class FuenteMovimientoAuto {
   FuenteMovimientoAuto(this.detector);
 

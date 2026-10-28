@@ -151,4 +151,37 @@ void main() {
     detector.detener();
     entrada.close();
   });
+
+  group('MovimientoTipoVisor (el quieto/movimiento del visor, sin avatar)', () {
+    List<double> frame({double muneca = 0, double dedo = 0, bool mano = true}) {
+      final v = List<double>.filled(152, 0);
+      v[30] = mano ? 1 : 0;
+      v[24] = muneca;
+      v[40] = dedo;
+      return v;
+    }
+
+    test('quieto no es movimiento; muñeca o dedos que se mueven sí', () {
+      final m = MovimientoTipoVisor();
+      expect(m.alFrame(frame(), 0), isFalse); // primero: referencia
+      expect(m.alFrame(frame(muneca: .001), 40), isFalse);
+      expect(m.alFrame(frame(muneca: .1), 80), isTrue);
+      expect(m.alFrame(frame(muneca: .1, dedo: .2), 120), isTrue);
+      expect(m.alFrame(frame(muneca: .1, dedo: .2), 160), isFalse);
+    });
+
+    test('sin mano no cuenta, aunque se mueva el cuerpo', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(mano: false), 0);
+      final v = frame(mano: false)..[0] = .5;
+      expect(m.alFrame(v, 40), isFalse);
+    });
+
+    test('respeta el ritmo del visor (33 ms)', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(), 0);
+      expect(m.alFrame(frame(muneca: .1), 10), isNull);
+      expect(m.alFrame(frame(muneca: .1), 40), isTrue);
+    });
+  });
 }
