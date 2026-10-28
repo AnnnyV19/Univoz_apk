@@ -68,10 +68,18 @@ Los latigazos que quedan vienen de volteos largos en los datos, que no se pueden
 | Python de `senas_core/tools` | 58 de 58, más `test_norm` y `test_dtw` |
 | `inline_viewer_modules.py --check` y `sincronizar_kotlin.py --check` | OK |
 | `tema_univoz_test.dart` | Actualizada a la paleta nueva, con prueba de los estados |
-| `flutter analyze` y `flutter test` | **Se corren en la PC de la dueña** (Flutter no se puede instalar en el entorno donde se armó la rama) |
+| `flutter analyze` (Flutter 3.47, PC de la dueña) | `senas_core` y `univoz`: sin avisos |
+| `flutter test` (PC de la dueña) | `senas_core` 430 de 430; `univoz` 98 de 98 (1 omitida, como en `integracion-anny`) |
+
+La primera corrida en la PC encontró dos cosas, ya corregidas:
+
+- `TarjetaUnivoz` tapaba el fondo y el efecto de toque de sus `ListTile` (assert de Flutter en la prueba del consentimiento). Ahora envuelve su contenido en un `Material` transparente.
+- `avatar_rig_contract_test` buscaba el texto viejo de `animar()`. Sigue comprobando que la reproducción no se espeja.
+
+También se limpiaron los 46 avisos de `flutter analyze` que ya traía `univoz` con Flutter 3.47 (`withOpacity`, opciones de `speech_to_text` 7.5, `SemanticsService.announce`, `context` tras un `await`, `const`).
 
 ## 4. Pendiente
 
-- `flutter analyze` y `flutter test` en `senas_core` y `univoz`, y una prueba en el teléfono.
+- Probar en el teléfono.
 - Lucía: subir `immersive_navigation.dart`.
 - Licencias: `Model_Yuki_N.vrm` declara *Redistribution_Prohibited* y está en un repo público. Recomendación: sacarlo del repo.
