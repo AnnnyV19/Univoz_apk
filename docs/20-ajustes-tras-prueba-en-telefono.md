@@ -4,19 +4,24 @@ Rama `integracion-final`. Esto es lo que pidió la dueña después de probar la 
 
 ## Avatar
 
-- **Ahora es 100% el de Karim** (Javier Karim Andrade, `Xavier82h8`). El visor (`index.html` y los `rig_*.mjs`) y sus pruebas son los de la rama `karim`, y el modelo es `univozM.vrm`.
-- **Lo que se quitó.** Las piezas de app-limpia y de la auditoría del 20-oct (`rig_cuerpo`, `rig_manos`, `rig_mano_ik`, `rig_replay`, `rig_frase`, `rig_encuadre`) daban problemas de profundidad.
-  - `MODELO_UNIVOZ_v0.vrm` sigue en `univoz/assets/avatar/` pero no se empaqueta.
-- **Frases.** El visor de Karim no une señas, así que `AvatarBridge.reproducirFrase` las manda una por una: cada seña espera el `fin` de la anterior.
+- **Mezcla: movimiento de Karim + preparación de UNIVOZ.** El visor (`index.html` y los `rig_*.mjs`) vuelve a ser el de la integración (Karim = Javier Karim Andrade, `Xavier82h8`), con lo que hacía bien el de la dueña: suavizado, reparación de palmas volteadas, anticipación y frases unidas (`reproducirFrase` nativo).
+- **Separadores apagados.** `separarCuerpo` y `separarManos` quedan en `false` en `cal`: eran los que empujaban las manos hacia el fondo.
+- **Modelo:** `MODELO_UNIVOZ_v0.vrm` (el `univozM` se veía difícil).
 - **Cámara de Traducir.** Ya no voltea la imagen ni los puntos, igual que la versión de Karim.
-- **Señas que se ven mal.** Se midieron las 541 señas en el visor de Karim con `herramientas/auditoria_manos`. 152 tienen un error alto de muñeca o de palma, o un latigazo; la lista está en [senas_que_se_ven_mal.csv](senas_que_se_ven_mal.csv). Muchas vienen de tomas con la palma volteada en los datos y hay que regrabarlas.
+- **Señas que se ven mal.** La lista de [senas_que_se_ven_mal.csv](senas_que_se_ven_mal.csv) (152) se midió en el visor de Karim solo; con la mezcla la palma y la muñeca quedan mucho más cerca de los datos (palma p90 26° contra 61°; muñeca 2.8 cm contra 13.8 cm). Las que siguen mal vienen de tomas con la palma volteada y hay que regrabarlas.
+
+## Reconocimiento
+
+- **El detector no arrancaba en la vista previa.** La cámara del teléfono manda cuadros con manos alternados con cuadros de solo cuerpo, y el movimiento se medía contra el cuadro anterior, que muchas veces no tenía manos. Ahora cada mano se compara con la última vez que se vio (hasta 250 ms).
+- **Estado visible.** Arriba de la cámara: "Haz tu seña" → "Leyendo la seña..." → "Reconociendo..." → la palabra, o "No la reconocí. Repite la seña".
 
 ## Comunicarse
 
 Cuando una persona sabe LSM y la otra no (modos `avatar` y `camaraSenas`), la pantalla se parte en dos:
 
-- **Arriba, la cámara** (`PantallaDeTranslacion` embebida y sin avatar). La seña reconocida se vuelve texto. Si del otro lado alguien oye, también se dice en voz alta.
-- **Abajo, el avatar.** Firma lo que la otra persona escribe o dice.
+- **Arriba, el avatar** con sus controles encima: Deletreo/Palabra, "Escribe aquí", ▶ y micrófono. Firma lo que la otra persona escribe o dice.
+- **Abajo, la cámara de fondo** (`PantallaDeTranslacion` embebida y sin avatar), con el SOS pequeño. La seña reconocida se vuelve texto; si del otro lado alguien oye, también se dice en voz alta.
+- **Oyente con sordo que no sabe LSM:** solo escribir y leer.
 
 Además:
 
@@ -42,9 +47,16 @@ Además:
 - **Sin desplazar:** menú, perfiles, ¿Cómo funciona?, Comunicarse, Aprender (una unidad a la vez, con flechas) y Lección.
 - **Botones:** quedan como estaban, salvo los verdes, que ahora son morados. El botón SOS quedó centrado y dice solo "SOS".
 
-## Pendiente
+## Bienvenida
 
-- Fondo de la bienvenida: la imagen la va a dar la dueña.
+- Degradado morado con la ilustración de la dueña en gris al 16 %, logo, "UNIVOZ" y un botón blanco "Comenzar". La primera vez lleva al tutorial.
+- "Sabe LSM": las letras L, S, M con tres manos; "No sabe LSM": lo mismo con el símbolo de prohibido.
+
+## Recolector nocturno
+
+`senas_core/tools/recolector_nocturno.py` busca cada noche videos con licencia Creative Commons (YouTube) y de Wikisigns para las señas con menos de 10 muestras, saca los landmarks y los guarda como pendientes. Solo aprueba los que el reconocedor confirma como la misma seña con distancia, margen y calidad holgados; el resto queda para revisión. Reporte en `datasets_lsm/recolector/reporte_<fecha>.csv`. La tarea de Windows se registra a mano con `registrar_recolector.bat` (3:17 a. m.).
+
+## Pendiente
 - Probar en el teléfono la pantalla partida, cámara y avatar a la vez.
 - Regrabar las tomas de `senas_que_se_ven_mal.csv`.
 - Lucía: subir `immersive_navigation.dart`.
