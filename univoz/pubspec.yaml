@@ -63,6 +63,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    # Ilustraciones de las pantallas (herramientas/ilustraciones).
+    - assets/ilustraciones/
     # Diccionario de señas y avatar 3D, de senas_core (copiados a
     # univoz/assets/ junto a los originales de senas_core/assets/).
     - assets/plantillas.json

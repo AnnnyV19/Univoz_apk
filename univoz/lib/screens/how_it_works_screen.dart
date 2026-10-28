@@ -70,52 +70,68 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 6),
-              Center(
-                child: Text(
-                  'Descubre todo lo que puedes hacer',
-                  style: TextStyle(
-                    color: colores.onSurfaceVariant,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              // Sin desplazar y con poco texto: cada función es un dibujo
+              // con su nombre. La explicación completa la dice la voz (ver
+              // initState) y TalkBack.
               Expanded(
-                child: ListView(
+                child: Column(
                   children: [
-                    _buildFeatureCard(
-                      icon: Icons.menu_book,
-                      title: 'Aprender señas',
-                      description:
-                          'Diccionario visual de LSM con animaciones 3D '
-                          'del avatar',
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildFeatureCard(
+                              ilustracion: 'aprender',
+                              title: 'Aprender',
+                              description: 'Aprender señas: diccionario '
+                                  'visual de LSM con animaciones 3D del '
+                                  'avatar',
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildFeatureCard(
+                              ilustracion: 'comunicarse',
+                              title: 'Comunicarse',
+                              description: 'Comunicarse: escribe o dicta '
+                                  'texto y el avatar lo traduce a señas en '
+                                  'tiempo real',
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    _buildFeatureCard(
-                      icon: Icons.chat_bubble_outline,
-                      title: 'Comunicarse',
-                      description:
-                          'Escribe o dicta texto y el avatar lo traduce '
-                          'a señas en tiempo real',
-                    ),
-                    _buildFeatureCard(
-                      icon: Icons.camera_alt_outlined,
-                      title: 'Traducir señas',
-                      description:
-                          'La cámara detecta tus señas y las convierte '
-                          'a texto o voz',
-                    ),
-                    _buildFeatureCard(
-                      icon: Icons.favorite_border,
-                      title: 'Accesibilidad',
-                      description:
-                          'Diseñada para personas con discapacidad '
-                          'visual, auditiva o de comunicación',
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildFeatureCard(
+                              ilustracion: 'traducir',
+                              title: 'Traducir',
+                              description: 'Traducir señas: la cámara '
+                                  'detecta tus señas y las convierte a '
+                                  'texto o voz',
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildFeatureCard(
+                              ilustracion: 'accesibilidad',
+                              title: 'Para todos',
+                              description: 'Accesibilidad: diseñada para '
+                                  'personas con discapacidad visual, '
+                                  'auditiva o de comunicación',
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
+              const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -163,43 +179,41 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
   }
 
   Widget _buildFeatureCard({
-    required IconData icon,
+    required String ilustracion,
     required String title,
     required String description,
   }) {
     final colores = Theme.of(context).colorScheme;
-    return TarjetaUnivoz(
-      margen: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          IconoCaja(icon, tamano: 40),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: colores.onSurface,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  description,
-                  style: TextStyle(
-                    color: colores.onSurfaceVariant,
-                    fontSize: 12.5,
-                    height: 1.35,
-                  ),
-                ),
-              ],
+    return Semantics(
+      label: description,
+      excludeSemantics: true,
+      child: TarjetaUnivoz(
+        margen: EdgeInsets.zero,
+        relleno: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+        child: Column(
+          children: [
+            Expanded(
+              child: Image.asset(
+                'assets/ilustraciones/$ilustracion.png',
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                title,
+                maxLines: 1,
+                style: TextStyle(
+                  color: colores.onSurface,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

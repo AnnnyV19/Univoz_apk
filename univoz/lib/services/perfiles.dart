@@ -26,6 +26,13 @@ class ProfileConfig {
   final Color cardColor;
   final Color textColor;
 
+  /// Dibujo de la tarjeta (assets/ilustraciones/<nombre>.png).
+  final String ilustracion;
+
+  /// Una o dos palabras para la pantalla; [title] y [subtitle] completos
+  /// quedan para TalkBack.
+  final String corto;
+
   const ProfileConfig({
     required this.type,
     required this.title,
@@ -34,6 +41,8 @@ class ProfileConfig {
     required this.iconBgColor,
     required this.cardColor,
     required this.textColor,
+    required this.ilustracion,
+    required this.corto,
   });
 }
 
@@ -45,10 +54,16 @@ class RefinementConfig {
   final String subtitle;
   final List<String> options;
 
+  /// Dibujo y palabra corta de cada opción, en el orden de [options].
+  final List<String> ilustraciones;
+  final List<String> cortos;
+
   const RefinementConfig({
     required this.title,
     required this.subtitle,
     required this.options,
+    required this.ilustraciones,
+    required this.cortos,
   });
 }
 
@@ -61,6 +76,8 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     iconBgColor: ColoresUnivoz.moradoClaro,
     cardColor: ColoresUnivoz.morado,
     textColor: Colors.white,
+    ilustracion: 'ciego',
+    corto: 'Ciego/a',
   ),
   ProfileType.sordo: ProfileConfig(
     type: ProfileType.sordo,
@@ -70,6 +87,8 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     iconBgColor: Color(0xFFF5A855),
     cardColor: Color(0xFFA8C5F0),
     textColor: ColoresUnivoz.tinta,
+    ilustracion: 'sordo',
+    corto: 'Sordo/a',
   ),
   ProfileType.mudo: ProfileConfig(
     type: ProfileType.mudo,
@@ -79,6 +98,8 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     iconBgColor: Color(0xFFE88B8B),
     cardColor: Color(0xFFF3A9A0),
     textColor: ColoresUnivoz.tinta,
+    ilustracion: 'mudo',
+    corto: 'Mudo/a',
   ),
   ProfileType.prestarCelular: ProfileConfig(
     type: ProfileType.prestarCelular,
@@ -88,6 +109,8 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     iconBgColor: Color(0xFFE88BC2),
     cardColor: Color(0xFFF0C869),
     textColor: ColoresUnivoz.tinta,
+    ilustracion: 'prestar',
+    corto: 'Presto mi celular',
   ),
 };
 
@@ -98,16 +121,22 @@ const Map<ProfileType, RefinementConfig> refinementConfigs = {
     title: '¿Cómo prefieres usar la app?',
     subtitle: 'Elige una opción para personalizar tu experiencia',
     options: ['No uso lector de pantalla', 'Uso lector de pantalla'],
+    ilustraciones: ['lector_no', 'lector_si'],
+    cortos: ['Sin lector', 'Con lector'],
   ),
   ProfileType.sordo: RefinementConfig(
     title: '¿Cómo te puedo ayudar?',
     subtitle: 'Elige un perfil para personalizar tu experiencia',
     options: ['No conozco LSM', 'Conozco LSM'],
+    ilustraciones: ['lsm_no', 'lsm_si'],
+    cortos: ['No sé LSM', 'Sé LSM'],
   ),
   ProfileType.mudo: RefinementConfig(
     title: '¿Conoces Lengua de Señas Mexicana?',
     subtitle: 'Esto nos ayuda a elegir cómo te comunicarás',
     options: ['No conozco LSM', 'Conozco LSM'],
+    ilustraciones: ['lsm_no', 'lsm_si'],
+    cortos: ['No sé LSM', 'Sé LSM'],
   ),
   ProfileType.prestarCelular: RefinementConfig(
     title: '¿Quién usará el celular?',
@@ -117,6 +146,8 @@ const Map<ProfileType, RefinementConfig> refinementConfigs = {
       'Persona con discapacidad auditiva',
       'Persona con discapacidad del habla',
     ],
+    ilustraciones: ['ciego', 'sordo', 'mudo'],
+    cortos: ['Ciego/a', 'Sordo/a', 'Mudo/a'],
   ),
 };
 

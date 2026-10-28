@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'other_person_profile_screen.dart';
+import 'univoz_shared_widgets.dart' show TarjetaDibujo;
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
 import '../services/perfiles.dart';
-import 'package:senas_core/componentes_univoz.dart';
 import 'package:senas_core/tema_univoz.dart';
 
 // ProfileType, ProfileConfig, RefinementConfig, profileConfigs y
@@ -71,7 +71,6 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
   // pregunta para saber si conoce LSM (ver _buildExpandedCard).
   bool? _prestadoConoceLsm;
 
-  static const Color _grayText = ColoresUnivoz.tintaSuave;
 
   @override
   void initState() {
@@ -86,8 +85,6 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
     ConversationProfile.reset();
   }
   static const Color _comenzarColor = ColoresUnivoz.morado;
-  static const Color _radioCardColor = Color(0xFF241B35);
-  static const Color _radioAccent = ColoresUnivoz.moradoClaro;
 
   /// `true` si, dentro de "Prestaré mi Celular", la opción elegida es
   /// "persona con discapacidad auditiva" (índice 1, sordo/a) o "persona
@@ -267,16 +264,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
                   height: 1.2,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Elige un perfil para personalizar tu experiencia',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: _grayText,
-                ),
-              ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Expanded(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 320),
@@ -331,84 +319,61 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
     );
   }
 
-  /// Vista normal: cuadrícula 2x2 + botón "oyente".
+  /// Vista normal: cuadrícula 2x2 + "oyente". Sin desplazar: las filas se
+  /// reparten el alto que haya.
   Widget _buildGrid({required Key key}) {
-    return SingleChildScrollView(
+    return Column(
       key: key,
-      child: Column(
-        children: [
-          Row(
+      children: [
+        Expanded(
+          flex: 5,
+          child: Row(
             children: [
               Expanded(child: _buildCard(profileConfigs[ProfileType.ciego]!)),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(child: _buildCard(profileConfigs[ProfileType.sordo]!)),
             ],
           ),
-          const SizedBox(height: 14),
-          Row(
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          flex: 5,
+          child: Row(
             children: [
               Expanded(child: _buildCard(profileConfigs[ProfileType.mudo]!)),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                   child: _buildCard(
                       profileConfigs[ProfileType.prestarCelular]!)),
             ],
           ),
-          const SizedBox(height: 14),
-          _buildOyenteButton(),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+        Expanded(flex: 4, child: _buildOyenteButton()),
+      ],
     );
   }
 
   Widget _buildCard(ProfileConfig config) {
-    return GestureDetector(
+    return TarjetaDibujo(
+      ilustracion: config.ilustracion,
+      titulo: config.corto,
+      lector: '${config.title}. ${config.subtitle}',
+      color: config.cardColor,
+      colorTexto: config.textColor,
+      seleccionada: false,
       onTap: () => _expandCard(config.type),
-      child: Container(
-        height: 150,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: config.cardColor,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: config.iconBgColor,
-              child: Icon(config.icon, size: 18, color: Colors.white),
-            ),
-            const Spacer(),
-            Text(
-              config.title,
-              style: TextStyle(
-                color: config.textColor,
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              config.subtitle,
-              style: TextStyle(
-                color: config.textColor.withValues(alpha: 0.85),
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
-  /// "Soy oyente": antes un botón verde; con el estilo de Lucía (blanco con
-  /// borde, morado al elegirlo).
+  /// "Soy oyente": antes un botón verde; ahora en el morado tenue del
+  /// diseño de Lucía.
   Widget _buildOyenteButton() {
-    return OpcionUnivoz(
-      icono: Icons.hearing,
-      titulo: 'Soy oyente y no tengo\ndiscapacidades',
+    return TarjetaDibujo(
+      ilustracion: 'oyente',
+      titulo: 'Oyente',
+      lector: 'Soy oyente y no tengo discapacidades',
+      color: ColoresUnivoz.moradoTenue,
       seleccionada: _selectedOyente,
       onTap: () {
         setState(() {
@@ -420,8 +385,8 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
     );
   }
 
-  /// Tarjeta expandida: ocupa el espacio de toda la cuadrícula y muestra
-  /// las opciones de refinamiento (radio buttons) dentro de sí misma.
+  /// Tarjeta abierta: ocupa el lugar de la cuadrícula y muestra la pregunta
+  /// del perfil con una tarjeta-dibujo por respuesta.
   Widget _buildExpandedCard(
     ProfileConfig config,
     RefinementConfig refinement, {
@@ -430,27 +395,34 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
     return Container(
       key: key,
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 14),
       decoration: BoxDecoration(
         color: config.cardColor,
         borderRadius: BorderRadius.circular(22),
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: config.iconBgColor,
-                  child:
-                      Icon(config.icon, size: 20, color: Colors.white),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ExcludeSemantics(
+                child: SizedBox(
+                  width: 56,
+                  height: 42,
+                  child: Image.asset(
+                    'assets/ilustraciones/${config.ilustracion}.png',
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Semantics(
+                  header: true,
                   child: Text(
                     config.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: config.textColor,
                       fontSize: 18,
@@ -458,122 +430,63 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
                     ),
                   ),
                 ),
-                IconButton(
-                  icon: Icon(Icons.close, color: config.textColor),
-                  tooltip: 'Cerrar',
-                  onPressed: _collapseCard,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
+              ),
+              IconButton(
+                icon: Icon(Icons.close, color: config.textColor),
+                tooltip: 'Cerrar',
+                onPressed: _collapseCard,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Text(
               refinement.title,
+              maxLines: 2,
               style: TextStyle(
                 color: config.textColor,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              refinement.subtitle,
-              style: TextStyle(
-                color: config.textColor.withValues(alpha: 0.8),
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-              decoration: BoxDecoration(
-                color: _radioCardColor,
-                borderRadius: BorderRadius.circular(18),
-              ),
-              // Cada opción es un objetivo táctil de al menos 48x48dp
-              // (mínimo recomendado por las normas de accesibilidad —
-              // WCAG 2.5.5 / Android — para personas con baja visión o
-              // ceguera), con más separación entre opciones para evitar
-              // toques accidentales.
-              child: Column(
-                children: List.generate(refinement.options.length, (i) {
-                  final bool isSelected = _expandedOptionIndex == i;
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom: i == refinement.options.length - 1 ? 0 : 8,
-                    ),
-                    child: Semantics(
-                      button: true,
-                      selected: isSelected,
-                      label: refinement.options[i],
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(14),
-                          onTap: () => setState(() {
-                            _expandedOptionIndex = i;
-                            // Cambiar de opción (por ejemplo, de "persona
-                            // con discapacidad auditiva" a "del habla")
-                            // invalida cualquier respuesta anterior de
-                            // "¿conoce LSM?": vuelve a preguntarse abajo
-                            // si la nueva opción también la necesita.
-                            _prestadoConoceLsm = null;
-                          }),
-                          child: Container(
-                            constraints: const BoxConstraints(minHeight: 56),
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 14, horizontal: 10),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 28,
-                                  height: 28,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color: _radioAccent, width: 2.5),
-                                    color: isSelected
-                                        ? _radioAccent
-                                        : Colors.transparent,
-                                  ),
-                                  child: isSelected
-                                      ? const Icon(Icons.circle,
-                                          size: 12, color: Colors.white)
-                                      : null,
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Text(
-                                    refinement.options[i],
-                                    style: TextStyle(
-                                      color: isSelected
-                                          ? _radioAccent
-                                          : Colors.white70,
-                                      fontWeight: isSelected
-                                          ? FontWeight.w700
-                                          : FontWeight.w500,
-                                      fontSize: 17,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Row(
+                children: [
+                  for (var i = 0; i < refinement.options.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 10),
+                    Expanded(
+                      child: TarjetaDibujo(
+                        ilustracion: refinement.ilustraciones[i],
+                        titulo: refinement.cortos[i],
+                        lector: refinement.options[i],
+                        color: Colors.white,
+                        seleccionada: _expandedOptionIndex == i,
+                        onTap: () => setState(() {
+                          _expandedOptionIndex = i;
+                          // Cambiar de opción (por ejemplo, de "persona con
+                          // discapacidad auditiva" a "del habla") invalida
+                          // la respuesta anterior de "¿conoce LSM?": se
+                          // vuelve a preguntar abajo si hace falta.
+                          _prestadoConoceLsm = null;
+                        }),
                       ),
                     ),
-                  );
-                }),
+                  ],
+                ],
               ),
             ),
-            if (config.type == ProfileType.prestarCelular &&
-                _prestadoNecesitaPreguntaLsm) ...[
-              const SizedBox(height: 16),
-              _buildPrestadoLsmPregunta(config),
-            ],
+          ),
+          if (config.type == ProfileType.prestarCelular &&
+              _prestadoNecesitaPreguntaLsm) ...[
+            const SizedBox(height: 10),
+            Expanded(child: _buildPrestadoLsmPregunta(config)),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -586,91 +499,45 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
   /// pregunta fue sobre qué discapacidad tiene, no si sabe LSM.
   Widget _buildPrestadoLsmPregunta(ProfileConfig config) {
     const opciones = ['No conoce LSM', 'Conoce LSM'];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '¿Esa persona conoce Lengua de Señas Mexicana?',
-          style: TextStyle(
-            color: config.textColor,
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
+    const dibujos = ['lsm_no', 'lsm_si'];
+    const cortos = ['No sabe LSM', 'Sabe LSM'];
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '¿Sabe LSM?',
+            semanticsLabel: '¿Esa persona conoce Lengua de Señas Mexicana?',
+            style: TextStyle(
+              color: config.textColor,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        const SizedBox(height: 10),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-          decoration: BoxDecoration(
-            color: _radioCardColor,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Column(
-            children: List.generate(opciones.length, (i) {
-              final bool conoce = i == 1;
-              final bool isSelected = _prestadoConoceLsm == conoce;
-              return Padding(
-                padding: EdgeInsets.only(
-                  bottom: i == opciones.length - 1 ? 0 : 8,
-                ),
-                child: Semantics(
-                  button: true,
-                  selected: isSelected,
-                  label: opciones[i],
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(14),
+          const SizedBox(height: 8),
+          Expanded(
+            child: Row(
+              children: [
+                for (var i = 0; i < opciones.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 10),
+                  Expanded(
+                    child: TarjetaDibujo(
+                      ilustracion: dibujos[i],
+                      titulo: cortos[i],
+                      lector: opciones[i],
+                      color: Colors.white,
+                      seleccionada: _prestadoConoceLsm == (i == 1),
                       onTap: () =>
-                          setState(() => _prestadoConoceLsm = conoce),
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 56),
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 14, horizontal: 10),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 28,
-                              height: 28,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border:
-                                    Border.all(color: _radioAccent, width: 2.5),
-                                color: isSelected
-                                    ? _radioAccent
-                                    : Colors.transparent,
-                              ),
-                              child: isSelected
-                                  ? const Icon(Icons.circle,
-                                      size: 12, color: Colors.white)
-                                  : null,
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Text(
-                                opciones[i],
-                                style: TextStyle(
-                                  color: isSelected
-                                      ? _radioAccent
-                                      : Colors.white70,
-                                  fontWeight: isSelected
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                  fontSize: 17,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                          setState(() => _prestadoConoceLsm = i == 1),
                     ),
                   ),
-                ),
-              );
-            }),
+                ],
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

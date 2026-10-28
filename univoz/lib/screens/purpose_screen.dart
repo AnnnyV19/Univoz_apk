@@ -247,61 +247,43 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   height: 1.2,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Elige una opción para personalizar tu experiencia',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: _grayText,
-                ),
-              ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 16),
+              // Sin desplazar: las tres opciones se reparten el alto que
+              // hay, con un dibujo grande y pocas palabras (no todos leen
+              // el español con soltura). La descripción va para TalkBack.
               Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    children: [
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-comunicarse'),
-                        purpose: CommunicationPurpose.comunicarse,
-                        icon: Icons.chat_bubble_outline,
-                        iconBgColor: const Color(0xFFA8C5F0),
-                        cardColor: const Color(0xFFA8C5F0),
-                        title: 'Comunicarme con alguien',
-                        subtitle:
-                            'Elige tu perfil y el de la persona con la que quieres hablar',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-traducir-senas'),
-                        purpose: CommunicationPurpose.traducirSenas,
-                        icon: Icons.camera_alt,
-                        iconBgColor: Theme.of(context).colorScheme.primary,
-                        cardColor: const Color(0xFFB8B2E8),
-                        title: 'Traducir una seña',
-                        subtitle:
-                            'Abre la cámara y traduce lengua de señas a texto, sin armar una conversación',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-aprender-lsm'),
-                        purpose: CommunicationPurpose.aprenderLsm,
-                        icon: Icons.pan_tool,
-                        iconBgColor: const Color(0xFFE88BC2),
-                        cardColor: const Color(0xFFF0C869),
-                        title: 'Quiero aprender LSM',
-                        subtitle: 'Aprender con avatar 3D a mi propio ritmo',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      if (_pidiendoPermisoCamara)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 14),
-                          child: Center(child: CircularProgressIndicator()),
-                        ),
-                    ],
-                  ),
+                child: Column(
+                  children: [
+                    _buildOptionCard(
+                      key: const ValueKey('purpose-comunicarse'),
+                      purpose: CommunicationPurpose.comunicarse,
+                      ilustracion: 'comunicarse',
+                      cardColor: const Color(0xFFA8C5F0),
+                      title: 'Comunicarme',
+                      subtitle: 'Elige tu perfil y el de la persona con la '
+                          'que quieres hablar',
+                    ),
+                    const SizedBox(height: 12),
+                    _buildOptionCard(
+                      key: const ValueKey('purpose-traducir-senas'),
+                      purpose: CommunicationPurpose.traducirSenas,
+                      ilustracion: 'traducir',
+                      cardColor: const Color(0xFFB8B2E8),
+                      title: 'Traducir una seña',
+                      subtitle: 'Abre la cámara y traduce lengua de señas a '
+                          'texto, sin armar una conversación',
+                      ocupado: _pidiendoPermisoCamara,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildOptionCard(
+                      key: const ValueKey('purpose-aprender-lsm'),
+                      purpose: CommunicationPurpose.aprenderLsm,
+                      ilustracion: 'aprender',
+                      cardColor: const Color(0xFFF0C869),
+                      title: 'Aprender LSM',
+                      subtitle: 'Aprender con avatar 3D a mi propio ritmo',
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 12),
@@ -346,62 +328,70 @@ class _PurposeScreenState extends State<PurposeScreen> {
     );
   }
 
+  /// Opción del menú: dibujo grande y su nombre. Ocupa el alto que le
+  /// toque (Expanded) para que nada se tenga que desplazar.
   Widget _buildOptionCard({
     Key? key,
     required CommunicationPurpose purpose,
-    required IconData icon,
-    required Color iconBgColor,
+    required String ilustracion,
     required Color cardColor,
     required String title,
     required String subtitle,
-    required Color textColor,
+    bool ocupado = false,
   }) {
     final bool isSelected = _selected == purpose;
-    return GestureDetector(
-      key: key,
-      onTap: () => setState(() => _selected = purpose),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: cardColor,
-          borderRadius: BorderRadius.circular(18),
-          border:
-              isSelected ? Border.all(color: Colors.black87, width: 3) : null,
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: iconBgColor,
-              child: Icon(icon, size: 20, color: Colors.white),
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: isSelected,
+        label: '$title. $subtitle',
+        excludeSemantics: true,
+        child: GestureDetector(
+          key: key,
+          onTap: () => setState(() => _selected = purpose),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(18),
+              border: isSelected
+                  ? Border.all(color: Colors.black87, width: 3)
+                  : null,
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
+            child: Row(
+              children: [
+                AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Image.asset(
+                    'assets/ilustraciones/$ilustracion.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
                     title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: textColor,
+                      color: Theme.of(context).colorScheme.onSurface,
                       fontWeight: FontWeight.w800,
-                      fontSize: 16,
+                      fontSize: 19,
+                      height: 1.15,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.85),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
+                ),
+                if (ocupado)
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 3),
                   ),
-                ],
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

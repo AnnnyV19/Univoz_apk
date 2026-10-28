@@ -396,18 +396,14 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String? subtitulo = switch (widget.modo) {
-      ComunicacionModo.avatar => 'Avatar en Lengua de Señas',
-      ComunicacionModo.camaraSenas => 'Traducir señas',
-      _ => null,
-    };
+    // Sin subtítulo en la barra: menos texto y más alto para el avatar.
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
-      appBar: UnivozHeader(subtitle: subtitulo),
+      appBar: const UnivozHeader(),
       body: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
           child: _buildForModo(),
         ),
       ),
@@ -444,70 +440,34 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   /// actual — nada que dependa de tocar la pantalla con precisión, ya
   /// que toda la interacción real ocurre hablando y escuchando.
   Widget _buildBlindVariant() {
-    // Con scroll en vez de un Column con Expanded a pantalla completa:
-    // así, si el mensaje que se va reconociendo en vivo (ver
-    // _runVoiceComposeFlow) crece a varias líneas, el resto del
-    // contenido se acomoda en vez de aplastarse ("verse encimado").
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (_listening)
-                Container(
-                  margin: const EdgeInsets.only(right: 10),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.error,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Text(
-                    'Escuchando...',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              Expanded(
-                child: Text(
-                  _voiceStatus,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: ColoresUnivoz.tintaSuave,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 220,
-            child: TextField(
-              controller: _controller,
-              maxLines: null,
-              expands: true,
-              textAlignVertical: TextAlignVertical.top,
-              decoration: InputDecoration(
-                hintText: 'Tu mensaje va a aparecer aquí...',
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: const EdgeInsets.all(16),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
-                ),
+    // Sin desplazar: el cuadro del mensaje toma el alto que quede, así que
+    // si el mensaje reconocido crece, se acomoda dentro del cuadro.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildVoiceStatusBanner(),
+        const SizedBox(height: 12),
+        Expanded(
+          child: TextField(
+            controller: _controller,
+            maxLines: null,
+            expands: true,
+            textAlignVertical: TextAlignVertical.top,
+            decoration: InputDecoration(
+              hintText: 'Tu mensaje va a aparecer aquí...',
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.all(16),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
               ),
             ),
           ),
-          const SizedBox(height: 14),
-          const SosButton(),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+        const SosButton(),
+      ],
     );
   }
 
@@ -518,44 +478,29 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   /// [_runVoiceComposeFlow] sigue narrando y componiendo el mensaje por
   /// voz por encima de esta misma pantalla.
   Widget _buildLsmVariant() {
-    // Todo el contenido va dentro de un scroll: antes era un Column fijo
-    // (con un Expanded para el recuadro del avatar) y, apenas se le
-    // agregó el letrero de estado de voz arriba, ya no cabía completo en
-    // pantallas más chicas — eso es lo que se veía "encimado" (el
-    // recuadro del avatar, los botones y el teclado se aplastaban unos
-    // sobre otros en vez de acomodarse). Con scroll, cada sección tiene
-    // su tamaño natural y, si no cabe todo de una vez, se desliza en vez
-    // de recortarse.
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (BlindNarrator.talkBackFlow) ...[
-            _buildVoiceStatusBanner(),
-            const SizedBox(height: 10),
-          ],
-          Text(
-            'Firmar y hablar, cada quien a su manera',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-              color: Colors.grey.shade900,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Quien firma abre la cámara para que se lea en voz alta lo '
-            'que dice; quien habla usa el micrófono y el avatar lo '
-            'firma en pantalla.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-          ),
-          const SizedBox(height: 14),
-          Row(
+    // Sin desplazar y con poco texto: dos botones con dibujo (cámara para
+    // quien firma, micrófono para quien habla), el avatar en el alto que
+    // quede, y abajo el mensaje. El teclado de letras solo sale en
+    // "Deletreo", que es cuando se escribe letra por letra.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (BlindNarrator.talkBackFlow) ...[
+          _buildVoiceStatusBanner(),
+          const SizedBox(height: 8),
+        ],
+        SizedBox(
+          height: 84,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
                 child: _lsmActionButton(
-                  icon: Icons.videocam,
-                  label: 'Traducir señas\ny leerlas en voz alta',
+                  ilustracion: 'traducir',
+                  label: 'Traducir señas',
+                  lector: 'Traducir señas y leerlas en voz alta. Quien '
+                      'firma abre la cámara y se lee en voz alta lo que '
+                      'dice.',
                   color: Theme.of(context).colorScheme.primary,
                   busy: _pidiendoPermisoCamara,
                   onTap: _pidiendoPermisoCamara ? null : _abrirCamaraTraductora,
@@ -564,10 +509,12 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: _lsmActionButton(
-                  icon: _listening ? Icons.mic : Icons.mic_none,
-                  label: _listening
-                      ? 'Escuchando...'
-                      : 'Hablar para que\nel avatar firme',
+                  ilustracion: 'hablar',
+                  label: _listening ? 'Escuchando...' : 'Hablar',
+                  lector: _listening
+                      ? 'Escuchando'
+                      : 'Hablar para que el avatar firme. Quien habla usa '
+                          'el micrófono y el avatar lo firma en pantalla.',
                   color: _listening
                       ? Theme.of(context).colorScheme.error
                       : Theme.of(context).colorScheme.secondary,
@@ -577,10 +524,11 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          Container(
+        ),
+        const SizedBox(height: 10),
+        Expanded(
+          child: Container(
             width: double.infinity,
-            height: 200,
             decoration: BoxDecoration(
               color: ColoresUnivoz.moradoTenue,
               borderRadius: BorderRadius.circular(20),
@@ -604,13 +552,10 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                         color: Theme.of(context).colorScheme.error,
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: const Text(
-                        'Escuchando...',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700),
-                      ),
+                      child: const Icon(Icons.mic,
+                          color: Colors.white,
+                          size: 18,
+                          semanticLabel: 'Escuchando'),
                     ),
                   ),
                 if (_avatarReproduciendo)
@@ -625,96 +570,123 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: _segmentButton(
-                  label: 'Deletreo',
-                  selected: _isSpelling,
-                  color: const Color(0xFF3FBF8F),
-                  onTap: () => setState(() => _isSpelling = true),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _segmentButton(
-                  label: 'Palabra',
-                  selected: !_isSpelling,
-                  color: const Color(0xFFE85DA0),
-                  onTap: () => setState(() => _isSpelling = false),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            onSubmitted: _firmar,
-            decoration: InputDecoration(
-              hintText: 'Tu mensaje aquí...',
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide.none,
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _segmentButton(
+                label: 'Deletreo',
+                selected: _isSpelling,
+                // Antes verde; ahora el morado del diseño de Lucía.
+                color: ColoresUnivoz.morado,
+                onTap: () => setState(() => _isSpelling = true),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          // El teclado en pantalla no le sirve a quien es ciego/a (no
-          // puede verlo para tocar la tecla correcta): cuando el modo
-          // por voz está activo, el cuadro de texto ya se llena
-          // hablando (ver _dictarMensaje / _runVoiceComposeFlow), así
-          // que no hace falta mostrarlo.
-          if (!BlindNarrator.talkBackFlow) ...[
-            _buildSimpleKeyboard(),
-            const SizedBox(height: 12),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _segmentButton(
+                label: 'Palabra',
+                selected: !_isSpelling,
+                color: const Color(0xFFE85DA0),
+                onTap: () => setState(() => _isSpelling = false),
+              ),
+            ),
           ],
-          const SosButton(),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _controller,
+          onSubmitted: _firmar,
+          decoration: InputDecoration(
+            hintText: 'Tu mensaje aquí...',
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        // El teclado en pantalla no le sirve a quien es ciego/a (no puede
+        // verlo para tocar la tecla correcta): cuando el modo por voz está
+        // activo, el cuadro de texto ya se llena hablando (ver
+        // _dictarMensaje / _runVoiceComposeFlow).
+        if (_isSpelling && !BlindNarrator.talkBackFlow) ...[
+          _buildSimpleKeyboard(),
+          const SizedBox(height: 8),
         ],
-      ),
+        const SosButton(),
+      ],
     );
   }
 
   Widget _lsmActionButton({
-    required IconData icon,
+    required String ilustracion,
     required String label,
+    required String lector,
     required Color color,
     required bool busy,
     required VoidCallback? onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            busy
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : Icon(icon, color: Colors.white, size: 26),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                height: 1.2,
+    return Semantics(
+      button: true,
+      label: lector,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(6, 6, 10, 6),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 5,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.all(4),
+                  child: busy
+                      ? const Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : Image.asset(
+                          'assets/ilustraciones/$ilustracion.png',
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 6,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      height: 1.15,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -780,14 +752,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Uno de los dos conoce Lengua de Señas Mexicana: abre la '
-          'cámara para traducir sus señas a texto. El otro responde '
-          'escribiendo directamente, ya que ninguno puede oír una '
-          'lectura en voz alta.',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-        ),
         const SizedBox(height: 14),
         SizedBox(
           width: double.infinity,
@@ -812,12 +776,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 14),
-        const Text(
-          'Texto traducido / respuesta escrita',
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-        ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         Expanded(
           child: TextField(
             controller: _traducidoController,
@@ -860,12 +819,6 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Ninguno de los dos conoce Lengua de Señas Mexicana: '
-          'escríbanse directamente.',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-        ),
         const SizedBox(height: 14),
         Expanded(
           child: TextField(
@@ -904,16 +857,12 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             Icon(Icons.pan_tool, size: 56, color: Colors.grey.shade400),
             const SizedBox(height: 16),
             const Text(
-              'Los dos conocen Lengua de Señas Mexicana',
+              'Los dos saben LSM',
+              semanticsLabel: 'Los dos conocen Lengua de Señas Mexicana. '
+                  'Pueden comunicarse firmando directamente, sin necesidad '
+                  'de esta pantalla.',
               textAlign: TextAlign.center,
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Pueden comunicarse firmando directamente, sin necesidad '
-              'de esta pantalla.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
             ),
           ],
         ),

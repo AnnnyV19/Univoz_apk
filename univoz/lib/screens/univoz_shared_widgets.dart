@@ -457,3 +457,82 @@ class _SosButtonState extends State<SosButton>
     );
   }
 }
+
+/// Tarjeta con un dibujo grande y una o dos palabras debajo: la usan los
+/// menús de perfiles y las preguntas de sí/no. No todas las personas leen
+/// el español con soltura, así que en pantalla va poco texto; la frase
+/// completa ([lector]) es la que lee TalkBack.
+///
+/// Toma el alto que le den (va dentro de un Expanded): las pantallas que la
+/// usan no se deslizan.
+class TarjetaDibujo extends StatelessWidget {
+  const TarjetaDibujo({
+    super.key,
+    required this.ilustracion,
+    required this.titulo,
+    required this.lector,
+    required this.color,
+    required this.seleccionada,
+    required this.onTap,
+    this.colorTexto,
+  });
+
+  /// Nombre del PNG en assets/ilustraciones/ (sin extensión).
+  final String ilustracion;
+  final String titulo;
+  final String lector;
+  final Color color;
+  final Color? colorTexto;
+  final bool seleccionada;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final texto = colorTexto ?? Theme.of(context).colorScheme.onSurface;
+    return Semantics(
+      button: true,
+      selected: seleccionada,
+      label: lector,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: seleccionada ? Colors.black87 : Colors.transparent,
+              width: 3,
+            ),
+          ),
+          child: Column(
+            children: [
+              Expanded(
+                child: Image.asset(
+                  'assets/ilustraciones/$ilustracion.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+              const SizedBox(height: 4),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  titulo,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: texto,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
