@@ -737,48 +737,71 @@ class DetectorAutomatico {
     _sub = preview.listen(_procesarFrame);
   }
 
-  double _calcularMovimiento(LandmarkFrame ant, LandmarkFrame act) {
-    double suma = 0;
-    int n = 0;
-
-    void agregarMano(List<List<double>>? a, List<List<double>>? b) {
-      if (a == null || b == null) return;
-      final len = a.length < b.length ? a.length : b.length;
-      for (int i = 0; i < len; i++) {
-        suma += (b[i][0] - a[i][0]).abs();
-        suma += (b[i][1] - a[i][1]).abs();
-        n += 2;
-      }
-    }
-
-    agregarMano(ant.left, act.left);
-    agregarMano(ant.right, act.right);
-    return n > 0 ? suma / n : 0.0;
-  }
-
   void _procesarFrame(LandmarkFrame frame) {
     if (_estado == EstadoAuto.reconociendo || _estado == EstadoAuto.pausa) {
-      _frameAnterior = null;
+      _resetContadores();
       return;
     }
 
+    final t = frame.timestampMs;
     final anterior = _frameAnterior;
     _frameAnterior = frame;
+
+    // Cada mano se compara con la ULTIMA vez que se vio esa mano, no con el
+    // frame anterior: el preview sale apenas termina cualquiera de los dos
+    // modelos nativos, así que puede alternar frames con manos y frames solo
+    // con pose. Comparando contra el frame anterior, una mano en movimiento
+    // junto a un frame sin manos daba 0 y la seña nunca arrancaba (Traducir
+    // sin avatar y la pantalla partida de Comunicarse).
+    var suma = 0.0;
+    var n = 0;
+    void mano(List<List<double>>? act, bool izquierda) {
+      if (act == null) return;
+      final ant = izquierda ? _izqAnt : _derAnt;
+      final antMs = izquierda ? _izqMs : _derMs;
+      if (ant != null && antMs != null) {
+        final dt = t - antMs;
+        // Timestamp repetido o hacia atrás: sin dato. Hueco largo: la mano
+        // reapareció, no es movimiento.
+        if (dt > 0 && dt <= 250) {
+          final len = ant.length < act.length ? ant.length : act.length;
+          var s = 0.0;
+          for (var i = 0; i < len; i++) {
+            s += (act[i][0] - ant[i][0]).abs();
+            s += (act[i][1] - ant[i][1]).abs();
+          }
+          if (len > 0) {
+            // Llevado a "por frame de 30 FPS".
+            suma += s / (2 * len) * _msPorFrameReferencia / dt.clamp(10, 200);
+            n++;
+          }
+        }
+      }
+      if (izquierda) {
+        _izqAnt = act;
+        _izqMs = t;
+      } else {
+        _derAnt = act;
+        _derMs = t;
+      }
+    }
+
+    mano(frame.left, true);
+    mano(frame.right, false);
     if (anterior == null) return;
 
-    // Timestamp repetido o hacia atras (preview de dos modelos del mismo
-    // frame): tratarlo como un frame de referencia, sin escalar.
-    final crudoMs = frame.timestampMs - anterior.timestampMs;
+    final crudoMs = t - anterior.timestampMs;
     final dtMs = crudoMs > 0
         ? crudoMs.clamp(10, 200).toDouble()
         : _msPorFrameReferencia;
-    final tieneManos = frame.left != null || frame.right != null;
-    // Movimiento llevado a "por frame de 30 FPS".
-    final mov = tieneManos
-        ? _calcularMovimiento(anterior, frame) * _msPorFrameReferencia / dtMs
-        : 0.0;
-    _avanzar(mov > umbralMovimiento, dtMs, frame.timestampMs);
+    final mov = n > 0 ? suma / n : 0.0;
+    _avanzar(mov > umbralMovimiento, dtMs, t);
   }
+
+  List<List<double>>? _izqAnt;
+  List<List<double>>? _derAnt;
+  int? _izqMs;
+  int? _derMs;
 
   /// Movimiento ya decidido por otra fuente: el visor (rig_math.mjs, el
   /// mismo filtro adaptativo del laboratorio web) en Traducir. Misma maquina
@@ -850,6 +873,10 @@ class DetectorAutomatico {
 
   void _resetContadores() {
     _frameAnterior = null;
+    _izqAnt = null;
+    _derAnt = null;
+    _izqMs = null;
+    _derMs = null;
     _ultimoAlimentadoMs = null;
     _msQuietos = 0;
   }

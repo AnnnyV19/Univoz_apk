@@ -263,17 +263,18 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('No tengo'), findsNothing);
-    expect(find.text('Señando...'), findsOneWidget);
-    // Seña por seña (visor de Karim): la 2a sale al acabar la 1a.
-    expect(_js.where((j) => j.contains('reproducirSecuencia')), hasLength(1));
-    await tester.pump(const Duration(seconds: 7));
-    final js = _js.where((j) => j.contains('reproducirSecuencia')).toList();
-    expect(js, hasLength(2)); // HOLA + COMO_ESTAS
-    for (final j in js) {
-      final json = j.substring(j.indexOf("('") + 2, j.indexOf("',"));
-      expect(jsonDecode(json) as List, hasLength(kTFrames));
-      expect(j, contains("'2.0.0'"));
+    final js = _js.where((j) => j.contains('reproducirFrase')).toList();
+    expect(js, hasLength(1));
+    expect(_js.where((j) => j.contains('reproducirSecuencia')), isEmpty);
+    final json = js.single.substring(
+        js.single.indexOf("('") + 2, js.single.indexOf("','"));
+    final segmentos = jsonDecode(json) as List;
+    expect(segmentos, hasLength(2)); // HOLA + COMO_ESTAS
+    for (final s in segmentos) {
+      expect((s as Map)['frames'], hasLength(kTFrames));
     }
+    expect(js.single, contains("'2.0.0'"));
+    expect(find.text('Señando...'), findsOneWidget);
   });
 
   testWidgets('una palabra que no está pero se puede deletrear se deletrea',
@@ -285,9 +286,10 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
 
-    await tester.pump(const Duration(seconds: 30));
-    expect(_js.where((j) => j.contains('reproducirSecuencia')),
-        hasLength(5)); // HOLA + B A Ñ A
+    final js = _js.firstWhere((j) => j.contains('reproducirFrase'));
+    final segmentos = jsonDecode(js.substring(js.indexOf("('") + 2,
+        js.indexOf("','"))) as List;
+    expect(segmentos, hasLength(5)); // HOLA + B A Ñ A
     expect(find.textContaining('«baña» deletreado'), findsOneWidget);
   });
 

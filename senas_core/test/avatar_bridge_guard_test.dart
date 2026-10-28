@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'dart:io';
 
 import 'package:flutter/services.dart' show ByteData;
@@ -89,7 +87,7 @@ void main() {
     });
   });
 
-  group('AvatarBridge.encuadrar y reproducirFrase', () {
+  group('AvatarBridge.encuadrar y reproducirFrase (aporte de app-limpia)', () {
     List<List<double>> seq() => [
           for (var i = 0; i < 32; i++) List<double>.filled(152, 0.0),
         ];
@@ -115,13 +113,12 @@ void main() {
       bridge.dispose();
     });
 
-    testWidgets('reproducirFrase valida 32x152 y manda seña por seña',
+    testWidgets('reproducirFrase valida 32x152 y manda JSON defensivo',
         (tester) async {
       final js = <String>[];
       final bridge = AvatarBridge.sinVisor(ejecutar: (c) async => js.add(c));
       await bridge.reproducirFrase([SegmentoFrase(seq(), 30)]);
-      // El visor de Karim no tiene frases: cada seña va como una secuencia.
-      expect(js.single, startsWith('window.reproducirSecuencia && '));
+      expect(js.single, startsWith('window.reproducirFrase && '));
       expect(js.single, contains("'2.0.0'"));
       await expectLater(
         bridge.reproducirFrase([SegmentoFrase(seq().sublist(1), 30)]),
@@ -129,26 +126,6 @@ void main() {
       );
       await bridge.reproducirFrase(const []); // vacia: no hace nada
       expect(js, hasLength(1));
-      bridge.dispose();
-    });
-
-    testWidgets('la frase manda la siguiente seña al llegar el fin',
-        (tester) async {
-      final js = <String>[];
-      var avisos = 0;
-      final bridge = AvatarBridge.sinVisor(ejecutar: (c) async => js.add(c))
-        ..onTerminado = () => avisos++;
-      unawaited(bridge.reproducirFrase(
-          [SegmentoFrase(seq(), 30), SegmentoFrase(seq(), 30)]));
-      await tester.pump();
-      expect(js, hasLength(1));
-      bridge.simularMensaje('fin'); // fin de la 1a: solo da paso a la 2a
-      await tester.pump();
-      expect(js, hasLength(2));
-      expect(avisos, 0);
-      bridge.simularMensaje('fin'); // fin de la última: avisa
-      await tester.pump();
-      expect(avisos, 1);
       bridge.dispose();
     });
   });

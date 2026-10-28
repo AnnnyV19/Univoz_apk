@@ -893,13 +893,26 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   /// que se reconoció. Sin barras ni botones propios; siempre automática.
   Widget _embebida() {
     final pred = _prediccion;
-    final texto = _ctrl.error != null
-        ? 'Cámara no disponible'
-        : pred != null && pred.aceptada
-            ? pred.textoHablado
-            : _ctrl.grabando
-                ? 'Leyendo la seña...'
-                : 'Haz tu seña';
+    // Siempre se ve en qué va: esperando, leyendo la seña, reconociendo, o
+    // el resultado (también cuando no la reconoció).
+    final String texto;
+    if (_ctrl.error != null) {
+      texto = 'Cámara no disponible';
+    } else if (_estadoAuto == EstadoAuto.grabando || _ctrl.grabando) {
+      texto = 'Leyendo la seña...';
+    } else if (_estadoAuto == EstadoAuto.reconociendo) {
+      texto = 'Reconociendo...';
+    } else if (pred != null && pred.aceptada) {
+      texto = pred.textoHablado;
+    } else if (pred != null) {
+      texto = 'No la reconocí. Repite la seña';
+    } else if (_pista.texto != null) {
+      texto = _pista.texto!;
+    } else if (_dicc == null) {
+      texto = 'Cargando señas...';
+    } else {
+      texto = 'Haz tu seña';
+    }
     return ColoredBox(
       color: Colors.black,
       child: Stack(
@@ -928,7 +941,11 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: pred != null && pred.aceptada ? 22 : 14,
+                      fontSize: pred != null &&
+                              pred.aceptada &&
+                              texto == pred.textoHablado
+                          ? 22
+                          : 14,
                       fontWeight: FontWeight.w800,
                     ),
                   ),

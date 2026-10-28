@@ -593,7 +593,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                 if (_avatarReproduciendo)
                   const Positioned(
                     right: 10,
-                    bottom: 10,
+                    top: 10,
                     child: Chip(
                       avatar: Icon(Icons.front_hand, size: 18),
                       label: Text('Señando...'),
@@ -601,9 +601,9 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   ),
                 if (_voiceStatus.isNotEmpty && !_avatarReproduciendo)
                   Positioned(
-                    left: 10,
+                    left: 56,
                     right: 10,
-                    bottom: 10,
+                    top: 10,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 6),
@@ -620,6 +620,14 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                       ),
                     ),
                   ),
+                // Lo que le toca al avatar: escribir, Señar y el micrófono,
+                // chicos y semitransparentes sobre él.
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 8,
+                  child: _controlesAvatar(conVoz),
+                ),
               ],
             ),
           ),
@@ -646,18 +654,11 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   )
                 else
                   _botonActivarCamara(),
-                // SOS chico arriba a la derecha (se mantiene presionado).
+                // SOS chico abajo a la derecha (se mantiene presionado).
                 const Positioned(
-                  top: 56,
+                  bottom: 10,
                   right: 10,
                   child: SosButton(compacto: true),
-                ),
-                // Controles encima de la cámara, abajo.
-                Positioned(
-                  left: 8,
-                  right: 8,
-                  bottom: 8,
-                  child: _controlesSobreCamara(conVoz),
                 ),
               ],
             ),
@@ -668,8 +669,8 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
   }
 
   /// Deletreo/Palabra, el mensaje, Señar y el micrófono: chicos y
-  /// semitransparentes sobre la cámara.
-  Widget _controlesSobreCamara(bool conVoz) {
+  /// semitransparentes sobre el avatar.
+  Widget _controlesAvatar(bool conVoz) {
     final colores = Theme.of(context).colorScheme;
     final translucido = Colors.white.withValues(alpha: 0.88);
     return Column(

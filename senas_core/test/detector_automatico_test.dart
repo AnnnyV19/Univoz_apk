@@ -125,4 +125,30 @@ void main() {
     expect(fin, isTrue);
     expect(d.ultimoMovimientoMs, 297);
   });
+
+  test('frames del preview que alternan manos y solo pose siguen contando', () {
+    // El preview sale cuando termina cualquiera de los dos modelos: uno trae
+    // las manos y el siguiente solo la pose. Una seña así debe arrancar y
+    // cortarse igual.
+    final entrada = StreamController<LandmarkFrame>(sync: true);
+    final detector = DetectorAutomatico(framesQuietosParaCortar: 10);
+    var inicio = false;
+    var fin = false;
+    detector.onInicioDetectado = () => inicio = true;
+    detector.onFinDetectado = () => fin = true;
+    detector.iniciar(entrada.stream);
+    for (var i = 0; i < 120 && !fin; i++) {
+      final t = i * 17;
+      if (i.isEven) {
+        final x = .3 + 1.8 * (t <= 600 ? t : 600) / 1000;
+        entrada.add(_mano(t, x));
+      } else {
+        entrada.add(LandmarkFrame.fromMap({'t': t}));
+      }
+    }
+    expect(inicio, isTrue);
+    expect(fin, isTrue);
+    detector.detener();
+    entrada.close();
+  });
 }

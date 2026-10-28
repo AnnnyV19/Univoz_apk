@@ -38,8 +38,9 @@ import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 import 'sign_space.dart' show SignSpaceFrame;
 import 'avatar_web_bridge.dart';
 
-// Modelo del avatar: MODELO_UNIVOZ_v0.vrm (el de la dueña), con el visor de
-// Karim (decisión de la dueña, 2026-10-28: univozM se ve poco).
+// Modelo del avatar: MODELO_UNIVOZ_v0.vrm (VRM 0.0 de VRoid Studio 2.14, de la
+// dueña), con el movimiento del visor de Karim (2026-10-28). univozM.vrm queda
+// en el repo como alternativa.
 const String _kRutaAvatar = 'assets/avatar/MODELO_UNIVOZ_v0.vrm';
 
 /// Evento `perf` del visor embebido ('perf:<json>', ver rig_embedded_perf).
@@ -281,13 +282,6 @@ class AvatarBridge {
 
   void _alMensaje(String m) {
     if (m == 'fin') {
-      // Dentro de una frase, el 'fin' de cada seña (menos la última) solo
-      // da paso a la siguiente; ver reproducirFrase.
-      final siguiente = _finSenaDeFrase;
-      if (siguiente != null && !siguiente.isCompleted) {
-        siguiente.complete();
-        return;
-      }
       onTerminado?.call();
     } else if (m.startsWith('pose:')) {
       onPoseCapturada?.call(m.substring(5));
@@ -552,13 +546,6 @@ class AvatarBridge {
   /// null por frame): con ella el visor adapta los brazos a las proporciones
   /// del avatar en modo de retarget 'anchors'.
   Future<void> reproducir(List<List<double>> seq,
-      {int fps = 30, List<SignSpaceFrame?>? signSpace}) {
-    _turnoFrase++;
-    _finSenaDeFrase = null;
-    return _reproducirInterno(seq, fps: fps, signSpace: signSpace);
-  }
-
-  Future<void> _reproducirInterno(List<List<double>> seq,
       {int fps = 30, List<SignSpaceFrame?>? signSpace}) async {
     if (signSpace != null && signSpace.length != seq.length) {
       throw ArgumentError('signSpace debe tener un frame por frame de seq');
@@ -586,11 +573,10 @@ class AvatarBridge {
         contrato.frames.first.length == kFrameDim);
   }
 
-  /// Reproduce varias señas SEGUIDAS (una frase). El visor de Karim no tiene
-  /// frases propias, así que se mandan una por una: cada seña espera el
-  /// 'fin' de la anterior. Al acabar la última avisa con [onTerminado], como
-  /// una seña sola. Si mientras tanto llega otra frase u otra seña, esta se
-  /// deja de mandar.
+  /// Reproduce varias señas SEGUIDAS (una frase), sin volver a reposo entre
+  /// una y otra: el visor las une con una transicion corta. Cada segmento es
+  /// una seña de 32 cuadros con su propia velocidad. Avisa con [onTerminado]
+  /// al acabar la frase completa.
   Future<void> reproducirFrase(List<SegmentoFrase> segmentos) async {
     if (segmentos.isEmpty) return;
     for (final s in segmentos) {
@@ -602,26 +588,22 @@ class AvatarBridge {
             'cuadros de $kFrameDim valores.');
       }
     }
-    final turno = ++_turnoFrase;
-    for (var i = 0; i < segmentos.length; i++) {
-      if (turno != _turnoFrase) return;
-      final ultima = i == segmentos.length - 1;
-      // La última seña avisa con onTerminado como una seña sola.
-      final fin = ultima ? null : Completer<void>();
-      _finSenaDeFrase = fin;
-      await _reproducirInterno(segmentos[i].frames, fps: segmentos[i].fps);
-      if (fin == null) return;
-      // Una seña dura ~1 s; si el visor no avisa (sin WebView, recarga), no
-      // nos quedamos colgados.
-      await fin.future.timeout(const Duration(seconds: 6), onTimeout: () {});
+    if (kIsWeb) {
+      postAvatarCommand({
+        'action': 'reproducirFrase',
+        'segmentos': [
+          for (final s in segmentos) {'frames': s.frames, 'fps': s.fps}
+        ],
+        'normVersion': kNormVersion,
+      });
+      return;
     }
+    final json = jsonEncode([
+      for (final s in segmentos) {'frames': s.frames, 'fps': s.fps}
+    ]);
+    await _js(llamadaSegura(
+        'reproducirFrase', "'${_escapar(json)}','$kNormVersion'"));
   }
-
-  /// Fin de la seña en curso de una frase (null fuera de una frase).
-  Completer<void>? _finSenaDeFrase;
-
-  /// Sube con cada frase o seña nueva: la frase anterior deja de mandar.
-  int _turnoFrase = 0;
 
   /// Aplica UN frame al instante, sin cola ni interpolacion. Es lo que usa
   /// el modo espejo (pantalla_espejo.dart) para que el avatar siga a la
