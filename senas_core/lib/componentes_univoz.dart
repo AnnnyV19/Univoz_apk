@@ -48,7 +48,10 @@ class TarjetaUnivoz extends StatelessWidget {
               ]
             : null,
       ),
-      child: child,
+      // Material propio (transparente): los ListTile/SwitchListTile de la
+      // tarjeta pintan su fondo y el efecto de toque aquí, encima del color
+      // de la tarjeta, en vez de quedar tapados por él.
+      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }
