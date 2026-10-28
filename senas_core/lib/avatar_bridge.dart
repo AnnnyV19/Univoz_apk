@@ -38,11 +38,10 @@ import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
 import 'sign_space.dart' show SignSpaceFrame;
 import 'avatar_web_bridge.dart';
 
-// Modelo del avatar: univozM.vrm (el que usa el rig afinado y todos los
-// gates). MODELO_UNIVOZ_v0.vrm (VRM 0.0 de VRoid Studio 2.14, propuesto por la
-// dueña en app-limpia) vive en assets/avatar/ como opcion pero NO se empaqueta
-// ni es el defecto hasta validar rig y gates con el (docs/17).
-const String _kRutaAvatar = 'assets/avatar/univozM.vrm';
+// Modelo del avatar: MODELO_UNIVOZ_v0.vrm (VRM 0.0 de VRoid Studio 2.14, de la
+// dueña), oficial desde 2026-10-27; en su malla se midió la tabla del torso
+// de los separadores. univozM.vrm queda en el repo como alternativa.
+const String _kRutaAvatar = 'assets/avatar/MODELO_UNIVOZ_v0.vrm';
 
 /// Evento `perf` del visor embebido ('perf:<json>', ver rig_embedded_perf).
 /// null si el mensaje no es un objeto JSON: un perf roto no debe tirar nada.

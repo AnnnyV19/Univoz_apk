@@ -5939,7 +5939,7 @@ void main() {
             schema: 'RigDiagnosticReportV1',
             created_at_ms: Date.now(),
             platform: this.metadata.platform ?? 'unknown',
-            avatar: this.metadata.avatar ?? 'univozM',
+            avatar: this.metadata.avatar ?? 'MODELO_UNIVOZ_v0',
             norm_version: '2.0.0',
             frame_dim: FRAME_DIM,
             calibration: calibration ? JSON.parse(JSON.stringify(calibration)) : null,
@@ -10407,7 +10407,7 @@ void main() {
     // ---- fin rig_manos.mjs ----
 
     // ---- inicio rig_replay.mjs (antes importado por separado) ----
-    const {prepararSecuencia, interpolarFrame, extraEncuadreAbajo} = (() => {
+    const {repararVolteosPalma, kAnticipaMs, anticiparManos, prepararSecuencia, interpolarFrame, extraEncuadreAbajo} = (() => {
       // Reproduccion estable de secuencias (aportado por la rama app-limpia,
       // 2026-10-14): relleno de huecos de mano, suavizado gaussiano que se apaga
       // con el movimiento rapido, interpolacion entre cuadros y el extra de encuadre
@@ -10416,6 +10416,10 @@ void main() {
       // Layout del vector 2.0.0 (152 dims), igual que lib/sign_norm.dart.
       const kOffBody = 0, kOffLocL = 24, kOffLocR = 27, kOffPresL = 30,
         kOffPresR = 31, kOffShapeL = 32, kOffShapeR = 92, kFrameDim = 152;
+
+      // Puntos del bloque de cuerpo (en PUNTOS, no en dimensiones).
+      const kPtHombroI = 0, kPtHombroD = 1, kPtCodoI = 2, kPtCodoD = 3,
+        kPtMunI = 4, kPtMunD = 5;
 
       const kManosRep = [
         {loc: kOffLocL, pres: kOffPresL, shape: kOffShapeL},
@@ -10534,6 +10538,129 @@ void main() {
         }
       }
 
+      // Volteos de palma de pocos cuadros (auditoria 2026-10-20). En ~40% de
+      // las plantillas el detector gira la palma >60 grados de UN cuadro a otro
+      // (a 30 fps eso es >1800 grados/s: ninguna muñeca lo hace) y luego vuelve;
+      // el avatar daba un latigazo. Se parte del tramo mas largo sin volteos y se
+      // camina hacia afuera: una racha corta (<= 6 cuadros) que gira de forma
+      // imposible y despues vuelve se rellena interpolando la FORMA entre los
+      // cuadros buenos; si llega al extremo de la mano, se sostiene el ultimo
+      // bueno; una racha larga se acepta como real. Solo toca el bloque de
+      // forma (60 valores): cuerpo, muñeca (alturas), presencia, nada mas.
+      const kVolteoUmbral = 60, kVolteoMaxRacha = 6, kVolteoCoherente = 60,
+        kVolteoPorCuadro = 20, kVolteoTopeVuelta = 90;
+      function _marcoPalma(f, sh) {
+        const P = (i, d) => f[sh + i * 3 + d];
+        let u = [P(8, 0), P(8, 1), P(8, 2)];
+        const nu = Math.hypot(u[0], u[1], u[2]);
+        if (!(nu > 1e-9)) return null;
+        u = u.map((x) => x / nu);
+        let s = [0, 1, 2].map((d) => P(4, d) - P(16, d));
+        const su = s[0] * u[0] + s[1] * u[1] + s[2] * u[2];
+        s = s.map((x, d) => x - u[d] * su);
+        const ns = Math.hypot(s[0], s[1], s[2]);
+        if (!(ns > 1e-9)) return null;
+        s = s.map((x) => x / ns);
+        const n = [u[1] * s[2] - u[2] * s[1], u[2] * s[0] - u[0] * s[2], u[0] * s[1] - u[1] * s[0]];
+        return [u, s, n];
+      }
+      function _anguloMarcos(a, b) {
+        let tr = 0;
+        for (let c = 0; c < 3; c++) tr += a[c][0] * b[c][0] + a[c][1] * b[c][1] + a[c][2] * b[c][2];
+        return Math.acos(Math.min(1, Math.max(-1, (tr - 1) / 2))) * 180 / Math.PI;
+      }
+      function repararVolteosPalma(F) {
+        let cambios = 0;
+        for (const m of kManosRep) {
+          const sh = m.shape;
+          // corridas de cuadros seguidos con mano y forma valida
+          const corridas = [];
+          let cur = [];
+          for (let k = 0; k < F.length; k++) {
+            const ok = F[k][m.pres] >= 0.5 && _marcoPalma(F[k], sh) !== null;
+            if (ok && (cur.length === 0 || k === cur[cur.length - 1] + 1)) cur.push(k);
+            else { if (cur.length) corridas.push(cur); cur = ok ? [k] : []; }
+          }
+          if (cur.length) corridas.push(cur);
+          for (const run of corridas) {
+            if (run.length < 3) continue;
+            const orig = run.map((k) => F[k].slice(sh, sh + 60));
+            const R = run.map((k) => _marcoPalma(F[k], sh));
+            let mejor = [0, 0], i0 = 0;
+            for (let i = 1; i <= run.length; i++) {
+              if (i === run.length || _anguloMarcos(R[i - 1], R[i]) > kVolteoUmbral) {
+                if (i - i0 > mejor[1] - mejor[0]) mejor = [i0, i];
+                i0 = i;
+              }
+            }
+            for (const [paso, inicio, fin] of [[1, mejor[1], run.length], [-1, mejor[0] - 1, -1]]) {
+              let bueno = paso === 1 ? mejor[1] - 1 : mejor[0];
+              const borde = paso === 1 ? mejor[0] : mejor[1] - 1;
+              let i = inicio;
+              while (i !== fin) {
+                if (_anguloMarcos(R[bueno], R[i]) <= kVolteoUmbral) { bueno = i; i += paso; continue; }
+                let j = i, vuelta = null;
+                while (j !== fin && Math.abs(j - i) < kVolteoMaxRacha) {
+                  j += paso;
+                  if (j !== fin && _anguloMarcos(R[bueno], R[j]) <= Math.min(kVolteoTopeVuelta,
+                    kVolteoCoherente + kVolteoPorCuadro * Math.abs(j - bueno))) { vuelta = j; break; }
+                }
+                if (vuelta !== null) {
+                  const a = run[bueno], b = run[vuelta];
+                  const fa = F[a].slice(sh, sh + 60), fb = orig[vuelta];
+                  for (let q = i; q !== vuelta; q += paso) {
+                    const k = run[q], t = (k - a) / (b - a);
+                    for (let d = 0; d < 60; d++) F[k][sh + d] = fa[d] + (fb[d] - fa[d]) * t;
+                    R[q] = _marcoPalma(F[k], sh); cambios++;
+                  }
+                  bueno = vuelta; i = vuelta + paso;
+                } else if (Math.abs(fin - i) <= kVolteoMaxRacha &&
+                    Math.abs(fin - i) < Math.abs(bueno - borde) + 1) {
+                  for (let q = i; q !== fin; q += paso) {
+                    const k = run[q];
+                    for (let d = 0; d < 60; d++) F[k][sh + d] = F[run[bueno]][sh + d];
+                    R[q] = R[bueno]; cambios++;
+                  }
+                  break;
+                } else { bueno = i; i += paso; }
+              }
+            }
+          }
+        }
+        return cambios;
+      }
+
+      const kAnticipaMs = 300;
+      function anticiparManos(frames, fps) {
+        const n = Math.max(1, Math.round(kAnticipaMs / 1000 * fps));
+        const out = frames.map((f) => f.slice());
+        const lados = [
+          {pres: kOffPresL, loc: kOffLocL, shape: kOffShapeL,
+            pts: [kPtHombroI, kPtCodoI, kPtMunI]},
+          {pres: kOffPresR, loc: kOffLocR, shape: kOffShapeR,
+            pts: [kPtHombroD, kPtCodoD, kPtMunD]},
+        ];
+        const usa = (f, l) => f[l.pres] >= 0.5 &&
+          Math.hypot(f[l.pts[1] * 3], f[l.pts[1] * 3 + 1]) > 0.05;
+        for (const l of lados) {
+          for (let k = 1; k < frames.length; k++) {
+            if (!usa(frames[k], l) || usa(frames[k - 1], l)) continue;
+            const src = frames[k];
+            for (let j = k - 1; j >= Math.max(0, k - n); j--) {
+              if (usa(frames[j], l)) break; // no pisar datos reales
+              const dst = out[j];
+              dst[l.pres] = src[l.pres];
+              for (let d = 0; d < 3; d++) dst[l.loc + d] = src[l.loc + d];
+              for (let d = 0; d < 60; d++) dst[l.shape + d] = src[l.shape + d];
+              for (const pt of l.pts) {
+                for (let d = 0; d < 3; d++) dst[pt * 3 + d] = src[pt * 3 + d];
+              }
+            }
+          }
+        }
+        return out;
+      }
+
       // Devuelve una COPIA lista para reproducir: huecos rellenos y temblor
       // quitado. No toca la secuencia original ni lo que usa el reconocimiento.
       function prepararSecuencia(frames) {
@@ -10621,7 +10748,7 @@ void main() {
         if (!(extra > 0.045 * escala)) return 0;
         return Math.min(extra, m.brazo * escala);
       }
-      return {prepararSecuencia, interpolarFrame, extraEncuadreAbajo};
+      return {repararVolteosPalma, kAnticipaMs, anticiparManos, prepararSecuencia, interpolarFrame, extraEncuadreAbajo};
     })();
     // ---- fin rig_replay.mjs ----
 
@@ -10848,7 +10975,7 @@ void main() {
     // 1800 frames = ~60 s a 30 FPS: entra una sesion completa del protocolo
     // de camara sin perder el inicio.
     const rigDiagnostics = new RigDiagnosticBuffer({
-      platform: standaloneWeb ? 'web' : 'android', avatar: 'univozM',
+      platform: standaloneWeb ? 'web' : 'android', avatar: 'MODELO_UNIVOZ_v0',
     }, 1800);
     rigDiagnostics.setEnabled(false);
     // Telemetría numérica efímera. Nunca guarda video ni imágenes y funciona
@@ -11381,7 +11508,7 @@ void main() {
     // WebView. Este modo carga el mismo VRM desde el servidor estatico y
     // habilita MediaPipe web al pulsar "Iniciar cámara".
     if (standaloneWeb) {
-      fetch('../avatar/univozM.vrm')
+      fetch('../avatar/MODELO_UNIVOZ_v0.vrm')
         .then((response) => {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.arrayBuffer();
@@ -11497,16 +11624,17 @@ void main() {
       // dedos/muñeca a bind pose. Desactivado conserva comportamiento legacy:
       // última pose válida hasta que mano reaparezca.
       resetHandOnLoss: true,
-      // Aportes de la rama app-limpia, APAGADOS por defecto hasta validarlos
-      // con univozM (la tabla del torso se midio en MODELO_UNIVOZ_v0):
+      // Aportes de la rama app-limpia. ENCENDIDOS: el modelo oficial volvio a
+      // ser MODELO_UNIVOZ_v0, en cuya malla se midio la tabla del torso
+      // (integracion-final, 2026-10-27). Con otro modelo hay que regenerarla.
       //  - separarCuerpo: muñecas, manos y codos no atraviesan el torso (nunca
       //    cambia la altura de la muñeca). Ver rig_cuerpo.mjs.
       //  - separarManos: una mano no atraviesa a la otra. Necesita separarCuerpo.
-      //  - replayEstable: las frases limpian cada seña (huecos de mano,
-      //    temblor) con rig_replay.prepararSecuencia antes de unirlas.
-      separarCuerpo: false,
-      separarManos: false,
-      replayEstable: false,
+      //  - replayEstable: cada seña se limpia (huecos de mano, temblor) con
+      //    rig_replay.prepararSecuencia antes de reproducirla (sola o en frase).
+      separarCuerpo: true,
+      separarManos: true,
+      replayEstable: true,
       thumbCalibration: {
         left: kThumbFallback(),
         right: kThumbFallback(),
@@ -11762,7 +11890,7 @@ void main() {
       // En vivo el suavizado de salida ya entra suave a la pose nueva; un
       // crossfade encima lo anularia (el hueso en transicion no se suaviza).
       // La plantilla si lo usa: durante la reproduccion no hay suavizado.
-      if (suavizadoSalidaActivo && clave !== 'reproduccion') return;
+      if (suavizadoSalidaActivo && !String(clave).startsWith('reproduccion')) return;
       transicionesPose.start(`entrada:${clave}`, {from: capturarPose(nombres),
         nowMs: performance.now(), durationMs: duracionMs});
     }
@@ -13022,8 +13150,11 @@ void main() {
       puntoAncho[2] = puntos[kIdxIndiceMcp][2] - puntos[kIdxMeniqueMcp][2];
       const ancho = vectorManoAAvatar(puntoAncho, base, palma.ancho,
         palma.entrada);
-      const cmc = vectorManoAAvatar(puntos[0], base, palma.cmc, palma.entrada);
-      const objetivo = marcoMano(dedos, ancho, cmc);
+      // Sin CMC: con landmarks 3D el vector indice->menique ya fija de que
+      // lado esta el pulgar. Voltear segun el CMC (que cae casi sobre el eje
+      // muneca->nudillo medio) giraba la palma 180 grados en ~20% de las
+      // señas y la hacia saltar de un cuadro a otro (auditoria 2026-10-20).
+      const objetivo = marcoMano(dedos, ancho);
       if (!objetivo) return; // landmarks degenerados: conservar ultima pose
 
       const qRest = palma.qRest.setFromRotationMatrix(palma.matriz.makeBasis(
@@ -15337,6 +15468,12 @@ void main() {
         colaFrames = [];
         return;
       }
+      // Volteos de palma de un cuadro (fallo del detector) y, con
+      // replayEstable, huecos y temblor. Copia: la secuencia original no se
+      // toca (es la del reconocimiento).
+      colaFrames = colaFrames.map((f) => f.map(Number));
+      repararVolteosPalma(colaFrames);
+      if (cal.replayEstable) colaFrames = prepararSecuencia(colaFrames);
       colaSignSpace = null;
       if (signSpaceJson) {
         try {
@@ -15370,8 +15507,16 @@ void main() {
       // rechazado como stale_frame.
       resetSafetyGates();
       reproduccionRenderId = 0;
-      acumMs = 0;
-      crossfadePose('reproduccion', huesosCuerpo());
+      // Una mano que entra a media seña empieza a viajar kAnticipaMs antes
+      // (rig_replay.anticiparManos); y el cuadro 0 se sostiene kEntradaReproMs
+      // mientras el cuerpo llega desde la pose actual, para que la seña no
+      // arranque con el brazo todavia en reposo (auditoria 2026-10-20: se
+      // perdian ~8 cuadros y la mano llegaba a 3-4 m/s).
+      colaFrames = anticiparManos(colaFrames, kFps);
+      brazoPrevioRepro.left = null;
+      brazoPrevioRepro.right = null;
+      acumMs = -kEntradaReproMs;
+      crossfadePose('reproduccion', huesosCuerpo(), kEntradaReproMs);
       reproduciendo = colaFrames.length > 0;
       // Encuadre 'codos': si la seña baja mucho la mano, la camara baja lo
       // justo para que se vea (no hace nada con el encuadre 'cintura').
@@ -15404,6 +15549,11 @@ void main() {
           {tecnico: true});
         return;
       }
+      segmentos = segmentos.map((seg) => {
+        const frames = seg.frames.map((f) => f.map(Number));
+        repararVolteosPalma(frames);
+        return {...seg, frames};
+      });
       const frase = armarFrase(segmentos,
         cal.replayEstable ? prepararSecuencia : undefined);
       colaFrames = frase.frames;
@@ -15570,6 +15720,15 @@ void main() {
 
     let ultimoT = 0;
     let acumMs = 0;
+    // Entrada sostenida y crossfade de un brazo que aparece a media seña.
+    const kEntradaReproMs = 320;
+    const kBrazoEntraReproMs = 300;
+    const brazoPrevioRepro = {left: null, right: null};
+    const brazoEnUsoRepro = (v, lado) => {
+      const pres = lado === 'left' ? kOffPresL : kOffPresR;
+      const codo = (lado === 'left' ? kPtCodoI : kPtCodoD) * 3;
+      return v[pres] >= 0.5 && Math.hypot(v[codo], v[codo + 1]) > 0.05;
+    };
     // Stream que se quedo sin frames: al volver entra con crossfade.
     let volverConCrossfade = false;
 
@@ -15741,7 +15900,9 @@ void main() {
         // plantilla tiene 32 frames y el render corre a 60+ Hz.
         acumMs += dt;
         const msPorFrame = 1000 / kFps;
-        const posicion = acumMs / msPorFrame;
+        // acumMs empieza en -kEntradaReproMs: durante la entrada se sostiene
+        // el cuadro 0.
+        const posicion = Math.max(0, acumMs) / msPorFrame;
         if (posicion >= colaFrames.length) {
           reproduciendo = false;
           encuadreExtraObjetivo = 0;
@@ -15756,13 +15917,27 @@ void main() {
           const f = i < ultimo ? posicion - i : 0;
           frameActual = i;
           reproduccionRenderId++;
-          RigBodyEngine.aplicarFrame(
-            interpolarFramePlantilla(colaFrames[i], colaFrames[i + 1], f), {
-              frameId: reproduccionRenderId,
-              timestampMs: posicion * msPorFrame,
-              signSpace: interpolarSignSpacePlantilla(
-                colaSignSpace?.[i] ?? null, colaSignSpace?.[i + 1] ?? null, f),
-            });
+          const frameRepro =
+            interpolarFramePlantilla(colaFrames[i], colaFrames[i + 1], f);
+          // Una mano que entra a media seña llega con crossfade, aunque su
+          // brazo no se hubiera marcado en reposo (al empezar la seña esas
+          // marcas se reinician y entraba de golpe). Va ANTES de aplicar el
+          // cuadro: el crossfade parte de la pose que se ve ahora.
+          for (const lado of ['left', 'right']) {
+            const enUso = brazoEnUsoRepro(frameRepro, lado);
+            if (enUso && brazoPrevioRepro[lado] === false && acumMs > 0) {
+              crossfadePose(`reproduccion:${lado}`, huesosBrazo(lado),
+                kBrazoEntraReproMs);
+            }
+            brazoPrevioRepro[lado] = enUso;
+          }
+          RigBodyEngine.aplicarFrame(frameRepro, {
+            frameId: reproduccionRenderId,
+            // Creciente y positivo tambien durante la entrada.
+            timestampMs: 1 + kEntradaReproMs + acumMs,
+            signSpace: interpolarSignSpacePlantilla(
+              colaSignSpace?.[i] ?? null, colaSignSpace?.[i + 1] ?? null, f),
+          });
         }
       } else if (frameVivo) {
         // Último frame gana: render 60 FPS, entrada de tracking ~30 FPS,

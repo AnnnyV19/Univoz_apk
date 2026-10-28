@@ -7,6 +7,10 @@
 const kOffBody = 0, kOffLocL = 24, kOffLocR = 27, kOffPresL = 30,
   kOffPresR = 31, kOffShapeL = 32, kOffShapeR = 92, kFrameDim = 152;
 
+// Puntos del bloque de cuerpo (en PUNTOS, no en dimensiones).
+const kPtHombroI = 0, kPtHombroD = 1, kPtCodoI = 2, kPtCodoD = 3,
+  kPtMunI = 4, kPtMunD = 5;
+
 const kManosRep = [
   {loc: kOffLocL, pres: kOffPresL, shape: kOffShapeL},
   {loc: kOffLocR, pres: kOffPresR, shape: kOffShapeR},
@@ -122,6 +126,129 @@ function _suavizarTramo(F, a, b, c0, n, grupo, factor) {
       F[a + i][c0 + k] = x[i][k] + w * (acc - x[i][k]);
     }
   }
+}
+
+// Volteos de palma de pocos cuadros (auditoria 2026-10-20). En ~40% de
+// las plantillas el detector gira la palma >60 grados de UN cuadro a otro
+// (a 30 fps eso es >1800 grados/s: ninguna muñeca lo hace) y luego vuelve;
+// el avatar daba un latigazo. Se parte del tramo mas largo sin volteos y se
+// camina hacia afuera: una racha corta (<= 6 cuadros) que gira de forma
+// imposible y despues vuelve se rellena interpolando la FORMA entre los
+// cuadros buenos; si llega al extremo de la mano, se sostiene el ultimo
+// bueno; una racha larga se acepta como real. Solo toca el bloque de
+// forma (60 valores): cuerpo, muñeca (alturas), presencia, nada mas.
+const kVolteoUmbral = 60, kVolteoMaxRacha = 6, kVolteoCoherente = 60,
+  kVolteoPorCuadro = 20, kVolteoTopeVuelta = 90;
+function _marcoPalma(f, sh) {
+  const P = (i, d) => f[sh + i * 3 + d];
+  let u = [P(8, 0), P(8, 1), P(8, 2)];
+  const nu = Math.hypot(u[0], u[1], u[2]);
+  if (!(nu > 1e-9)) return null;
+  u = u.map((x) => x / nu);
+  let s = [0, 1, 2].map((d) => P(4, d) - P(16, d));
+  const su = s[0] * u[0] + s[1] * u[1] + s[2] * u[2];
+  s = s.map((x, d) => x - u[d] * su);
+  const ns = Math.hypot(s[0], s[1], s[2]);
+  if (!(ns > 1e-9)) return null;
+  s = s.map((x) => x / ns);
+  const n = [u[1] * s[2] - u[2] * s[1], u[2] * s[0] - u[0] * s[2], u[0] * s[1] - u[1] * s[0]];
+  return [u, s, n];
+}
+function _anguloMarcos(a, b) {
+  let tr = 0;
+  for (let c = 0; c < 3; c++) tr += a[c][0] * b[c][0] + a[c][1] * b[c][1] + a[c][2] * b[c][2];
+  return Math.acos(Math.min(1, Math.max(-1, (tr - 1) / 2))) * 180 / Math.PI;
+}
+export function repararVolteosPalma(F) {
+  let cambios = 0;
+  for (const m of kManosRep) {
+    const sh = m.shape;
+    // corridas de cuadros seguidos con mano y forma valida
+    const corridas = [];
+    let cur = [];
+    for (let k = 0; k < F.length; k++) {
+      const ok = F[k][m.pres] >= 0.5 && _marcoPalma(F[k], sh) !== null;
+      if (ok && (cur.length === 0 || k === cur[cur.length - 1] + 1)) cur.push(k);
+      else { if (cur.length) corridas.push(cur); cur = ok ? [k] : []; }
+    }
+    if (cur.length) corridas.push(cur);
+    for (const run of corridas) {
+      if (run.length < 3) continue;
+      const orig = run.map((k) => F[k].slice(sh, sh + 60));
+      const R = run.map((k) => _marcoPalma(F[k], sh));
+      let mejor = [0, 0], i0 = 0;
+      for (let i = 1; i <= run.length; i++) {
+        if (i === run.length || _anguloMarcos(R[i - 1], R[i]) > kVolteoUmbral) {
+          if (i - i0 > mejor[1] - mejor[0]) mejor = [i0, i];
+          i0 = i;
+        }
+      }
+      for (const [paso, inicio, fin] of [[1, mejor[1], run.length], [-1, mejor[0] - 1, -1]]) {
+        let bueno = paso === 1 ? mejor[1] - 1 : mejor[0];
+        const borde = paso === 1 ? mejor[0] : mejor[1] - 1;
+        let i = inicio;
+        while (i !== fin) {
+          if (_anguloMarcos(R[bueno], R[i]) <= kVolteoUmbral) { bueno = i; i += paso; continue; }
+          let j = i, vuelta = null;
+          while (j !== fin && Math.abs(j - i) < kVolteoMaxRacha) {
+            j += paso;
+            if (j !== fin && _anguloMarcos(R[bueno], R[j]) <= Math.min(kVolteoTopeVuelta,
+              kVolteoCoherente + kVolteoPorCuadro * Math.abs(j - bueno))) { vuelta = j; break; }
+          }
+          if (vuelta !== null) {
+            const a = run[bueno], b = run[vuelta];
+            const fa = F[a].slice(sh, sh + 60), fb = orig[vuelta];
+            for (let q = i; q !== vuelta; q += paso) {
+              const k = run[q], t = (k - a) / (b - a);
+              for (let d = 0; d < 60; d++) F[k][sh + d] = fa[d] + (fb[d] - fa[d]) * t;
+              R[q] = _marcoPalma(F[k], sh); cambios++;
+            }
+            bueno = vuelta; i = vuelta + paso;
+          } else if (Math.abs(fin - i) <= kVolteoMaxRacha &&
+              Math.abs(fin - i) < Math.abs(bueno - borde) + 1) {
+            for (let q = i; q !== fin; q += paso) {
+              const k = run[q];
+              for (let d = 0; d < 60; d++) F[k][sh + d] = F[run[bueno]][sh + d];
+              R[q] = R[bueno]; cambios++;
+            }
+            break;
+          } else { bueno = i; i += paso; }
+        }
+      }
+    }
+  }
+  return cambios;
+}
+
+export const kAnticipaMs = 300;
+export function anticiparManos(frames, fps) {
+  const n = Math.max(1, Math.round(kAnticipaMs / 1000 * fps));
+  const out = frames.map((f) => f.slice());
+  const lados = [
+    {pres: kOffPresL, loc: kOffLocL, shape: kOffShapeL,
+      pts: [kPtHombroI, kPtCodoI, kPtMunI]},
+    {pres: kOffPresR, loc: kOffLocR, shape: kOffShapeR,
+      pts: [kPtHombroD, kPtCodoD, kPtMunD]},
+  ];
+  const usa = (f, l) => f[l.pres] >= 0.5 &&
+    Math.hypot(f[l.pts[1] * 3], f[l.pts[1] * 3 + 1]) > 0.05;
+  for (const l of lados) {
+    for (let k = 1; k < frames.length; k++) {
+      if (!usa(frames[k], l) || usa(frames[k - 1], l)) continue;
+      const src = frames[k];
+      for (let j = k - 1; j >= Math.max(0, k - n); j--) {
+        if (usa(frames[j], l)) break; // no pisar datos reales
+        const dst = out[j];
+        dst[l.pres] = src[l.pres];
+        for (let d = 0; d < 3; d++) dst[l.loc + d] = src[l.loc + d];
+        for (let d = 0; d < 60; d++) dst[l.shape + d] = src[l.shape + d];
+        for (const pt of l.pts) {
+          for (let d = 0; d < 3; d++) dst[pt * 3 + d] = src[pt * 3 + d];
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // Devuelve una COPIA lista para reproducir: huecos rellenos y temblor

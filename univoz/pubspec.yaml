@@ -69,11 +69,10 @@ flutter:
     # Solo el avatar y el visor que usa Android (el WebView carga index.html
     # con todo inline; los .task viven en android/app/src/main/assets). La
     # otra VRM y los .mjs/.task quedan solo en senas_core (web standalone).
-    - assets/avatar/univozM.vrm
-    # Modelo propuesto por la dueña (app-limpia): el archivo esta en el repo
-    # pero NO se empaqueta (15 MB) hasta validar rig y gates con el. Ver
-    # docs/17-integracion-app-limpia.md.
-    # - assets/avatar/MODELO_UNIVOZ_v0.vrm
+    # Modelo oficial: MODELO_UNIVOZ_v0.vrm (decisión de la dueña,
+    # 2026-10-27). La tabla del torso de los separadores se midió en él.
+    # univozM.vrm se queda en el repo como alternativa, sin empaquetar.
+    - assets/avatar/MODELO_UNIVOZ_v0.vrm
     - assets/avatar_viewer/index.html
     # Señas solo de aprendizaje (Diccionario y avatar, no reconocimiento):
     # senas_core/tools/exportar_aprendizaje.py
