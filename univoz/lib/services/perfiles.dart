@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Perfiles de persona y su configuración de presentación.
 ///
@@ -57,8 +58,8 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     title: 'Soy ciego/a',
     subtitle: 'Uso la app con voz y dictado',
     icon: Icons.visibility_off,
-    iconBgColor: Color(0xFFB388E8),
-    cardColor: Color(0xFF8B5CF6),
+    iconBgColor: ColoresUnivoz.moradoClaro,
+    cardColor: ColoresUnivoz.morado,
     textColor: Colors.white,
   ),
   ProfileType.sordo: ProfileConfig(
@@ -68,7 +69,7 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     icon: Icons.hearing_disabled,
     iconBgColor: Color(0xFFF5A855),
     cardColor: Color(0xFFA8C5F0),
-    textColor: Color(0xFF1A1A2E),
+    textColor: ColoresUnivoz.tinta,
   ),
   ProfileType.mudo: ProfileConfig(
     type: ProfileType.mudo,
@@ -77,7 +78,7 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     icon: Icons.volume_up,
     iconBgColor: Color(0xFFE88B8B),
     cardColor: Color(0xFFF3A9A0),
-    textColor: Color(0xFF1A1A2E),
+    textColor: ColoresUnivoz.tinta,
   ),
   ProfileType.prestarCelular: ProfileConfig(
     type: ProfileType.prestarCelular,
@@ -86,7 +87,7 @@ const Map<ProfileType, ProfileConfig> profileConfigs = {
     icon: Icons.pan_tool,
     iconBgColor: Color(0xFFE88BC2),
     cardColor: Color(0xFFF0C869),
-    textColor: Color(0xFF1A1A2E),
+    textColor: ColoresUnivoz.tinta,
   ),
 };
 

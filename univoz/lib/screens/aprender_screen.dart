@@ -5,6 +5,7 @@ import '../services/curriculo.dart';
 import '../services/progreso_aprendizaje.dart';
 import 'leccion_screen.dart';
 import 'univoz_shared_widgets.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// "Aprender LSM": un camino de unidades y lecciones, como Duolingo pero
 /// sin vidas ni castigos, hecho con las señas que ya hay en el diccionario.
@@ -20,13 +21,13 @@ class AprenderScreen extends StatefulWidget {
 }
 
 class _AprenderScreenState extends State<AprenderScreen> {
-  static const Color _bgColor = Color(0xFFF7F2FA);
-  static const Color _morado = Color(0xFF6C63FF);
-  static const Color _moradoOscuro = Color(0xFF4F46C9);
+  static const Color _bgColor = ColoresUnivoz.fondoSuave;
+  static const Color _morado = ColoresUnivoz.morado;
+  static const Color _moradoOscuro = ColoresUnivoz.moradoOscuro;
   static const Color _rosa = Color(0xFFE85DA0);
   static const Color _verde = Color(0xFF3FBF8F);
-  static const Color _texto = Color(0xFF1A1A2E);
-  static const Color _gris = Color(0xFF5B5470);
+  static const Color _texto = ColoresUnivoz.tinta;
+  static const Color _gris = ColoresUnivoz.tintaSuave;
 
   final ProgresoAprendizaje _progreso = ProgresoAprendizaje.instancia;
   final GlobalKey _claveActual = GlobalKey();
@@ -121,7 +122,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFDDD3EE), width: 1.5),
+        border: Border.all(color: ColoresUnivoz.bordeControl, width: 1.5),
       ),
       child: Column(
         children: [
@@ -188,7 +189,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
                   child: LinearProgressIndicator(
                     value: total == 0 ? 0 : vistas / total,
                     minHeight: 8,
-                    backgroundColor: const Color(0xFFE3DAF2),
+                    backgroundColor: ColoresUnivoz.lavanda,
                     valueColor: const AlwaysStoppedAnimation<Color>(_morado),
                   ),
                 ),
@@ -219,11 +220,11 @@ class _AprenderScreenState extends State<AprenderScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: abierta ? const Color(0xFFEDE4FB) : Colors.white,
+              color: abierta ? ColoresUnivoz.moradoTenue : Colors.white,
               borderRadius: BorderRadius.circular(16),
               border: abierta
                   ? null
-                  : Border.all(color: const Color(0xFFDDD3EE), width: 1.5),
+                  : Border.all(color: ColoresUnivoz.bordeControl, width: 1.5),
             ),
             child: Row(
               children: [
@@ -232,7 +233,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
                   height: 34,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: abierta ? _morado : const Color(0xFFE3DAF2),
+                    color: abierta ? _morado : ColoresUnivoz.lavanda,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
@@ -351,12 +352,12 @@ class _AprenderScreenState extends State<AprenderScreen> {
         width: 62,
         height: 62,
         decoration: BoxDecoration(
-          color: const Color(0xFFE3DAF2),
+          color: ColoresUnivoz.lavanda,
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0xFFDDD3EE), width: 2),
+          border: Border.all(color: ColoresUnivoz.bordeControl, width: 2),
         ),
         child: const Icon(Icons.lock_outline,
-            color: Color(0xFF8077A0), size: 24),
+            color: ColoresUnivoz.tintaTenue, size: 24),
       );
     }
 
@@ -399,7 +400,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
                       child: Text(
                         l.titulo,
                         style: TextStyle(
-                          color: bloqueada ? const Color(0xFF8077A0) : _gris,
+                          color: bloqueada ? ColoresUnivoz.tintaTenue : _gris,
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                         ),

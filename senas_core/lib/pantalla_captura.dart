@@ -9,10 +9,12 @@ library pantalla_captura;
 import 'package:flutter/material.dart';
 
 import 'camera_bridge.dart';
+import 'componentes_univoz.dart';
 import 'controlador_captura.dart';
 import 'muestras_locales.dart';
 import 'skeleton_painter.dart' show SkeletonPainter;
 import 'sesion_automatica.dart';
+import 'tema_univoz.dart';
 
 /// Debajo de esto la grabacion casi seguro salio mal (mano fuera de cuadro,
 /// boton apretado dos veces sin querer).
@@ -202,6 +204,7 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
 
   @override
   Widget build(BuildContext context) {
+    final colores = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Agregar muestras'),
@@ -209,22 +212,36 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
           IconButton(
             icon: _volteando
                 ? const SizedBox(
-                    width: 20,
-                    height: 20,
+                    width: 18,
+                    height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Icon(Icons.cameraswitch_outlined),
+                : const Icon(Icons.cameraswitch_outlined, size: 22),
             tooltip: _almacen.ajustes.camaraFrontal
                 ? 'Cambiar a cámara trasera'
                 : 'Cambiar a cámara frontal',
             onPressed: (_ctrl.grabando || !_ctrl.lista) ? null : _voltearCamara,
           ),
           if (_guardadasEstaSesion > 0)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.only(right: 16),
-                child: Text('+$_guardadasEstaSesion',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
+            Padding(
+              padding: const EdgeInsets.only(right: 14),
+              child: Center(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: colores.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '+$_guardadasEstaSesion',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: colores.primary,
+                    ),
+                  ),
+                ),
               ),
             ),
         ],
@@ -241,55 +258,52 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
 
   Widget _formulario() {
     final yaTiene = _glosa.isEmpty ? 0 : _almacen.cuantasDe(_glosa);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    return TarjetaUnivoz(
+      margen: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      relleno: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          TextField(
+            controller: _palabraCtrl,
+            enabled: !_ctrl.grabando,
+            textCapitalization: TextCapitalization.none,
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500),
+            decoration: const InputDecoration(
+              labelText: '¿Qué palabra es? *',
+              hintText: 'gracias, cómo estás...',
+              prefixIcon: Icon(Icons.translate_rounded, size: 18),
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                flex: 2,
-                child: TextField(
-                  controller: _palabraCtrl,
-                  enabled: !_ctrl.grabando,
-                  textCapitalization: TextCapitalization.none,
-                  decoration: const InputDecoration(
-                    labelText: '¿Qué palabra es? *',
-                    hintText: 'gracias, cómo estás...',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
               Expanded(
                 child: TextField(
                   controller: _signerCtrl,
                   enabled: !_ctrl.grabando,
+                  style: const TextStyle(fontSize: 13.5),
                   decoration: const InputDecoration(
                     labelText: 'Tu nombre *',
-                    border: OutlineInputBorder(),
-                    isDense: true,
+                    prefixIcon: Icon(Icons.person_outline_rounded, size: 18),
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
+              Expanded(child: _campoCategoria()),
             ],
           ),
           const SizedBox(height: 8),
-          _campoCategoria(),
-          const SizedBox(height: 6),
-          if (_camposCompletos)
-            Text(
-              'Se guardará como $_glosa  ·  ya tienes $yaTiene muestra(s)',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-            )
-          else
-            Text(
-              'Completa palabra, tu nombre y categoría (los tres son '
-              'obligatorios) para poder grabar.',
-              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
-            ),
+          AvisoUnivoz(
+            _camposCompletos
+                ? 'Se guardará como $_glosa  ·  ya tienes $yaTiene muestra(s)'
+                : 'Completa palabra, tu nombre y categoría (los tres son '
+                    'obligatorios) para poder grabar.',
+            tipo: _camposCompletos ? TipoAviso.exito : TipoAviso.info,
+            compacto: true,
+            margen: EdgeInsets.zero,
+          ),
         ],
       ),
     );
@@ -300,6 +314,7 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
   /// ya se usaron en este telefono -- asi el mismo nombre de categoria no
   /// termina escrito de dos formas distintas por error de tipeo.
   Widget _campoCategoria() {
+    final colores = Theme.of(context).colorScheme;
     final sugerencias =
         {...kCategoriasBase, ..._almacen.categoriasUsadas}.toList()..sort();
     return Autocomplete<String>(
@@ -324,32 +339,42 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
           controller: controller,
           focusNode: focusNode,
           enabled: !_ctrl.grabando,
+          style: const TextStyle(fontSize: 13.5),
           decoration: const InputDecoration(
             labelText: 'Categoría *',
             hintText: 'Saludos y Cortesía...',
-            border: OutlineInputBorder(),
-            isDense: true,
+            prefixIcon: Icon(Icons.folder_outlined, size: 18),
           ),
         );
       },
       optionsViewBuilder: (context, onSelected, opciones) => Align(
         alignment: Alignment.topLeft,
         child: Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(8),
+          elevation: 6,
+          shadowColor: Colors.black.withValues(alpha: 0.12),
+          color: colores.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(12),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 220),
-            child: ListView(
-              padding: EdgeInsets.zero,
-              shrinkWrap: true,
-              children: [
-                for (final o in opciones)
-                  ListTile(
-                    dense: true,
-                    title: Text(o),
-                    onTap: () => onSelected(o),
-                  ),
-              ],
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: colores.outlineVariant),
+              ),
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                shrinkWrap: true,
+                children: [
+                  for (final o in opciones)
+                    ListTile(
+                      dense: true,
+                      title: Text(o,
+                          style: TextStyle(
+                              fontSize: 13, color: colores.onSurface)),
+                      onTap: () => onSelected(o),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -358,6 +383,7 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
   }
 
   Widget _preview() {
+    final colores = Theme.of(context).colorScheme;
     if (_ctrl.error != null) {
       return Center(
         child: Padding(
@@ -380,78 +406,130 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return Stack(
-      children: [
-        Center(
-          child: AspectRatio(
-            aspectRatio: camara.relacionAspecto,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  // Camara frontal = vista de espejo: se voltea la imagen y,
-                  // con ella, los puntos del esqueleto.
-                  child: Transform.flip(
-                    flipX: camara.frontal,
-                    child: Texture(textureId: camara.textureId),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: colores.outlineVariant),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: camara.relacionAspecto,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        // Camara frontal = vista de espejo: se voltea la
+                        // imagen y, con ella, los puntos del esqueleto.
+                        child: Transform.flip(
+                          flipX: camara.frontal,
+                          child: Texture(textureId: camara.textureId),
+                        ),
+                      ),
+                      ValueListenableBuilder<LandmarkFrame?>(
+                        valueListenable: _ctrl.frame,
+                        builder: (_, frame, __) => CustomPaint(
+                          painter: SkeletonPainter(
+                              frame: frame, espejo: camara.frontal),
+                          size: Size.infinite,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                ValueListenableBuilder<LandmarkFrame?>(
-                  valueListenable: _ctrl.frame,
-                  builder: (_, frame, __) => CustomPaint(
-                    painter:
-                        SkeletonPainter(frame: frame, espejo: camara.frontal),
-                    size: Size.infinite,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        Positioned(
-          top: 8,
-          left: 8,
-          child: ValueListenableBuilder<LandmarkFrame?>(
-            valueListenable: _ctrl.frame,
-            builder: (_, frame, __) => _chipEstado(frame),
-          ),
-        ),
-        if (_ctrl.grabando)
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red,
-                borderRadius: BorderRadius.circular(20),
               ),
-              child: Text('● ${_ctrl.framesGrabados} frames',
-                  style: const TextStyle(color: Colors.white, fontSize: 12)),
-            ),
+              Positioned(
+                top: 10,
+                left: 10,
+                child: ValueListenableBuilder<LandmarkFrame?>(
+                  valueListenable: _ctrl.frame,
+                  builder: (_, frame, __) => _chipEstado(frame),
+                ),
+              ),
+              if (_ctrl.grabando)
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: EstadosUnivoz.claro.error.icono,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: EstadosUnivoz.claro.error.icono
+                              .withValues(alpha: 0.35),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.fiber_manual_record,
+                            color: Colors.white, size: 10),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${_ctrl.framesGrabados} frames',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
-      ],
+        ),
+      ),
     );
   }
 
+  /// Sobre el video (siempre oscuro): colores fijos claros a propósito.
   Widget _chipEstado(LandmarkFrame? frame) {
     final cuerpo = frame?.pose != null;
     final izq = frame?.left != null;
     final der = frame?.right != null;
-    Widget punto(String texto, bool ok) => Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: Text(
-            '${ok ? "✓" : "✗"} $texto',
-            style: TextStyle(
-              fontSize: 12,
-              color: ok ? Colors.greenAccent.shade400 : Colors.white54,
+    Widget punto(String texto, bool ok) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: ok ? EstadosUnivoz.oscuro.exito.icono : Colors.white38,
+              ),
             ),
-          ),
+            const SizedBox(width: 4),
+            Text(
+              texto,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: ok ? FontWeight.w600 : FontWeight.w400,
+                color: ok ? Colors.white : Colors.white60,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
         );
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.fromLTRB(10, 5, 2, 5),
       decoration: BoxDecoration(
-        color: Colors.black54,
+        color: Colors.black.withValues(alpha: 0.48),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         punto('Cuerpo', cuerpo),
@@ -462,39 +540,47 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
   }
 
   Widget _barraInferior() {
+    final colores = Theme.of(context).colorScheme;
+    final rojo = EstadosUnivoz.de(context).error.icono;
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        decoration: BoxDecoration(
+          color: colores.surface,
+          border: Border(
+            top: BorderSide(color: Theme.of(context).dividerTheme.color ??
+                colores.outlineVariant),
+          ),
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (_aviso != null)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: _avisoEsError
-                      ? Colors.orange.shade800
-                      : Colors.green.shade700,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(_aviso!,
-                    style: const TextStyle(color: Colors.white, fontSize: 13)),
+              AvisoUnivoz(
+                _aviso!,
+                tipo: _avisoEsError ? TipoAviso.error : TipoAviso.exito,
+                margen: const EdgeInsets.only(bottom: 10),
               ),
             SizedBox(
               width: double.infinity,
+              height: 50,
               child: ElevatedButton.icon(
                 onPressed: _puedeGrabar ? _alternarGrabacion : null,
                 icon: Icon(
-                    _ctrl.grabando ? Icons.stop : Icons.fiber_manual_record),
+                  _ctrl.grabando
+                      ? Icons.stop_rounded
+                      : Icons.fiber_manual_record_rounded,
+                  size: 20,
+                ),
                 label: Text(
                     _ctrl.grabando ? 'Detener y guardar' : 'Grabar muestra'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _ctrl.grabando ? Colors.red : null,
+                  backgroundColor: _ctrl.grabando ? rojo : null,
                   foregroundColor: _ctrl.grabando ? Colors.white : null,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),

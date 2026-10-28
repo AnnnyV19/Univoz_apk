@@ -4,6 +4,7 @@ import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
 import '../services/perfiles.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 // ProfileType, ProfileConfig, RefinementConfig, profileConfigs y
 // refinementConfigs se mudaron a services/perfiles.dart: un servicio
@@ -69,7 +70,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
   // pregunta para saber si conoce LSM (ver _buildExpandedCard).
   bool? _prestadoConoceLsm;
 
-  static const Color _grayText = Color(0xFF6B6478);
+  static const Color _grayText = ColoresUnivoz.tintaSuave;
 
   @override
   void initState() {
@@ -83,9 +84,9 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
     // conversación distinta sin cerrar la app.
     ConversationProfile.reset();
   }
-  static const Color _comenzarColor = Color(0xFF8F84A6);
+  static const Color _comenzarColor = ColoresUnivoz.morado;
   static const Color _radioCardColor = Color(0xFF241B35);
-  static const Color _radioAccent = Color(0xFFB388E8);
+  static const Color _radioAccent = ColoresUnivoz.moradoClaro;
 
   /// `true` si, dentro de "Prestaré mi Celular", la opción elegida es
   /// "persona con discapacidad auditiva" (índice 1, sordo/a) o "persona

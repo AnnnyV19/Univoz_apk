@@ -8,6 +8,7 @@ import 'univoz_shared_widgets.dart';
 import '../services/tarjeta_perfil.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Pantalla para elegir el perfil de la persona con la que el usuario se
 /// va a comunicar. Ofrece dos caminos:
@@ -121,10 +122,10 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
 
   Timer? _scanTimer;
 
-  static const Color _grayText = Color(0xFF6B6478);
-  static const Color _comenzarColor = Color(0xFF8F84A6);
+  static const Color _grayText = ColoresUnivoz.tintaSuave;
+  static const Color _comenzarColor = ColoresUnivoz.morado;
   static const Color _radioCardColor = Color(0xFF241B35);
-  static const Color _radioAccent = Color(0xFFB388E8);
+  static const Color _radioAccent = ColoresUnivoz.moradoClaro;
 
   /// El perfil propio cambió desde el chip de arriba. Hay que redibujar
   /// y limpiar lo que estuviera elegido: los perfiles que se ofrecen para

@@ -10,6 +10,7 @@ import 'acerca_screen.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Primera pregunta después de la bienvenida: ¿para qué quieres usar
 /// UNIVOZ? Si el usuario quiere comunicarse con alguien, lo mandamos a
@@ -57,8 +58,8 @@ class _PurposeScreenState extends State<PurposeScreen> {
   CommunicationPurpose? _selected;
   bool _pidiendoPermisoCamara = false;
 
-  static const Color _grayText = Color(0xFF6B6478);
-  static const Color _comenzarColor = Color(0xFF8F84A6);
+  static const Color _grayText = ColoresUnivoz.tintaSuave;
+  static const Color _comenzarColor = ColoresUnivoz.morado;
 
   @override
   void initState() {

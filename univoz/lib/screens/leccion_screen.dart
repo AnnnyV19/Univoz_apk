@@ -6,13 +6,14 @@ import '../services/descripcion_senas.dart';
 import '../services/perfil_guardado.dart';
 import '../services/progreso_aprendizaje.dart';
 import '../widgets/visor_sena.dart';
+import 'package:senas_core/tema_univoz.dart';
 
-const Color _kFondo = Color(0xFFF7F2FA);
-const Color _kMorado = Color(0xFF6C63FF);
-const Color _kMoradoOscuro = Color(0xFF4F46C9);
-const Color _kTexto = Color(0xFF1A1A2E);
-const Color _kGris = Color(0xFF5B5470);
-const Color _kBorde = Color(0xFFDDD3EE);
+const Color _kFondo = ColoresUnivoz.fondoSuave;
+const Color _kMorado = ColoresUnivoz.morado;
+const Color _kMoradoOscuro = ColoresUnivoz.moradoOscuro;
+const Color _kTexto = ColoresUnivoz.tinta;
+const Color _kGris = ColoresUnivoz.tintaSuave;
+const Color _kBorde = ColoresUnivoz.bordeControl;
 const Color _kVerde = Color(0xFF3FBF8F);
 const Color _kAmbar = Color(0xFFE8A33D);
 
@@ -185,7 +186,7 @@ class _LeccionScreenState extends State<LeccionScreen> {
               child: LinearProgressIndicator(
                 value: _sesion.progreso,
                 minHeight: 12,
-                backgroundColor: const Color(0xFFE3DAF2),
+                backgroundColor: ColoresUnivoz.lavanda,
                 valueColor: const AlwaysStoppedAnimation<Color>(_kVerde),
               ),
             ),
@@ -489,7 +490,7 @@ class _BotonGrande extends StatelessWidget {
           height: 58,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: activo ? color : const Color(0xFFE3DAF2),
+            color: activo ? color : ColoresUnivoz.lavanda,
             borderRadius: BorderRadius.circular(18),
             boxShadow: activo
                 ? [BoxShadow(color: sombra, offset: const Offset(0, 4))]
@@ -499,7 +500,7 @@ class _BotonGrande extends StatelessWidget {
             child: Text(
               texto,
               style: TextStyle(
-                color: activo ? colorTexto : const Color(0xFF8077A0),
+                color: activo ? colorTexto : ColoresUnivoz.tintaTenue,
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.3,
@@ -538,7 +539,7 @@ class _BotonOpcion extends StatelessWidget {
         letra = _kTexto;
         break;
       case _EstadoOpcion.elegida:
-        fondo = const Color(0xFFE7E4FF);
+        fondo = ColoresUnivoz.moradoTenue;
         borde = _kMorado;
         letra = const Color(0xFF3A33A8);
         break;
@@ -610,7 +611,7 @@ class _Casilla extends StatelessWidget {
     final Color borde;
     switch (estado) {
       case _EstadoOpcion.elegida:
-        fondo = const Color(0xFFE7E4FF);
+        fondo = ColoresUnivoz.moradoTenue;
         borde = _kMorado;
         break;
       case _EstadoOpcion.correcta:
@@ -674,7 +675,7 @@ class _Tecla extends StatelessWidget {
             child: Text(
               letra,
               style: TextStyle(
-                color: alTocar == null ? const Color(0xFF8077A0) : _kTexto,
+                color: alTocar == null ? ColoresUnivoz.tintaTenue : _kTexto,
                 fontSize: 19,
                 fontWeight: FontWeight.w800,
               ),
@@ -855,7 +856,7 @@ class _PantallaFin extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(28, 84, 28, 40),
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6)],
+                colors: [ColoresUnivoz.morado, ColoresUnivoz.moradoOscuro],
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
               ),
@@ -884,7 +885,7 @@ class _PantallaFin extends StatelessWidget {
                   '${leccion.titulo} · ${leccion.glosas.length} '
                   '${leccion.glosas.length == 1 ? 'seña' : 'señas'}',
                   style: const TextStyle(
-                    color: Color(0xFFEDE4FB),
+                    color: ColoresUnivoz.moradoTenue,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),

@@ -5,8 +5,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../services/perfil_guardado.dart';
 import '../services/permiso_camara.dart';
 import '../services/tarjeta_perfil.dart';
+import 'package:senas_core/tema_univoz.dart';
 
-const Color _kGris = Color(0xFF6B6478);
+const Color _kGris = ColoresUnivoz.tintaSuave;
 
 /// Muestra el código de quien usa este teléfono, para que la otra
 /// persona lo escanee.

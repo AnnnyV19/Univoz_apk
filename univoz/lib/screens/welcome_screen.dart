@@ -4,6 +4,7 @@ import 'how_it_works_screen.dart';
 import 'profile_selection_screen.dart' show ProfileType;
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Pantalla de bienvenida de UNIVOZ.
 ///
@@ -34,7 +35,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   static const Color _accentYellow = Color(0xFFE8C547);
   static const Color _grayText = Color(0xFF9B96A8);
   static const List<Color> _buttonGradient = [
-    Color(0xFF6C63FF),
+    ColoresUnivoz.morado,
     Color(0xFFB84FCE),
   ];
 
@@ -331,7 +332,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         Text('UNI', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
         Text('V', style: TextStyle(color: Color(0xFFE8C547), fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
         Text('O', style: TextStyle(color: Color(0xFF4FC3E8), fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
-        Text('Z', style: TextStyle(color: Color(0xFF6C63FF), fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
+        Text('Z', style: TextStyle(color: ColoresUnivoz.morado, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
       ],
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'main_shell_screen.dart';
 import '../services/blind_narrator.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Pantalla "¿Cómo funciona?" — diseño morado con tarjetas por función.
 ///
@@ -16,7 +17,7 @@ class HowItWorksScreen extends StatefulWidget {
 class _HowItWorksScreenState extends State<HowItWorksScreen> {
   static const Color _bgColor = Color(0xFF5B3A8E);
   static const List<Color> _buttonGradient = [
-    Color(0xFF6C63FF),
+    ColoresUnivoz.morado,
     Color(0xFFB84FCE),
   ];
 
@@ -178,7 +179,7 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
           CircleAvatar(
             radius: 20,
             backgroundColor: const Color(0xFFE8E0F5),
-            child: Icon(icon, color: const Color(0xFF6C63FF), size: 20),
+            child: Icon(icon, color: ColoresUnivoz.morado, size: 20),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -197,7 +198,7 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
                 Text(
                   description,
                   style: const TextStyle(
-                    color: Color(0xFF6B6478),
+                    color: ColoresUnivoz.tintaSuave,
                     fontSize: 12,
                     height: 1.4,
                   ),

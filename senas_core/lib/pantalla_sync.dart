@@ -9,6 +9,7 @@ library pantalla_sync;
 
 import 'package:flutter/material.dart';
 
+import 'componentes_univoz.dart';
 import 'config_supabase.dart';
 import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
@@ -255,6 +256,9 @@ class _PantallaSyncState extends State<PantallaSync> {
   @override
   Widget build(BuildContext context) {
     final sinSubir = _almacen.sinSubir.length;
+    final rawPendientes = _almacen.muestras
+        .where((m) => m.rawFramesPath != null && m.rawSubidaEn == null)
+        .length;
     final colores = Theme.of(context).colorScheme;
     // Subir muestras y probar la conexión son herramientas del equipo: solo
     // con el modo desarrollador. Bajar el diccionario lo ve cualquiera.
@@ -263,19 +267,19 @@ class _PantallaSyncState extends State<PantallaSync> {
     return Scaffold(
       appBar: AppBar(title: const Text('Sincronizar')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           if (!haySupabaseConfigurado)
-            _cinta(
+            AvisoUnivoz(
               dev
                   ? 'Falta cargar la URL y la clave del proyecto en config_supabase.dart. '
                       'Sin eso, la app funciona igual pero solo con las muestras de este teléfono.'
                   : 'La descarga del diccionario no está disponible en esta versión.',
-              colores.tertiary,
-              colores.onTertiary,
+              tipo: TipoAviso.info,
             ),
+          _tarjetaDiccionario(),
           if (dev)
-            _seccion(
+            _tarjetaAccion(
               icono: Icons.cloud_upload_outlined,
               titulo: 'Subir mis muestras',
               detalle: sinSubir == 0
@@ -287,91 +291,149 @@ class _PantallaSyncState extends State<PantallaSync> {
               onPressed: _subir,
             ),
           if (dev)
-            _seccion(
+            _tarjetaAccion(
               icono: Icons.data_object,
               titulo: 'Subir landmarks crudos (opcional)',
-              detalle: _almacen.muestras
-                          .where((m) =>
-                              m.rawFramesPath != null && m.rawSubidaEn == null)
-                          .length ==
-                      0
+              detalle: rawPendientes == 0
                   ? 'No hay archivos crudos pendientes.'
                   : 'Solo sube coordenadas comprimidas para auditoría o re-normalización. '
                       'Nunca sube video.',
               boton: 'Subir landmarks',
-              habilitado: !_trabajando &&
-                  _almacen.muestras.any(
-                      (m) => m.rawFramesPath != null && m.rawSubidaEn == null),
+              habilitado: !_trabajando && rawPendientes > 0,
               onPressed: _subirRaw,
             ),
-          _seccion(
-            icono: Icons.cloud_download_outlined,
-            titulo: 'Bajar el diccionario',
-            detalle: _almacen.sincronizadas.isEmpty
-                ? 'Todavía no se descargó nada. Se está usando el paquete que vino '
-                    'con la app más tus muestras locales.'
-                : '${_almacen.sincronizadas.length} plantillas guardadas'
-                    '${_almacen.sincronizadoEn != null ? " · ${_fecha(_almacen.sincronizadoEn!)}" : ""}. '
-                    'Quedan en el teléfono: no hace falta internet para reconocer. '
-                    'Solo se suman las señas que la app no trae.',
-            boton: 'Descargar ahora',
-            habilitado: !_trabajando,
-            onPressed: _bajar,
-          ),
           if (dev) ...[
-            const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _trabajando ? null : _probar,
-              icon: const Icon(Icons.wifi_tethering),
+              icon: const Icon(Icons.wifi_rounded, size: 18),
               label: const Text('Probar conexión'),
             ),
+            const SizedBox(height: 12),
           ],
-          const SizedBox(height: 16),
-          if (_progreso != null)
-            Row(
-              children: [
-                const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-                const SizedBox(width: 12),
-                Expanded(child: Text(_progreso!)),
-              ],
-            ),
+          if (_progreso != null) ProgresoUnivoz(_progreso!),
           if (_resultado != null)
-            _cinta(
+            AvisoUnivoz(
               _resultado!,
-              _resultadoEsError ? colores.error : colores.primary,
-              _resultadoEsError ? colores.onError : colores.onPrimary,
+              tipo: _resultadoEsError ? TipoAviso.error : TipoAviso.exito,
+              seleccionable: true,
             ),
-          if (dev) ...[
-            const SizedBox(height: 24),
-            Text(
-              'Por qué las muestras entran como "pendiente": la app usa la clave '
-              'publishable, que es pública por diseño. Las reglas de la base '
-              '(sql/002_app_acceso.sql) le permiten agregar, pero no aprobar, '
-              'modificar ni borrar. Así, aunque alguien saque la clave del APK, '
-              'no puede tocar el diccionario aprobado.',
-              style: TextStyle(fontSize: 12, color: colores.onSurfaceVariant),
+          if (dev)
+            TarjetaUnivoz(
+              relleno: const EdgeInsets.all(14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.shield_outlined, size: 20, color: colores.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Por qué las muestras entran como "pendiente": la app usa la clave '
+                      'publishable, que es pública por diseño. Las reglas de la base '
+                      '(sql/002_app_acceso.sql) le permiten agregar, pero no aprobar, '
+                      'modificar ni borrar. Así, aunque alguien saque la clave del APK, '
+                      'no puede tocar el diccionario aprobado.',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: colores.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ],
-          const SizedBox(height: 32),
         ],
       ),
     );
   }
 
-  Widget _cinta(String texto, Color color, Color sobreColor) => Container(
-        width: double.infinity,
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(12),
-        decoration:
-            BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
-        child: SelectableText(texto,
-            style: TextStyle(color: sobreColor, fontSize: 13)),
-      );
+  /// Tarjeta destacada: bajar el diccionario, con fichas de estado.
+  Widget _tarjetaDiccionario() {
+    final colores = Theme.of(context).colorScheme;
+    final cantidad = _almacen.sincronizadas.length;
+    final fecha = _almacen.sincronizadoEn != null
+        ? _fecha(_almacen.sincronizadoEn!)
+        : 'Nunca';
+    return TarjetaUnivoz(
+      destacada: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const IconoCaja(Icons.cloud_download_rounded,
+                  tamano: 38, relleno: true),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Bajar el diccionario',
+                  style: TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w600,
+                    color: colores.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            cantidad == 0
+                ? 'Todavía no se descargó nada. Se está usando el paquete que vino '
+                    'con la app más tus muestras locales.'
+                : '$cantidad plantillas guardadas. '
+                    'Quedan en el teléfono: no hace falta internet para reconocer. '
+                    'Solo se suman las señas que la app no trae.',
+            style: TextStyle(
+              fontSize: 12.5,
+              color: colores.onSurfaceVariant,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: FichaDato(
+                  icono: Icons.menu_book_rounded,
+                  valor: cantidad == 0 ? 'Solo la app' : '$cantidad',
+                  etiqueta: 'Descargadas',
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: FichaDato(
+                  icono: Icons.wifi_off_rounded,
+                  valor: 'Sin internet',
+                  etiqueta: 'Para reconocer',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FichaDato(
+                  icono: Icons.schedule_rounded,
+                  valor: fecha,
+                  etiqueta: 'Tu última descarga',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _trabajando ? null : _bajar,
+              icon: const Icon(Icons.download_rounded, size: 19),
+              label: const Text('Descargar ahora'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-  Widget _seccion({
+  /// Tarjeta de una acción: icono en caja, título, detalle y botón.
+  Widget _tarjetaAccion({
     required IconData icono,
     required String titulo,
     required String detalle,
@@ -379,43 +441,48 @@ class _PantallaSyncState extends State<PantallaSync> {
     required bool habilitado,
     required VoidCallback onPressed,
   }) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icono),
-                const SizedBox(width: 12),
-                // Expanded, no Text suelto: dentro de un Row el texto pide su
-                // ancho natural y se sale del cuadro ("RIGHT OVERFLOWED BY N
-                // PIXELS") en cuanto el titulo es largo o la pantalla angosta.
-                // Con Expanded recibe el ancho que sobra y parte en dos lineas.
-                Expanded(
-                  child: Text(titulo,
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold)),
+    final colores = Theme.of(context).colorScheme;
+    return TarjetaUnivoz(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconoCaja(icono),
+              const SizedBox(width: 12),
+              // Expanded, no Text suelto: dentro de un Row el texto pide su
+              // ancho natural y se sale del cuadro en cuanto el titulo es
+              // largo o la pantalla angosta.
+              Expanded(
+                child: Text(
+                  titulo,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: colores.onSurface,
+                  ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(detalle,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: habilitado ? onPressed : null,
-                child: Text(boton),
               ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            detalle,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: colores.onSurfaceVariant,
+              height: 1.35,
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: habilitado ? onPressed : null,
+              child: Text(boton),
+            ),
+          ),
+        ],
       ),
     );
   }

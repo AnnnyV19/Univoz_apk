@@ -11,6 +11,7 @@ import 'voz_mensaje.dart';
 import 'profile_selection_screen.dart' show ProfileType;
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Pestaña "Comunicarse". Se adapta según la combinación de perfiles
 /// guardada en pasos anteriores del flujo (ver
@@ -476,7 +477,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF6B6478),
+                    color: ColoresUnivoz.tintaSuave,
                   ),
                 ),
               ),
@@ -497,7 +498,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                 contentPadding: const EdgeInsets.all(16),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
-                  borderSide: const BorderSide(color: Color(0xFFB388E8)),
+                  borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
                 ),
               ),
             ),
@@ -580,7 +581,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             width: double.infinity,
             height: 200,
             decoration: BoxDecoration(
-              color: const Color(0xFFEDE4FB),
+              color: ColoresUnivoz.moradoTenue,
               borderRadius: BorderRadius.circular(20),
             ),
             child: Stack(
@@ -747,7 +748,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               contentPadding: const EdgeInsets.all(16),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: Color(0xFFB388E8)),
+                borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
               ),
             ),
           ),
@@ -830,7 +831,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               contentPadding: const EdgeInsets.all(16),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: Color(0xFFB388E8)),
+                borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
               ),
             ),
           ),
@@ -878,7 +879,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
               contentPadding: const EdgeInsets.all(16),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: Color(0xFFB388E8)),
+                borderSide: const BorderSide(color: ColoresUnivoz.bordeControl),
               ),
             ),
           ),
@@ -944,7 +945,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
             style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF6B6478),
+              color: ColoresUnivoz.tintaSuave,
             ),
           ),
         ),
@@ -988,7 +989,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
                       child: SizedBox(
                         height: 48,
                         child: Material(
-                          color: const Color(0xFFEDE4FB),
+                          color: ColoresUnivoz.moradoTenue,
                           borderRadius: BorderRadius.circular(6),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(6),
