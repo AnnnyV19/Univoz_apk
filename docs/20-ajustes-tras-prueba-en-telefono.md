@@ -8,7 +8,7 @@ Rama `integracion-final`. Esto es lo que pidió la dueña después de probar la 
 - **Separadores apagados.** `separarCuerpo` y `separarManos` quedan en `false` en `cal`: eran los que empujaban las manos hacia el fondo.
 - **Modelo:** `MODELO_UNIVOZ_v0.vrm` (el `univozM` se veía difícil).
 - **Cámara de Traducir.** Ya no voltea la imagen ni los puntos, igual que la versión de Karim.
-- **Señas que se ven mal.** La lista de [senas_que_se_ven_mal.csv](senas_que_se_ven_mal.csv) (152) se midió en el visor de Karim solo; con la mezcla la palma y la muñeca quedan mucho más cerca de los datos (palma p90 26° contra 61°; muñeca 2.8 cm contra 13.8 cm). Las que siguen mal vienen de tomas con la palma volteada y hay que regrabarlas.
+- **Señas que se ven mal.** Medición de la mezcla en las 541 señas (`herramientas/auditoria_manos`): la muñeca casi no se separa de los datos (máximo por seña, mediana 0.9 cm; Karim solo 13.8 cm). La palma en las peores señas sigue como en Karim (p90 por seña: 62° en el 10 % peor; el visor anterior de UNIVOZ daba 26°) y hay 68 latigazos de palma. La lista de [senas_que_se_ven_mal.csv](senas_que_se_ven_mal.csv) (152) se hizo con el visor de Karim; muchas vienen de tomas con la palma volteada y hay que regrabarlas.
 
 ## Reconocimiento
 
