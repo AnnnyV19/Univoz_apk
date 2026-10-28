@@ -8,6 +8,7 @@ import 'univoz_shared_widgets.dart';
 import '../services/tarjeta_perfil.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
+import 'package:senas_core/componentes_univoz.dart';
 import 'package:senas_core/tema_univoz.dart';
 
 /// Pantalla para elegir el perfil de la persona con la que el usuario se
@@ -728,43 +729,53 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     );
   }
 
+  /// "Es oyente": antes un botón verde; con el estilo de Lucía (blanco con
+  /// borde, morado al elegirlo), del mismo alto que las demás tarjetas.
   Widget _buildOyenteButton() {
-    return GestureDetector(
-      onTap: () {
-        BlindNarrator.interruptFlow();
-        setState(() {
-          _selectedOyente = true;
-          _expandedProfile = null;
-          _detectedProfile = null;
-        });
-      },
-      child: Container(
-        height: 130,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF6FCF6F), Color(0xFF3F9142)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+    final colores = Theme.of(context).colorScheme;
+    final radio = BorderRadius.circular(kRadioUnivoz);
+    return Semantics(
+      selected: _selectedOyente,
+      child: Material(
+        color: _selectedOyente
+            ? colores.primaryContainer
+            : colores.surfaceContainerLowest,
+        shape: RoundedRectangleBorder(
+          borderRadius: radio,
+          side: BorderSide(
+            color: _selectedOyente ? colores.primary : colores.outlineVariant,
+            width: 2,
           ),
-          borderRadius: BorderRadius.circular(18),
-          border: _selectedOyente
-              ? Border.all(color: Colors.black87, width: 3)
-              : null,
         ),
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Spacer(),
-            Text(
-              'Es oyente, sin\ndiscapacidades',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-              ),
+        child: InkWell(
+          borderRadius: radio,
+          onTap: () {
+            BlindNarrator.interruptFlow();
+            setState(() {
+              _selectedOyente = true;
+              _expandedProfile = null;
+              _detectedProfile = null;
+            });
+          },
+          child: Container(
+            height: 130,
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const IconoCaja(Icons.hearing, tamano: 30),
+                const Spacer(),
+                Text(
+                  'Es oyente, sin\ndiscapacidades',
+                  style: TextStyle(
+                    color: colores.onSurface,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

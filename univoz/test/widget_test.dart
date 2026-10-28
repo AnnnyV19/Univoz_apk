@@ -22,15 +22,9 @@ void main() {
       (tester) async {
     await tester.pumpWidget(const MaterialApp(home: PurposeScreen()));
 
-    final configuracion = find.byKey(const ValueKey('purpose-configuracion'));
-    await tester.ensureVisible(configuracion);
-    await tester.tap(configuracion);
-    await tester.pump();
-    expect(
-      tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed,
-      isNotNull,
-    );
-    await tester.tap(find.text('Comenzar ahora'));
+    // Configuración es la tuerca de arriba, no una de las opciones.
+    expect(find.text('Configuración'), findsNothing);
+    await tester.tap(find.byTooltip('Configuración'));
     await tester.pumpAndSettle();
 
     expect(find.byType(TraducirSenasScreen), findsOneWidget);

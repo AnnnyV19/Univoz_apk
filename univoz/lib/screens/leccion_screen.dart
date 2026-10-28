@@ -815,8 +815,9 @@ class _HojaResultado extends StatelessWidget {
             _BotonGrande(
               texto: 'Continuar',
               alTocar: alContinuar,
-              color: acento,
-              sombra: acierto ? const Color(0xFF2E9570) : const Color(0xFFBC7F22),
+              // Acierto: el botón morado de siempre (antes verde).
+              color: acierto ? _kMorado : acento,
+              sombra: acierto ? _kMoradoOscuro : const Color(0xFFBC7F22),
               colorTexto: acierto ? Colors.white : const Color(0xFF3D2503),
             ),
           ],

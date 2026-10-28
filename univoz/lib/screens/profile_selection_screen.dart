@@ -4,6 +4,7 @@ import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
 import '../services/perfiles.dart';
+import 'package:senas_core/componentes_univoz.dart';
 import 'package:senas_core/tema_univoz.dart';
 
 // ProfileType, ProfileConfig, RefinementConfig, profileConfigs y
@@ -402,8 +403,13 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
     );
   }
 
+  /// "Soy oyente": antes un botón verde; con el estilo de Lucía (blanco con
+  /// borde, morado al elegirlo).
   Widget _buildOyenteButton() {
-    return GestureDetector(
+    return OpcionUnivoz(
+      icono: Icons.hearing,
+      titulo: 'Soy oyente y no tengo\ndiscapacidades',
+      seleccionada: _selectedOyente,
       onTap: () {
         setState(() {
           _selectedOyente = true;
@@ -411,29 +417,6 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
           _expandedOptionIndex = null;
         });
       },
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF6FCF6F), Color(0xFF3F9142)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(18),
-          border: _selectedOyente
-              ? Border.all(color: Colors.black87, width: 3)
-              : null,
-        ),
-        child: const Text(
-          'Soy oyente y no tengo\ndiscapacidades',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ),
     );
   }
 

@@ -496,3 +496,110 @@ class ProgresoUnivoz extends StatelessWidget {
     );
   }
 }
+
+/// Tarjeta que se elige (opción de una lista): icono en caja, título y
+/// descripción. Elegida: borde y fondo del color principal y una palomita.
+/// La usan los menús de la app (¿para qué quieres usar Univoz?, perfiles).
+class OpcionUnivoz extends StatelessWidget {
+  const OpcionUnivoz({
+    super.key,
+    required this.icono,
+    required this.titulo,
+    this.descripcion,
+    required this.seleccionada,
+    required this.onTap,
+    this.colorIcono,
+    this.margen = EdgeInsets.zero,
+  });
+
+  final IconData icono;
+  final String titulo;
+  final String? descripcion;
+  final bool seleccionada;
+  final VoidCallback? onTap;
+
+  /// Color propio del icono (p. ej. el de cada perfil). Sin él, el morado.
+  final Color? colorIcono;
+  final EdgeInsetsGeometry margen;
+
+  @override
+  Widget build(BuildContext context) {
+    final colores = Theme.of(context).colorScheme;
+    final acento = colorIcono ?? colores.primary;
+    final radio = BorderRadius.circular(kRadioUnivoz);
+    return Padding(
+      padding: margen,
+      child: Semantics(
+        selected: seleccionada,
+        button: true,
+        child: Material(
+          color: seleccionada
+              ? colores.primaryContainer
+              : colores.surfaceContainerLowest,
+          shape: RoundedRectangleBorder(
+            borderRadius: radio,
+            side: BorderSide(
+              color: seleccionada ? colores.primary : colores.outlineVariant,
+              width: 2,
+            ),
+          ),
+          child: InkWell(
+            borderRadius: radio,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: acento.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(icono, size: 22, color: acento),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          titulo,
+                          style: TextStyle(
+                            color: colores.onSurface,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                        if (descripcion != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            descripcion!,
+                            style: TextStyle(
+                              color: colores.onSurfaceVariant,
+                              fontSize: 12.5,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    seleccionada
+                        ? Icons.check_circle_rounded
+                        : Icons.radio_button_unchecked,
+                    color: seleccionada ? colores.primary : colores.outline,
+                    size: 22,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -39,12 +39,11 @@ import 'package:senas_core/tema_univoz.dart';
 /// justamente lo que hace esta opción) y "Avatar 3D" (que ahora vive en
 /// "Quiero aprender LSM", ver MainShellScreen). Lo que le quedó a ese
 /// menú (agregar muestras, espejo, ajustes de reconocimiento) se alcanza
-/// ahora desde la cuarta opción de aquí, "Configuración".
+/// ahora desde la tuerca de arriba de esta pantalla ("Configuración").
 enum CommunicationPurpose {
   comunicarse,
   aprenderLsm,
   traducirSenas,
-  configuracion,
 }
 
 class PurposeScreen extends StatefulWidget {
@@ -155,11 +154,6 @@ class _PurposeScreenState extends State<PurposeScreen> {
         case CommunicationPurpose.traducirSenas:
           _abrirCamaraTraductora();
           break;
-        case CommunicationPurpose.configuracion:
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const TraducirSenasScreen()),
-          );
-          break;
       }
     });
   }
@@ -226,8 +220,20 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   // preguntarlo. Sin esto no habría forma de saber con
                   // qué perfil va a arrancar la conversación.
                   Flexible(child: MenuPerfil(onCambio: () => setState(() {}))),
-                  const ExcludeSemantics(
-                    child: Icon(Icons.favorite, color: Color(0xFFB84FCE)),
+                  // Configuración (agregar muestras, espejo y ajustes de
+                  // reconocimiento) va en la tuerca, fuera de las opciones.
+                  IconButton(
+                    key: const ValueKey('purpose-configuracion'),
+                    icon: Icon(Icons.settings_outlined,
+                        size: 28,
+                        color: Theme.of(context).colorScheme.primary),
+                    tooltip: 'Configuración',
+                    onPressed: () => _avanzarPorToque(() {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const TraducirSenasScreen()),
+                      );
+                    }),
                   ),
                 ],
               ),
@@ -268,17 +274,6 @@ class _PurposeScreenState extends State<PurposeScreen> {
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
-                        key: const ValueKey('purpose-aprender-lsm'),
-                        purpose: CommunicationPurpose.aprenderLsm,
-                        icon: Icons.pan_tool,
-                        iconBgColor: const Color(0xFFE88BC2),
-                        cardColor: const Color(0xFFF0C869),
-                        title: 'Quiero aprender LSM',
-                        subtitle: 'Aprender con avatar 3D a mi propio ritmo',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildOptionCard(
                         key: const ValueKey('purpose-traducir-senas'),
                         purpose: CommunicationPurpose.traducirSenas,
                         icon: Icons.camera_alt,
@@ -291,14 +286,13 @@ class _PurposeScreenState extends State<PurposeScreen> {
                       ),
                       const SizedBox(height: 14),
                       _buildOptionCard(
-                        key: const ValueKey('purpose-configuracion'),
-                        purpose: CommunicationPurpose.configuracion,
-                        icon: Icons.settings,
-                        iconBgColor: const Color(0xFF3FBF8F),
-                        cardColor: const Color(0xFFCDEEDF),
-                        title: 'Configuración',
-                        subtitle: 'Agregar muestras, espejo y ajustes de '
-                            'reconocimiento',
+                        key: const ValueKey('purpose-aprender-lsm'),
+                        purpose: CommunicationPurpose.aprenderLsm,
+                        icon: Icons.pan_tool,
+                        iconBgColor: const Color(0xFFE88BC2),
+                        cardColor: const Color(0xFFF0C869),
+                        title: 'Quiero aprender LSM',
+                        subtitle: 'Aprender con avatar 3D a mi propio ritmo',
                         textColor: Theme.of(context).colorScheme.onSurface,
                       ),
                       if (_pidiendoPermisoCamara)

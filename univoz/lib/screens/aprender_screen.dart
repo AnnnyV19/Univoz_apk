@@ -21,11 +21,13 @@ class AprenderScreen extends StatefulWidget {
 }
 
 class _AprenderScreenState extends State<AprenderScreen> {
-  static const Color _bgColor = ColoresUnivoz.fondoSuave;
+  static const Color _bgColor = Colors.white;
   static const Color _morado = ColoresUnivoz.morado;
   static const Color _moradoOscuro = ColoresUnivoz.moradoOscuro;
   static const Color _rosa = Color(0xFFE85DA0);
-  static const Color _verde = Color(0xFF3FBF8F);
+  // Las lecciones terminadas antes eran verdes; ahora van en el morado del
+  // diseño de Lucía.
+  static const Color _verde = ColoresUnivoz.morado;
   static const Color _texto = ColoresUnivoz.tinta;
   static const Color _gris = ColoresUnivoz.tintaSuave;
 
@@ -121,8 +123,8 @@ class _AprenderScreenState extends State<AprenderScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: ColoresUnivoz.bordeControl, width: 1.5),
+        borderRadius: BorderRadius.circular(kRadioUnivoz),
+        border: Border.all(color: ColoresUnivoz.borde, width: 2),
       ),
       child: Column(
         children: [
@@ -142,19 +144,20 @@ class _AprenderScreenState extends State<AprenderScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF1DB),
-                  borderRadius: BorderRadius.circular(16),
+                  color: const Color(0xFFFFFBEB),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFFDE68A)),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(Icons.local_fire_department,
-                        size: 16, color: Color(0xFFE8A33D)),
+                        size: 16, color: Color(0xFFD97706)),
                     const SizedBox(width: 4),
                     Text(
                       '$racha',
                       style: const TextStyle(
-                        color: Color(0xFF7A4A06),
+                        color: Color(0xFFB45309),
                         fontSize: 13,
                         fontWeight: FontWeight.w800,
                       ),
@@ -221,10 +224,9 @@ class _AprenderScreenState extends State<AprenderScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: abierta ? ColoresUnivoz.moradoTenue : Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: abierta
-                  ? null
-                  : Border.all(color: ColoresUnivoz.bordeControl, width: 1.5),
+              borderRadius: BorderRadius.circular(kRadioUnivoz),
+              border: Border.all(
+                  color: abierta ? _morado : ColoresUnivoz.borde, width: 2),
             ),
             child: Row(
               children: [
@@ -234,7 +236,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: abierta ? _morado : ColoresUnivoz.lavanda,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     '${u.numero}',
@@ -343,7 +345,9 @@ class _AprenderScreenState extends State<AprenderScreen> {
         decoration: const BoxDecoration(
           color: _verde,
           shape: BoxShape.circle,
-          boxShadow: [BoxShadow(color: Color(0xFF2E9570), offset: Offset(0, 4))],
+          boxShadow: [
+            BoxShadow(color: ColoresUnivoz.moradoOscuro, offset: Offset(0, 4)),
+          ],
         ),
         child: const Icon(Icons.check_rounded, color: Colors.white, size: 30),
       );
@@ -382,7 +386,7 @@ class _AprenderScreenState extends State<AprenderScreen> {
                           horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
                         color: _texto,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Text(
                         'Vas aquí',
@@ -420,15 +424,15 @@ class _AprenderScreenState extends State<AprenderScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFFDDF5EA),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _verde, width: 2),
+        color: ColoresUnivoz.moradoTenue,
+        borderRadius: BorderRadius.circular(kRadioUnivoz),
+        border: Border.all(color: ColoresUnivoz.moradoClaro, width: 2),
       ),
       child: const Text(
         '¡Terminaste todo el camino! Ya puedes presentarte en LSM y '
         'deletrear tu nombre. Cualquier lección se puede repetir.',
         style: TextStyle(
-          color: Color(0xFF17684A),
+          color: ColoresUnivoz.moradoOscuro,
           fontSize: 14,
           fontWeight: FontWeight.w700,
           height: 1.4,

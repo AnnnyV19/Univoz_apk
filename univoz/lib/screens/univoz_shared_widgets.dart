@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:flutter/services.dart'
+    show HapticFeedback, SystemUiOverlayStyle;
 
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
@@ -201,9 +202,11 @@ class _MenuPerfilState extends State<MenuPerfil> {
   }
 }
 
-/// Encabezado morado con flecha de regreso, título "UNIVOZ", el chip de
-/// perfil y el logo. Se reutiliza en Aprender, Comunicarse y Traducir
-/// señas.
+/// Encabezado con flecha de regreso, título "UNIVOZ", el chip de perfil y
+/// el logo. Se reutiliza en Aprender, Comunicarse y Traducir señas.
+///
+/// Diseño de Lucía: barra blanca con texto en tinta, la marca en morado y
+/// una línea fina debajo (antes era una barra con degradado morado).
 class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
   final String? subtitle;
 
@@ -217,20 +220,25 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     // La barra no crece con el texto grande del sistema: se limita a 1.3 para
     // que nunca desborde (el contenido de la pantalla sí escala completo).
-    return MediaQuery.withClampedTextScaling(
-      maxScaleFactor: 1.3,
-      child: _contenido(context),
+    // Barra clara: los iconos del sistema (hora, batería) van oscuros.
+    final oscuro = Theme.of(context).brightness == Brightness.dark;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: oscuro ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.3,
+        child: _contenido(context),
+      ),
     );
   }
 
   Widget _contenido(BuildContext context) {
+    final colores = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
+        color: colores.surface,
+        border: Border(
+          bottom: BorderSide(color: colores.outlineVariant, width: 1.5),
         ),
       ),
       child: SafeArea(
@@ -241,24 +249,24 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
             Row(
               children: [
                 IconButton(
-                  icon: const Icon(Icons.chevron_left,
-                      color: Colors.white, size: 28),
+                  icon: Icon(Icons.chevron_left,
+                      color: colores.onSurface, size: 28),
                   tooltip: 'Regresar',
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
-                const Text(
+                Text(
                   'UNIVOZ',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: colores.primary,
                     fontSize: 18,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 1,
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Flexible(child: MenuPerfil(sobreFondoOscuro: true)),
+                const Flexible(child: MenuPerfil()),
                 const Spacer(),
-                const Icon(Icons.favorite, color: Colors.pinkAccent),
+                Icon(Icons.favorite, color: colores.primary),
                 const SizedBox(width: 12),
               ],
             ),
@@ -267,8 +275,8 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
                 padding: const EdgeInsets.only(left: 20, bottom: 8),
                 child: Text(
                   subtitle!,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: colores.onSurfaceVariant,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),

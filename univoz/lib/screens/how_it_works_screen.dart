@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'main_shell_screen.dart';
 import '../services/blind_narrator.dart';
+import 'package:senas_core/componentes_univoz.dart';
 import 'package:senas_core/tema_univoz.dart';
 
-/// Pantalla "¿Cómo funciona?" — diseño morado con tarjetas por función.
+/// Pantalla "¿Cómo funciona?": tarjetas por función con el diseño de
+/// Lucía (fondo blanco, tarjetas con borde).
 ///
 /// Es una de las pantallas que se narran en voz alta para personas
 /// ciegas (ver [BlindNarrator]), antes de que se elija un perfil.
@@ -15,7 +17,6 @@ class HowItWorksScreen extends StatefulWidget {
 }
 
 class _HowItWorksScreenState extends State<HowItWorksScreen> {
-  static const Color _bgColor = Color(0xFF5B3A8E);
   static const List<Color> _buttonGradient = [
     ColoresUnivoz.morado,
     Color(0xFFB84FCE),
@@ -43,8 +44,8 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colores = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: _bgColor,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -53,28 +54,28 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
             children: [
               const SizedBox(height: 8),
               IconButton(
-                icon: const Icon(Icons.chevron_left,
-                    color: Colors.white, size: 32),
+                icon: Icon(Icons.chevron_left,
+                    color: colores.onSurface, size: 32),
                 tooltip: 'Regresar',
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
               const SizedBox(height: 8),
-              const Center(
+              Center(
                 child: Text(
                   '¿Cómo funciona?',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: colores.onSurface,
                     fontSize: 26,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
               const SizedBox(height: 6),
-              const Center(
+              Center(
                 child: Text(
                   'Descubre todo lo que puedes hacer',
                   style: TextStyle(
-                    color: Colors.white70,
+                    color: colores.onSurfaceVariant,
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
                   ),
@@ -166,21 +167,13 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
     required String title,
     required String description,
   }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-      ),
+    final colores = Theme.of(context).colorScheme;
+    return TarjetaUnivoz(
+      margen: const EdgeInsets.only(bottom: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: const Color(0xFFE8E0F5),
-            child: Icon(icon, color: ColoresUnivoz.morado, size: 20),
-          ),
+          IconoCaja(icon, tamano: 40),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -188,19 +181,19 @@ class _HowItWorksScreenState extends State<HowItWorksScreen> {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    color: Color(0xFF3A2A5C),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
+                  style: TextStyle(
+                    color: colores.onSurface,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   description,
-                  style: const TextStyle(
-                    color: ColoresUnivoz.tintaSuave,
-                    fontSize: 12,
-                    height: 1.4,
+                  style: TextStyle(
+                    color: colores.onSurfaceVariant,
+                    fontSize: 12.5,
+                    height: 1.35,
                   ),
                 ),
               ],
