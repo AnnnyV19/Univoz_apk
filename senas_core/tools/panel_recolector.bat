@@ -8,7 +8,7 @@ rem  Cierra esta ventana para apagar el panel.
 rem ============================================================
 cd /d "%~dp0.."
 set "PY=python"
-where py >/dev/null 2>&1 && set "PY=py -3"
+where py >nul 2>&1 && set "PY=py -3"
 set PYTHONIOENCODING=utf-8
 %PY% tools\panel_recolector.py
 pause
