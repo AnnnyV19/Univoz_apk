@@ -30,3 +30,12 @@ def test_licencia_y_titulo():
     assert titulo_sirve("Cómo decir GRACIAS en LSM", "gracias")
     assert titulo_sirve("Lengua de señas: Mañana", "mañana")
     assert not titulo_sirve("Saludos en LSM", "gracias")
+
+
+if __name__ == "__main__":
+    # Corre sin pytest:  python tools\test_recolector.py
+    for nombre, fn in list(globals().items()):
+        if nombre.startswith("test_") and callable(fn):
+            fn()
+            print(f"  ok    {nombre}")
+    print("todo en orden")
