@@ -68,10 +68,10 @@ class _MostrarMiCodigoScreenState extends State<MostrarMiCodigoScreen> {
           : ListView(
               padding: const EdgeInsets.all(24),
               children: [
-                Text(
+                const Text(
                   'Muéstrale esta pantalla a la otra persona para que la '
                   'escanee desde su UNIVOZ. Funciona sin internet.',
-                  style: const TextStyle(fontSize: 14, color: _kGris),
+                  style: TextStyle(fontSize: 14, color: _kGris),
                 ),
                 const SizedBox(height: 24),
                 Center(

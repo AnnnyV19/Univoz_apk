@@ -187,6 +187,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     ConversationProfile.other = answer;
     if (answer == ProfileType.oyente) {
       ConversationProfile.otherKnowsLsm = false;
+      if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
@@ -212,7 +213,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
       knowsLsm = cmd == VoiceCommand.yes;
     }
     ConversationProfile.otherKnowsLsm = knowsLsm;
-    if (!isCurrent()) return;
+    if (!isCurrent() || !mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => MainShellScreen(
@@ -283,7 +284,10 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
         .map((e) => 'Opción ${e.key + 1}: ${e.value}.')
         .join(' ');
     final message = '${other.title}. ${other.refinementTitle} $optionsSpeech';
-    SemanticsService.announce(message, TextDirection.ltr);
+    if (mounted) {
+      SemanticsService.sendAnnouncement(
+          View.of(context), message, TextDirection.ltr);
+    }
     BlindNarrator.speak(message);
   }
 
@@ -493,7 +497,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _comenzarColor,
                     disabledBackgroundColor:
-                        _comenzarColor.withOpacity(0.4),
+                        _comenzarColor.withValues(alpha: 0.4),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -553,7 +557,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   'Codigo leido: ${_detectedTarjeta!.resumen}',
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: _grayText,
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
@@ -566,10 +570,10 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
           Row(
             children: [
               Expanded(
-                child: Divider(color: _grayText.withOpacity(0.3)),
+                child: Divider(color: _grayText.withValues(alpha: 0.3)),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
                 child: Text(
                   'o selecciona manualmente',
                   style: TextStyle(
@@ -580,7 +584,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 ),
               ),
               Expanded(
-                child: Divider(color: _grayText.withOpacity(0.3)),
+                child: Divider(color: _grayText.withValues(alpha: 0.3)),
               ),
             ],
           ),
@@ -669,7 +673,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 Text(
                   '¿Es correcto?',
                   style: TextStyle(
-                    color: config.textColor.withOpacity(0.8),
+                    color: config.textColor.withValues(alpha: 0.8),
                     fontSize: 12,
                   ),
                 ),
@@ -822,7 +826,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
             Text(
               other.refinementSubtitle,
               style: TextStyle(
-                color: config.textColor.withOpacity(0.8),
+                color: config.textColor.withValues(alpha: 0.8),
                 fontSize: 12,
               ),
             ),

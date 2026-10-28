@@ -325,9 +325,11 @@ class BlindNarrator {
             completer.complete(heard);
           }
         },
-        localeId: await _resolveLocaleId(),
-        listenFor: const Duration(seconds: 6),
-        pauseFor: const Duration(seconds: 2),
+        listenOptions: stt.SpeechListenOptions(
+          localeId: await _resolveLocaleId(),
+          listenFor: const Duration(seconds: 6),
+          pauseFor: const Duration(seconds: 2),
+        ),
       );
     } catch (e) {
       debugPrint('[BlindNarrator] listen() falló en ask(): $e');
@@ -399,13 +401,15 @@ class BlindNarrator {
               completer.complete(heard);
             }
           },
-          localeId: await _resolveLocaleId(),
-          // Componer un mensaje toma más tiempo que decir "sí" o
-          // "comenzar", así que le damos más margen para hablar y para
-          // pausas breves (por ejemplo, para pensar a mitad de frase)
-          // sin que el reconocimiento se corte solo.
-          listenFor: const Duration(seconds: 20),
-          pauseFor: const Duration(seconds: 3),
+          listenOptions: stt.SpeechListenOptions(
+            localeId: await _resolveLocaleId(),
+            // Componer un mensaje toma más tiempo que decir "sí" o
+            // "comenzar", así que le damos más margen para hablar y para
+            // pausas breves (por ejemplo, para pensar a mitad de frase)
+            // sin que el reconocimiento se corte solo.
+            listenFor: const Duration(seconds: 20),
+            pauseFor: const Duration(seconds: 3),
+          ),
         );
       } catch (e) {
         debugPrint('[BlindNarrator] listen() falló en askMessage(): $e');
@@ -509,9 +513,11 @@ class BlindNarrator {
             completer.complete(heard);
           }
         },
-        localeId: await _resolveLocaleId(),
-        listenFor: const Duration(seconds: 6),
-        pauseFor: const Duration(seconds: 2),
+        listenOptions: stt.SpeechListenOptions(
+          localeId: await _resolveLocaleId(),
+          listenFor: const Duration(seconds: 6),
+          pauseFor: const Duration(seconds: 2),
+        ),
       );
     } catch (e) {
       debugPrint('[BlindNarrator] listen() falló en calibrateIfNeeded(): $e');

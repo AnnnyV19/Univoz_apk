@@ -174,7 +174,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   const SizedBox(height: 40),
 
                   // ---- Subtítulo "Comunicación sin barreras" ----
-                  Align(
+                  const Align(
                     alignment: Alignment.centerRight,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -204,20 +204,20 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
                   // ---- Frase principal ----
                   RichText(
-                    text: TextSpan(
-                      style: const TextStyle(
+                    text: const TextSpan(
+                      style: TextStyle(
                         color: Colors.white,
                         fontSize: 34,
                         fontWeight: FontWeight.w800,
                         height: 1.15,
                       ),
                       children: [
-                        const TextSpan(text: 'Tu voz importa'),
+                        TextSpan(text: 'Tu voz importa'),
                         TextSpan(
                           text: ',',
                           style: TextStyle(color: _accentYellow),
                         ),
-                        const TextSpan(text: '\nsin importar cómo la expreses'),
+                        TextSpan(text: '\nsin importar cómo la expreses'),
                         TextSpan(
                           text: '.',
                           style: TextStyle(color: _accentYellow),
@@ -235,7 +235,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(16),
-                        gradient: LinearGradient(
+                        gradient: const LinearGradient(
                           colors: _buttonGradient,
                           begin: Alignment.centerLeft,
                           end: Alignment.centerRight,
@@ -304,7 +304,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   const SizedBox(height: 20),
 
                   // ---- Texto de accesibilidad ----
-                  Text(
+                  const Text(
                     'UNIVOZ incluye modo de voz automático diseñado '
                     'para personas con discapacidad visual',
                     style: TextStyle(
@@ -327,8 +327,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   /// Construye el texto "UNIVOZ" con colores individuales por letra,
   /// simulando el degradado del logo.
   Widget _buildLogoText() {
-    return Row(
-      children: const [
+    return const Row(
+      children: [
         Text('UNI', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
         Text('V', style: TextStyle(color: Color(0xFFE8C547), fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),
         Text('O', style: TextStyle(color: Color(0xFF4FC3E8), fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1)),

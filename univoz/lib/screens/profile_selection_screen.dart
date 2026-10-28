@@ -307,7 +307,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _comenzarColor,
                     disabledBackgroundColor:
-                        _comenzarColor.withOpacity(0.4),
+                        _comenzarColor.withValues(alpha: 0.4),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -391,7 +391,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
             Text(
               config.subtitle,
               style: TextStyle(
-                color: config.textColor.withOpacity(0.85),
+                color: config.textColor.withValues(alpha: 0.85),
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
               ),
@@ -495,7 +495,7 @@ class _ProfileSelectionScreenState extends State<ProfileSelectionScreen> {
             Text(
               refinement.subtitle,
               style: TextStyle(
-                color: config.textColor.withOpacity(0.8),
+                color: config.textColor.withValues(alpha: 0.8),
                 fontSize: 12,
               ),
             ),

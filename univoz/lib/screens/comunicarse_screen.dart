@@ -171,8 +171,9 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       await _avatarBridge.reproducir(plantilla.seq);
       return true;
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() => _voiceStatus = 'No se pudo reproducir la seña.');
+      }
       return false;
     }
   }
@@ -1027,7 +1028,7 @@ class _ComunicarseScreenState extends State<ComunicarseScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? color : color.withOpacity(0.25),
+          color: selected ? color : color.withValues(alpha: 0.25),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(

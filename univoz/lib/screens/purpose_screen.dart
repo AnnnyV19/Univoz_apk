@@ -318,7 +318,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   onPressed: _selected != null ? _onContinue : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _comenzarColor,
-                    disabledBackgroundColor: _comenzarColor.withOpacity(0.4),
+                    disabledBackgroundColor: _comenzarColor.withValues(alpha: 0.4),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -399,7 +399,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   Text(
                     subtitle,
                     style: TextStyle(
-                      color: textColor.withOpacity(0.85),
+                      color: textColor.withValues(alpha: 0.85),
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
