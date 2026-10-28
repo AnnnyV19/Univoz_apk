@@ -1,0 +1,4 @@
+# Lo que genera el arnes (pesado, se rehace cuando se quiera)
+www/
+*.npz
+*_filas.json

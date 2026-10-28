@@ -106,3 +106,4 @@ medición.
 - [iPhone, fase 2](16-ios-fase2.md)
 - [Integración del trabajo de la dueña (`app-limpia`) en la beta](17-integracion-app-limpia.md)
 - [Traspaso de sesión 2026-10-21 (cámara, carga y memoria; pendientes)](18-traspaso-sesion-2026-10-21.md)
+- [Integración final: diseño de Lucía, funciones de Xavier y avatar de la dueña](19-integracion-final.md)
