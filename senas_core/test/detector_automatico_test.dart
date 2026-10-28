@@ -177,6 +177,33 @@ void main() {
       expect(m.alFrame(v, 40), isFalse);
     });
 
+    test('una mano que aparece y desaparece no es movimiento', () {
+      final m = MovimientoTipoVisor();
+      List<double> dos({required bool otra}) {
+        final v = frame(muneca: .3, dedo: .2);
+        if (otra) {
+          v[31] = 1;
+          v[27] = -.4;
+          v[100] = .5;
+        }
+        return v;
+      }
+
+      var t = 0;
+      m.alFrame(dos(otra: false), t);
+      for (var i = 0; i < 12; i++) {
+        t += 34;
+        expect(m.alFrame(dos(otra: i.isEven), t), isFalse, reason: 'frame $i');
+      }
+    });
+
+    test('frames más espaciados se miden por 33 ms', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(), 0);
+      // .1 en 100 ms equivale a .033 por frame: por debajo de .06.
+      expect(m.alFrame(frame(muneca: .1), 100), isFalse);
+    });
+
     test('respeta el ritmo del visor (33 ms)', () {
       final m = MovimientoTipoVisor();
       m.alFrame(frame(), 0);

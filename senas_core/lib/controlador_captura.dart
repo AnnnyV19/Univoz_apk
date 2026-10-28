@@ -614,10 +614,18 @@ class MovimientoTipoVisor {
 
   List<double>? _anterior;
   int? _anteriorMs;
+  // Cada mano se compara con la última vez que estuvo presente (como el
+  // DetectorAutomatico): una mano que aparece o desaparece no es movimiento.
+  // Sin esto, la otra mano entrando y saliendo de cuadro contaba como
+  // movimiento sin parar y la seña nunca terminaba.
+  final List<List<double>?> _mano = [null, null];
+  final List<int?> _manoMs = [null, null];
 
   void reiniciar() {
     _anterior = null;
     _anteriorMs = null;
+    _mano[0] = _mano[1] = null;
+    _manoMs[0] = _manoMs[1] = null;
   }
 
   /// null si el frame se salta por el ritmo; si no, si hay movimiento.
@@ -626,30 +634,56 @@ class MovimientoTipoVisor {
     if (antMs != null && timestampMs - antMs < intervaloMs && timestampMs >= antMs) {
       return null;
     }
+    if (v.length < kOffShapeR + 60) return false;
     final ant = _anterior;
     _anterior = List<double>.of(v);
     _anteriorMs = timestampMs;
-    if (ant == null || ant.length != v.length || v.length < kOffShapeR + 60) {
-      return false;
-    }
+
+    // Todo llevado a "por frame de 33 ms": si los frames fusionados llegan
+    // más espaciados, el mismo gesto no debe parecer más brusco.
+    double escala(int dt) => intervaloMs / dt.clamp(10, 200);
+
     var cuerpo = 0.0, muneca = 0.0, forma = 0.0;
-    for (var i = 0; i < v.length; i++) {
-      final d = v[i] - ant[i];
-      final d2 = d * d;
-      if (i == kOffPresL || i == kOffPresR) continue;
-      if (i >= kOffShapeL) {
-        forma += d2;
-      } else if (i >= kOffLocL) {
-        muneca += d2;
-      } else {
-        cuerpo += d2;
+    if (ant != null && ant.length == v.length && antMs != null) {
+      final k = escala(timestampMs - antMs);
+      for (var i = 0; i < kOffLocL; i++) {
+        final d = (v[i] - ant[i]) * k;
+        cuerpo += d * d;
       }
     }
+    const loc = [kOffLocL, kOffLocL + 3];
+    const pres = [kOffPresL, kOffPresR];
+    const shape = [kOffShapeL, kOffShapeR];
+    var conMano = false;
+    for (var lado = 0; lado < 2; lado++) {
+      if (v[pres[lado]] < .5) continue;
+      conMano = true;
+      final actual = <double>[
+        ...v.sublist(loc[lado], loc[lado] + 3),
+        ...v.sublist(shape[lado], shape[lado] + 60),
+      ];
+      final previa = _mano[lado];
+      final previaMs = _manoMs[lado];
+      _mano[lado] = actual;
+      _manoMs[lado] = timestampMs;
+      if (previa == null || previaMs == null) continue;
+      final dt = timestampMs - previaMs;
+      if (dt <= 0 || dt > 250) continue; // reapareció: no es movimiento
+      final k = escala(dt);
+      for (var i = 0; i < 3; i++) {
+        final d = (actual[i] - previa[i]) * k;
+        muneca += d * d;
+      }
+      for (var i = 3; i < actual.length; i++) {
+        final d = (actual[i] - previa[i]) * k;
+        forma += d * d;
+      }
+    }
+    if (ant == null) return false;
     double c(double x) => x < 0 ? 0 : (x > 1 ? 1 : x);
     // Umbrales "intentional" del filtro: cuerpo .08, muñeca .06, dedos .08.
     final puntaje = math.max(c(math.sqrt(cuerpo) / 0.08), c(math.sqrt(muneca) / 0.06));
     final dedos = c(math.sqrt(forma) / 0.08);
-    final conMano = v[kOffPresL] >= .5 || v[kOffPresR] >= .5;
     return conMano && (puntaje >= .8 || dedos >= .8);
   }
 }
