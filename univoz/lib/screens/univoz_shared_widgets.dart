@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
@@ -138,8 +138,8 @@ class _MenuPerfilState extends State<MenuPerfil> {
       child: Semantics(
         button: true,
         label: prestado
-            ? 'Celular prestado, perfil en uso: $desc. Tocá para cambiarlo.'
-            : 'Mi perfil: $desc. Tocá para cambiarlo.',
+            ? 'Celular prestado, perfil en uso: $desc. Toca para cambiarlo.'
+            : 'Mi perfil: $desc. Toca para cambiarlo.',
         child: ExcludeSemantics(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

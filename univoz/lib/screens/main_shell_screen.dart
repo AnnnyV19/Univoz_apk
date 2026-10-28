@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:senas_core/pantalla_avatar.dart';
 import 'comunicarse_screen.dart';
 import '../services/conversation_profile.dart';
@@ -7,7 +7,7 @@ import '../services/conversation_profile.dart';
 /// 3D real de senas_core, [PantallaAvatar] — se le escribe, se elige una
 /// seña de una lista, o se le habla, y el avatar hace la seña) o la sección
 /// "Comunicarse" ([ComunicarseScreen]), según [initialIndex] — lo decide
-/// [PurposeScreen] antes de llegar acá.
+/// [PurposeScreen] antes de llegar aquí.
 ///
 /// Ya no hay ningún menú/selector propio arriba para cambiar entre las dos
 /// desde esta misma pantalla: primero hubo una barra de navegación fija

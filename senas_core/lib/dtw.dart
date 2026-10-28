@@ -1,4 +1,4 @@
-/// Reconocimiento de senas por Dynamic Time Warping sobre plantillas.
+﻿/// Reconocimiento de senas por Dynamic Time Warping sobre plantillas.
 ///
 /// Espejo exacto de tools/dtw.py. Corre en el dispositivo: las plantillas
 /// llegan en el paquete que sincroniza PostgreSQL.
@@ -304,11 +304,11 @@ class Diagnostico {
   /// vacio: si nada especifico destaca, da un mensaje generico.
   String explicacion() {
     if (izqEsperadaPeroFalto) {
-      return 'Esta se\u00f1a usa la mano izquierda y no la detecte. Fijate que se '
+      return 'Esta se\u00f1a usa la mano izquierda y no la detecte. Fíjate que se '
           'vea bien en camara.';
     }
     if (derEsperadaPeroFalto) {
-      return 'Esta se\u00f1a usa la mano derecha y no la detecte. Fijate que se vea '
+      return 'Esta se\u00f1a usa la mano derecha y no la detecte. Fíjate que se vea '
           'bien en camara.';
     }
     if (izqSobra || derSobra) {
@@ -329,7 +329,7 @@ class Diagnostico {
     switch (peor.key) {
       case 'cuerpo':
         return 'La posicion o el movimiento del brazo no coincidieron. '
-            'Fijate donde empieza y termina la se\u00f1a respecto a tu cuerpo.';
+            'Fíjate dónde empieza y termina la se\u00f1a respecto a tu cuerpo.';
       case 'formaIzq':
         return 'La forma de la mano izquierda (como doblas los dedos) no '
             'coincidio con la se\u00f1a.';
@@ -337,7 +337,7 @@ class Diagnostico {
         return 'La forma de la mano derecha (como doblas los dedos) no '
             'coincidio con la se\u00f1a.';
       default:
-        return 'No coincidio del todo. Segui practicando.';
+        return 'No coincidio del todo. Sigue practicando.';
     }
   }
 }

@@ -1,4 +1,4 @@
-/// Pantalla del avatar 3D: escribís, elegís de una lista, o hablás una
+﻿/// Pantalla del avatar 3D: escribís, elegís de una lista, o hablás una
 /// palabra, y el avatar (assets/avatar/univozM.vrm) hace la seña
 /// correspondiente. Es el sentido inverso de PantallaDeTranslacion: en vez
 /// de camara -> texto, es texto/voz -> avatar.
@@ -217,7 +217,7 @@ class _PantallaAvatarState extends State<PantallaAvatar> {
                 child: TextField(
                   controller: _controladorTexto,
                   decoration: const InputDecoration(
-                    labelText: 'Escribí una palabra',
+                    labelText: 'Escribe una palabra',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),

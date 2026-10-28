@@ -7,6 +7,7 @@
 library pantalla_captura;
 
 import 'package:flutter/material.dart';
+import 'immersive_navigation.dart';
 
 import 'camera_bridge.dart';
 import 'controlador_captura.dart';
@@ -157,7 +158,7 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
       }
       if (framesLeidos < kMinFramesUtiles) {
         _mostrar(
-          'Grabación demasiado corta ($framesLeidos frames). No se guardó — hacé la seña completa antes de detener.',
+          'Grabación demasiado corta ($framesLeidos frames). No se guardó — haz la seña completa antes de detener.',
           error: true,
         );
         return;
@@ -192,105 +193,211 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
     });
   }
 
+  InputDecoration _fluentInputDecoration({
+    required String labelText,
+    String? hintText,
+    IconData? prefixIcon,
+  }) {
+    return InputDecoration(
+      labelText: labelText,
+      hintText: hintText,
+      prefixIcon: prefixIcon != null
+          ? Icon(prefixIcon, size: 18, color: const Color(0xFF791FC1))
+          : null,
+      isDense: true,
+      filled: true,
+      fillColor: Colors.white,
+      labelStyle: const TextStyle(fontSize: 12.5, color: Color(0xFF6B6375)),
+      hintStyle: const TextStyle(fontSize: 12.5, color: Color(0xFFA8A1B2)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xFFE2DEEC), width: 1),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xFFE2DEEC), width: 1),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xFF791FC1), width: 1.5),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Agregar muestras'),
-        actions: [
-          IconButton(
-            icon: _volteando
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.cameraswitch_outlined),
-            tooltip: _almacen.ajustes.camaraFrontal
-                ? 'Cambiar a cámara trasera'
-                : 'Cambiar a cámara frontal',
-            onPressed: (_ctrl.grabando || !_ctrl.lista) ? null : _voltearCamara,
-          ),
-          if (_guardadasEstaSesion > 0)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.only(right: 16),
-                child: Text('+$_guardadasEstaSesion',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-              ),
+    return ImmersiveNavigation(
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          foregroundColor: const Color(0xFF29232F),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: const Text(
+            'Agregar muestras',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF29232F),
             ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _formulario(),
-          Expanded(child: _preview()),
-          _barraInferior(),
-        ],
+          ),
+          centerTitle: false,
+          actions: [
+            IconButton(
+              icon: _volteando
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cameraswitch_outlined, size: 22),
+              tooltip: _almacen.ajustes.camaraFrontal
+                  ? 'Cambiar a cámara trasera'
+                  : 'Cambiar a cámara frontal',
+              onPressed:
+                  (_ctrl.grabando || !_ctrl.lista) ? null : _voltearCamara,
+            ),
+            if (_guardadasEstaSesion > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 14),
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3E8FF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '+$_guardadasEstaSesion',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF791FC1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        body: Column(
+          children: [
+            _formulario(),
+            Expanded(child: _preview()),
+            _barraInferior(),
+          ],
+        ),
       ),
     );
   }
 
   Widget _formulario() {
     final yaTiene = _glosa.isEmpty ? 0 : _almacen.cuantasDe(_glosa);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFEDE9F4), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.025),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          TextField(
+            controller: _palabraCtrl,
+            enabled: !_ctrl.grabando,
+            textCapitalization: TextCapitalization.none,
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500),
+            decoration: _fluentInputDecoration(
+              labelText: 'Palabra o frase *',
+              hintText: 'Ej. gracias, cómo estás...',
+              prefixIcon: Icons.translate_rounded,
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
-                flex: 2,
                 child: TextField(
-                  controller: _palabraCtrl,
+                  controller: _signerCtrl,
                   enabled: !_ctrl.grabando,
-                  textCapitalization: TextCapitalization.none,
-                  decoration: const InputDecoration(
-                    labelText: '¿Qué palabra es? *',
-                    hintText: 'gracias, cómo estás...',
-                    border: OutlineInputBorder(),
-                    isDense: true,
+                  style: const TextStyle(fontSize: 13.5),
+                  decoration: _fluentInputDecoration(
+                    labelText: 'Tu nombre *',
+                    hintText: 'Ej. Ana',
+                    prefixIcon: Icons.person_outline_rounded,
                   ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: TextField(
-                  controller: _signerCtrl,
-                  enabled: !_ctrl.grabando,
-                  decoration: const InputDecoration(
-                    labelText: 'Tu nombre *',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
+                child: _campoCategoria(),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          _campoCategoria(),
-          const SizedBox(height: 6),
-          if (_camposCompletos)
-            Text(
-              'Se guardará como $_glosa  ·  ya tenés $yaTiene muestra(s)',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-            )
-          else
-            Text(
-              'Completá palabra, tu nombre y categoría (los tres son '
-              'obligatorios) para poder grabar.',
-              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: _camposCompletos
+                  ? const Color(0xFFF0FDF4)
+                  : const Color(0xFFFFFBEB),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: _camposCompletos
+                    ? const Color(0xFFBBF7D0)
+                    : const Color(0xFFFDE68A),
+                width: 1,
+              ),
             ),
+            child: Row(
+              children: [
+                Icon(
+                  _camposCompletos
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.info_outline_rounded,
+                  size: 14,
+                  color: _camposCompletos
+                      ? const Color(0xFF16A34A)
+                      : const Color(0xFFD97706),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _camposCompletos
+                        ? 'Glosa: $_glosa  ·  $yaTiene muestra(s) previa(s)'
+                        : 'Escribe la palabra, tu nombre y categoría para grabar',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight:
+                          _camposCompletos ? FontWeight.w600 : FontWeight.w500,
+                      color: _camposCompletos
+                          ? const Color(0xFF15803D)
+                          : const Color(0xFFB45309),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  /// Campo de categoria: se puede escribir cualquier cosa, pero a medida
-  /// que se tipea aparecen como sugerencia las de kCategoriasBase y las que
-  /// ya se usaron en este telefono -- asi el mismo nombre de categoria no
-  /// termina escrito de dos formas distintas por error de tipeo.
+  /// Campo de categoria con autocompletado y estilo Fluent.
   Widget _campoCategoria() {
     final sugerencias =
         {...kCategoriasBase, ..._almacen.categoriasUsadas}.toList()..sort();
@@ -301,47 +408,55 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
         return sugerencias.where((c) => c.toLowerCase().contains(buscado));
       },
       fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-        // El controller de este campo lo crea y destruye el propio
-        // Autocomplete -- solo guardamos la referencia (una vez; este
-        // builder se re-invoca en cada rebuild del formulario, pero el
-        // controller que nos pasa es siempre la misma instancia) para
-        // poder leerlo al guardar y completarlo automaticamente desde el
-        // listener de la palabra. Tambien es obligatoria (ver
-        // _puedeGrabar), asi que necesita el mismo listener que dispara un
-        // rebuild al tipear -- se agrega una sola vez, la primera vez que
-        // llega esta instancia del controller.
         if (_categoriaCtrl != controller) controller.addListener(_alCambiar);
         _categoriaCtrl = controller;
         return TextField(
           controller: controller,
           focusNode: focusNode,
           enabled: !_ctrl.grabando,
-          decoration: const InputDecoration(
+          style: const TextStyle(fontSize: 13.5),
+          decoration: _fluentInputDecoration(
             labelText: 'Categoría *',
-            hintText: 'Saludos y Cortesía...',
-            border: OutlineInputBorder(),
-            isDense: true,
+            hintText: 'Seleccionar...',
+            prefixIcon: Icons.folder_outlined,
           ),
         );
       },
       optionsViewBuilder: (context, onSelected, opciones) => Align(
         alignment: Alignment.topLeft,
         child: Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(8),
+          elevation: 6,
+          shadowColor: Colors.black.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(12),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 220),
-            child: ListView(
-              padding: EdgeInsets.zero,
-              shrinkWrap: true,
-              children: [
-                for (final o in opciones)
-                  ListTile(
-                    dense: true,
-                    title: Text(o),
-                    onTap: () => onSelected(o),
-                  ),
-              ],
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFEBE6F3)),
+              ),
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                shrinkWrap: true,
+                children: [
+                  for (final o in opciones)
+                    InkWell(
+                      onTap: () => onSelected(o),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        child: Text(
+                          o,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF29232F),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -372,50 +487,86 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return Stack(
-      children: [
-        Center(
-          child: AspectRatio(
-            aspectRatio: camara.relacionAspecto,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Texture(textureId: camara.textureId),
-                ),
-                ValueListenableBuilder<LandmarkFrame?>(
-                  valueListenable: _ctrl.frame,
-                  builder: (_, frame, __) => CustomPaint(
-                    painter: SkeletonPainter(frame: frame),
-                    size: Size.infinite,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFEDE9F4), width: 1),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: camara.relacionAspecto,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: Texture(textureId: camara.textureId),
+                      ),
+                      ValueListenableBuilder<LandmarkFrame?>(
+                        valueListenable: _ctrl.frame,
+                        builder: (_, frame, __) => CustomPaint(
+                          painter: SkeletonPainter(frame: frame),
+                          size: Size.infinite,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
-        Positioned(
-          top: 8,
-          left: 8,
-          child: ValueListenableBuilder<LandmarkFrame?>(
-            valueListenable: _ctrl.frame,
-            builder: (_, frame, __) => _chipEstado(frame),
-          ),
-        ),
-        if (_ctrl.grabando)
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red,
-                borderRadius: BorderRadius.circular(20),
               ),
-              child: Text('● ${_ctrl.framesGrabados} frames',
-                  style: const TextStyle(color: Colors.white, fontSize: 12)),
-            ),
+              Positioned(
+                top: 10,
+                left: 10,
+                child: ValueListenableBuilder<LandmarkFrame?>(
+                  valueListenable: _ctrl.frame,
+                  builder: (_, frame, __) => _chipEstado(frame),
+                ),
+              ),
+              if (_ctrl.grabando)
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFDC2626).withOpacity(0.35),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.fiber_manual_record,
+                            color: Colors.white, size: 10),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${_ctrl.framesGrabados} frames',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
-      ],
+        ),
+      ),
     );
   }
 
@@ -423,64 +574,143 @@ class _PantallaCapturaState extends State<PantallaCaptura> {
     final cuerpo = frame?.pose != null;
     final izq = frame?.left != null;
     final der = frame?.right != null;
-    Widget punto(String texto, bool ok) => Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: Text(
-            '${ok ? "✓" : "✗"} $texto',
-            style: TextStyle(
-              fontSize: 12,
-              color: ok ? Colors.greenAccent.shade400 : Colors.white54,
+
+    Widget punto(String label, bool ok) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: ok ? const Color(0xFF4ADE80) : Colors.white38,
+              ),
             ),
-          ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: ok ? FontWeight.w600 : FontWeight.w400,
+                color: ok ? Colors.white : Colors.white60,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
         );
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.fromLTRB(10, 5, 2, 5),
       decoration: BoxDecoration(
-        color: Colors.black54,
+        color: Colors.black.withOpacity(0.48),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.18), width: 1),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        punto('Cuerpo', cuerpo),
-        punto('Izq', izq),
-        punto('Der', der),
-      ]),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          punto('Cuerpo', cuerpo),
+          punto('Mano I', izq),
+          punto('Mano D', der),
+        ],
+      ),
     );
   }
 
   Widget _barraInferior() {
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(
+            top: BorderSide(color: Color(0xFFF0EDF5), width: 1),
+          ),
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (_aviso != null)
               Container(
                 width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(10),
+                margin: const EdgeInsets.only(bottom: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                 decoration: BoxDecoration(
                   color: _avisoEsError
-                      ? Colors.orange.shade800
-                      : Colors.green.shade700,
-                  borderRadius: BorderRadius.circular(8),
+                      ? const Color(0xFFFEF2F2)
+                      : const Color(0xFFF0FDF4),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: _avisoEsError
+                        ? const Color(0xFFFECACA)
+                        : const Color(0xFFBBF7D0),
+                    width: 1,
+                  ),
                 ),
-                child: Text(_aviso!,
-                    style: const TextStyle(color: Colors.white, fontSize: 13)),
+                child: Row(
+                  children: [
+                    Icon(
+                      _avisoEsError
+                          ? Icons.error_outline_rounded
+                          : Icons.check_circle_outline_rounded,
+                      size: 16,
+                      color: _avisoEsError
+                          ? const Color(0xFFDC2626)
+                          : const Color(0xFF16A34A),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _aviso!,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                          color: _avisoEsError
+                              ? const Color(0xFF991B1B)
+                              : const Color(0xFF166534),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             SizedBox(
               width: double.infinity,
+              height: 50,
               child: ElevatedButton.icon(
                 onPressed: _puedeGrabar ? _alternarGrabacion : null,
                 icon: Icon(
-                    _ctrl.grabando ? Icons.stop : Icons.fiber_manual_record),
+                  _ctrl.grabando
+                      ? Icons.stop_rounded
+                      : Icons.fiber_manual_record_rounded,
+                  size: 20,
+                ),
                 label: Text(
-                    _ctrl.grabando ? 'Detener y guardar' : 'Grabar muestra'),
+                  _ctrl.grabando
+                      ? 'Detener y guardar'
+                      : (_puedeGrabar
+                          ? 'Grabar muestra'
+                          : 'Completa los campos para grabar'),
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                  ),
+                ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _ctrl.grabando ? Colors.red : null,
-                  foregroundColor: _ctrl.grabando ? Colors.white : null,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: _ctrl.grabando
+                      ? const Color(0xFFDC2626)
+                      : const Color(0xFF791FC1),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFFEDEBF0),
+                  disabledForegroundColor: const Color(0xFFA69EB0),
+                  elevation: _puedeGrabar ? 2 : 0,
+                  shadowColor: const Color(0xFF791FC1).withOpacity(0.3),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),
