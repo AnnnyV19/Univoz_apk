@@ -32,6 +32,7 @@ import 'package:flutter/material.dart' show Color;
 import 'package:flutter/services.dart' show ByteData, rootBundle;
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'diagnostico_latencia.dart';
 import 'frase_a_senas.dart' show SegmentoFrase;
 import 'motion_contract.dart';
 import 'sign_norm.dart' show kNormVersion, kTFrames, kFrameDim;
@@ -218,6 +219,7 @@ class AvatarBridge {
         _modeloPrueba = modelo {
     controller = null;
     _armarLimiteCarga();
+    DiagnosticoLatencia.cambios.addListener(_sincronizarDiagnostico);
   }
 
   AvatarBridge()
@@ -250,6 +252,30 @@ class AvatarBridge {
       )
       ..loadFlutterAsset('assets/avatar_viewer/index.html');
     _armarLimiteCarga();
+    DiagnosticoLatencia.cambios.addListener(_sincronizarDiagnostico);
+  }
+
+  // Lo que el visor tiene hoy de los toggles de desarrollador
+  // (diagnostico_latencia.dart). Solo se manda lo que cambia, asi que con el
+  // modo apagado no se manda nada y el visor queda como siempre.
+  SuavizadoAvatar _suavizadoEnVisor = SuavizadoAvatar.normal;
+  bool _latenciaEnVisor = false;
+
+  /// Reaplica suavizado y diagnostico de latencia si difieren de lo que tiene
+  /// el visor. Antes de js_listo no hace nada: _cargarAvatar lo vuelve a llamar.
+  void _sincronizarDiagnostico() {
+    if (_cerrado || kIsWeb || !_jsListo) return;
+    final suavizado = DiagnosticoLatencia.suavizadoEfectivo;
+    if (suavizado != _suavizadoEnVisor) {
+      _suavizadoEnVisor = suavizado;
+      _js(llamadaSegura('configurarSuavizado', "'${suavizado.wire}'"))
+          .catchError((_) {});
+    }
+    final latencia = DiagnosticoLatencia.activo;
+    if (latencia != _latenciaEnVisor) {
+      _latenciaEnVisor = latencia;
+      _js(llamadaSegura('configurarLatencia', '$latencia')).catchError((_) {});
+    }
   }
 
   final Future<void> Function(String js)? _ejecutarPrueba;
@@ -303,6 +329,11 @@ class AvatarBridge {
     } else if (m.startsWith('perf:')) {
       final perf = decodificarPerf(m);
       if (perf != null) onPerf?.call(perf);
+    } else if (m.startsWith('lat:')) {
+      // Resumen de latencia del visor (solo llega con el diagnostico encendido).
+      if (DiagnosticoLatencia.activo) {
+        DiagnosticoLatencia.alResumenVisor(m.substring(4));
+      }
     } else if (_esperandoPagina &&
         (m == 'js_listo' ||
             m == 'avatar_listo' ||
@@ -352,6 +383,9 @@ class AvatarBridge {
     // Si se pidio "Reintentar" a mitad de la carga, la pagina nueva manda su
     // propio js_listo: esta carga se abandona para no meter dos VRM.
     bool vigente() => recarga == _recargas && !_cerrado;
+    // Pagina nueva: el visor vuelve a sus valores de siempre.
+    _suavizadoEnVisor = SuavizadoAvatar.normal;
+    _latenciaEnVisor = false;
     try {
       final modelo = _modeloPrueba;
       final datos =
@@ -373,6 +407,8 @@ class AvatarBridge {
         if (!vigente()) return;
         await _js(llamada());
       }
+      if (!vigente()) return;
+      _sincronizarDiagnostico();
       // Vista y manos pedidas antes de que el visor estuviera listo.
       if (!vigente()) return;
       for (var i = 0; i < _cola.llamadasAlCargar().length; i++) {
@@ -617,14 +653,17 @@ class AvatarBridge {
     if (!_cola.aceptaFrames) return;
     MotionFrameV2(v);
     if (renderFrame != null) MotionFrameV2(renderFrame);
-    final timestamp = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
-    final calidad = quality.clamp(0.0, 1.0);
-    final renderJson = jsonEncode(renderFrame ?? v);
-    final metaJson = jsonEncode(sourceMeta ?? const <String, dynamic>{});
-    await webView.runJavaScript(llamadaSegura(
-        'aplicarFrameVivo',
-        "'${jsonEncode(v)}',$timestamp,$calidad,"
-            "'${_escapar(renderJson)}','${_escapar(metaJson)}'"));
+    // Un solo JSON por frame (aplicarFrameVivo lo parsea una vez): v =
+    // reconocimiento, r = render, t, q = calidad y los metadatos del visor.
+    final payload = jsonEncode({
+      ...?sourceMeta,
+      'v': v,
+      'r': renderFrame ?? v,
+      't': timestampMs ?? DateTime.now().millisecondsSinceEpoch,
+      'q': quality.clamp(0.0, 1.0),
+    });
+    await webView.runJavaScript(
+        llamadaSegura('aplicarFrameVivo', "'${_escapar(payload)}'"));
   }
 
   // Los frames son puramente numericos (nunca llevan comillas ni barras),
@@ -641,6 +680,7 @@ class AvatarBridge {
     onPerf = null;
     onMovimiento = null;
     onErrorVisor = null;
+    DiagnosticoLatencia.cambios.removeListener(_sincronizarDiagnostico);
     _limite?.cancel();
     if (!_cerrado) {
       _cerrado = true;

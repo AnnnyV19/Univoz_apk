@@ -77,7 +77,7 @@ void main() {
     expect(html, contains('state.frames >= 3'));
     expect(html, contains('droppedVideoFrames'));
     expect(html, contains("transicionReposo('camara',"));
-    expect(html, contains('suavizarFrameWeb'));
+    expect(html, contains('medirMovimiento'));
     expect(html, contains('Suavizar movimiento'));
     expect(html, contains('webGrabacion.push(vector.slice())'));
     expect(html, contains('const refHand ='));

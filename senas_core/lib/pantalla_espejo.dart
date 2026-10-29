@@ -62,7 +62,6 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
   /// Envio al WebView: ultimo frame gana, sin cola (avatar_vivo.dart).
   late final _alimentador = AlimentadorAvatar(
     enviar: _bridge.mostrarFrame,
-    perfilMedidas: () => _almacen.ajustes.perfilCorporal?.measures,
   );
 
   bool _espejando = false;

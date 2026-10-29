@@ -39,8 +39,8 @@ MODULES = ["rig_math", "rig_metrics", "rig_diagnostics", "rig_safety",
            "rig_tracking", "rig_sign_space", "rig_mirror", "rig_body_profile",
            "rig_retarget", "rig_holistic", "rig_holistic_worker", "rig_face",
            "rig_hand_gate", "rig_session", "rig_avatar_state",
-           "rig_device_tier", "rig_embedded_perf", "rig_motion_frame",
-           "rig_hand_capture",
+           "rig_device_tier", "rig_embedded_perf", "rig_latency_diag",
+           "rig_motion_frame", "rig_hand_capture",
            # Aportados por la rama app-limpia (docs/17). rig_mano_ik.mjs (ManoIK)
            # NO se inlinea: no esta conectado a este visor.
            "rig_cuerpo", "rig_manos", "rig_replay", "rig_frase",
@@ -50,8 +50,8 @@ MODULES = ["rig_math", "rig_metrics", "rig_diagnostics", "rig_safety",
 EXPORT_ALL = {"rig_sign_space", "rig_mirror", "rig_body_profile",
               "rig_retarget", "rig_holistic", "rig_holistic_worker", "rig_face",
               "rig_hand_gate", "rig_session", "rig_avatar_state",
-              "rig_device_tier", "rig_embedded_perf", "rig_motion_frame",
-              "rig_hand_capture", "rig_cuerpo", "rig_manos", "rig_replay",
+              "rig_device_tier", "rig_embedded_perf", "rig_latency_diag",
+              "rig_motion_frame", "rig_hand_capture", "rig_cuerpo", "rig_manos", "rig_replay",
               "rig_frase", "rig_encuadre"}
 INDENT = "      "
 VENDOR = os.path.join(VIEWER, "vendor", "univoz_vendor.min.js")

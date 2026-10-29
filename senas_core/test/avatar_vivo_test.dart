@@ -80,7 +80,7 @@ void main() {
     expect(calidades.single, isNot(closeTo(f.visibilidadMin!, 1e-6)));
   });
 
-  test('sourceMeta lleva nivel, mano y asociación del frame', () {
+  test('sourceMeta lleva nivel y mano, y no lo que el espejo no lee', () {
     final meta = sourceMetaDeFrame(_frame(5, extra: {
       'tier': 'medio',
       'infer_ms': 42.0,
@@ -90,9 +90,10 @@ void main() {
     expect(meta['infer_ms'], 42.0);
     expect(meta['thermal'], 1);
     expect(meta['has_hand'], isTrue);
-    expect(meta.containsKey('association'), isTrue);
-    expect(meta.containsKey('tracks'), isTrue);
     expect(meta.containsKey('errors'), isTrue);
+    for (final k in ['sign_space', 'association', 'tracks', 'contact']) {
+      expect(meta.containsKey(k), isFalse, reason: k);
+    }
   });
 
   test('sourceMeta lleva el seguimiento nativo para los contadores del visor',
@@ -104,5 +105,75 @@ void main() {
       },
     }));
     expect((meta['hand_track'] as Map)['left']['recovery_frames'], 2);
+  });
+
+  group('sin pose usable (persona muy cerca de la camara)', () {
+    // Mismo frame real pero sin pose: normalize() da null.
+    LandmarkFrame sinPose(int t, {bool manos = true}) => _frame(t, extra: {
+          'pose': null,
+          'poseMundo': null,
+          if (!manos) 'left': null,
+          if (!manos) 'right': null,
+        });
+
+    Future<List<({List<double> v, List<double> r, Map<String, dynamic>? meta})>>
+        enviar(List<LandmarkFrame> frames) async {
+      final out = <({List<double> v, List<double> r, Map<String, dynamic>? meta})>[];
+      final alimentador = AlimentadorAvatar(
+        enviar: (v, {renderFrame, timestampMs, quality = 1.0, sourceMeta}) async {
+          out.add((v: v, r: renderFrame ?? v, meta: sourceMeta));
+        },
+      );
+      alimentador.iniciar();
+      for (final f in frames) {
+        alimentador.alFrame(f);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      alimentador.detener();
+      return out;
+    }
+
+    test('con manos sostiene el ultimo cuerpo y sigue las manos', () async {
+      final bueno = _frame(1);
+      final enviados = await enviar([bueno, sinPose(2)]);
+      expect(enviados, hasLength(2));
+      final base = enviados[0].v, sostenido = enviados[1].v;
+      // Cuerpo (8 puntos x 3) igual al del ultimo frame valido; manos
+      // presentes (bloques de presencia 30 y 31) con su forma del frame vivo.
+      expect(sostenido.sublist(0, 24), base.sublist(0, 24));
+      expect(sostenido[30], 1.0);
+      expect(sostenido[31], 1.0);
+      expect(sostenido.sublist(32), base.sublist(32));
+      // El desfase pose/manos no debe hacer que el visor lo descarte.
+      expect(enviados[1].meta!['source_skew_ms'], 0);
+    });
+
+    test('la forma de los dedos es la del frame nuevo, no la sostenida',
+        () async {
+      final nuevo = LandmarkFrame(
+        timestampMs: 2,
+        // Se dobla la punta del indice (la forma es relativa a la muneca).
+        left: [
+          for (final (i, p) in _frame(2).left!.indexed)
+            i == 8 ? [p[0], p[1] + 0.03, p[2]] : p
+        ],
+        right: _frame(2).right,
+      );
+      final enviados = await enviar([_frame(1), nuevo]);
+      expect(enviados, hasLength(2));
+      expect(enviados[1].v.sublist(32, 92), isNot(enviados[0].v.sublist(32, 92)));
+      expect(enviados[1].v.sublist(0, 24), enviados[0].v.sublist(0, 24));
+    });
+
+    test('sin manos no manda nada: el visor conserva y su watchdog decide',
+        () async {
+      final enviados = await enviar([_frame(1), sinPose(2, manos: false)]);
+      expect(enviados, hasLength(1));
+    });
+
+    test('sin un cuerpo previo no hay nada que sostener', () async {
+      final enviados = await enviar([sinPose(1)]);
+      expect(enviados, isEmpty);
+    });
   });
 }

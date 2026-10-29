@@ -277,11 +277,12 @@ test('hand loss option disabled preserves last valid hand pose', () => {
   assert.equal(ctx.estadoPerdidaMano.right.enReposo, false);
 });
 
-test('web pipeline wires adaptive calibration and pose stride without changing vector contract', () => {
-  assert.match(html, /createAdaptiveMotionCalibrator/);
+test('web pipeline wires pose stride and the motion meter without changing vector contract', () => {
+  assert.match(html, /createMotionMeter/);
   assert.match(html, /createAdaptivePoseScheduler/);
   assert.match(html, /adaptivePoseScheduler\.shouldRun/);
-  assert.match(html, /adaptiveMotionCalibrator\.update/);
+  // El frame llega sin filtro 152D: ya no hay One Euro de cuerpo ni calibrador.
+  assert.doesNotMatch(html, /createResponsiveRigFilter|createAdaptiveMotionCalibrator/);
   assert.match(html, /leftSurface/);
   assert.match(html, /kFrameDim = 152/);
   assert.match(html, /function normalizarFrameWeb\(pose, poseMundo, left, right,\s+renderWrists/);
@@ -519,15 +520,15 @@ test('embedded perf carries smoothness and avatar state like the web perf', () =
   assert.match(html, /idleBudgetFor\(presupuestoRender\)/);
 });
 
-test('live frames tell Dart quiet/motion with the same adaptive filter as web', () => {
+test('live frames tell Dart quiet/motion with the same meter as web', () => {
   assert.match(html, /window\.configurarMovimiento = function/);
   const start = html.indexOf('window.aplicarFrameVivo = function');
   const block = html.slice(start, html.indexOf('\n    };', start));
-  // Despues del filtro adaptativo, no antes: usa sus diagnosticos del frame.
-  const filtro = block.indexOf('frameVivo = suavizarFrameWeb(');
+  // Despues de medir el movimiento del frame, no antes.
+  const medida = block.indexOf('medirMovimiento(');
   const aviso = block.indexOf("'motion:'");
-  assert.ok(filtro > 0 && aviso > filtro, 'motion: sale despues de suavizarFrameWeb');
-  assert.ok(block.includes('intentionalMotion'), 'usa el umbral intencional del filtro');
+  assert.ok(medida > 0 && aviso > medida, 'motion: sale despues de medirMovimiento');
+  assert.ok(block.includes('intentionalMotion'), 'usa el umbral intencional');
   assert.ok(block.includes('fingerMotionScore'), 'cuenta los dedos');
 });
 

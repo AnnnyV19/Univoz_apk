@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'diagnostico_latencia.dart';
 import 'modo_desarrollador.dart';
 import 'dtw.dart' show kMaxDistanceDefault, kMinMarginDefault;
 import 'motion_contract.dart';
@@ -298,6 +299,56 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
               child: const Text('Restablecer calibración RigBody'),
             ),
             const Divider(height: 32),
+            _titulo('Latencia del avatar (pruebas)'),
+            _explicacion(
+              'Solo en memoria: se pierde al cerrar la app. Con el modo '
+              'desarrollador activo, la app escribe un resumen por segundo en '
+              'logcat con la etiqueta UnivozLat.',
+            ),
+            _selector<SuavizadoAvatar>(
+              etiqueta: 'Suavizado del avatar',
+              ayuda: 'Normal es el de siempre. Apagado: sin suavizado, para ver '
+                  'el retraso crudo.',
+              valores: SuavizadoAvatar.values,
+              notificador: DiagnosticoLatencia.suavizado,
+              texto: (v) => v.etiqueta,
+            ),
+            _selector<DelegadoMediaPipe>(
+              etiqueta: 'Delegado MediaPipe',
+              ayuda: 'GPU es el de siempre. Aplica la próxima vez que se abra '
+                  'la cámara.',
+              valores: DelegadoMediaPipe.values,
+              notificador: DiagnosticoLatencia.delegado,
+              texto: (v) => v.etiqueta,
+            ),
+            _selector<ModeloMediaPipe>(
+              etiqueta: 'Modelo',
+              ayuda: 'Holistic es el del producto. Separado usa Pose lite + '
+                  'Hand (sin cara): para comparar inferencia y FPS. Aplica '
+                  'la próxima vez que se abra la cámara.',
+              valores: ModeloMediaPipe.values,
+              notificador: DiagnosticoLatencia.modelo,
+              texto: (v) => v.etiqueta,
+            ),
+            _selector<FpsCamara>(
+              etiqueta: 'FPS de la cámara',
+              ayuda: 'Máx fijo: el rango fijo más alto (hasta 60) para acortar '
+                  'exposición y cola de la cámara. Auto: lo que decida '
+                  'Android. Aplica al abrir la cámara.',
+              valores: FpsCamara.values,
+              notificador: DiagnosticoLatencia.fps,
+              texto: (v) => v.etiqueta,
+            ),
+            _selector<VistaPreviaCamara>(
+              etiqueta: 'Vista previa de la cámara',
+              ayuda: 'Chica limita la imagen de la cámara a 640×480 (menos '
+                  'carga); Auto deja la que elija CameraX. Aplica al abrir '
+                  'la cámara.',
+              valores: VistaPreviaCamara.values,
+              notificador: DiagnosticoLatencia.vistaPrevia,
+              texto: (v) => v.etiqueta,
+            ),
+            const Divider(height: 32),
           ],
           _titulo('Cámara'),
           SwitchListTile(
@@ -390,6 +441,36 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
             ),
           ),
           const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  Widget _selector<T>({
+    required String etiqueta,
+    required String ayuda,
+    required List<T> valores,
+    required ValueNotifier<T> notificador,
+    required String Function(T) texto,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(etiqueta),
+          _explicacion(ayuda),
+          ValueListenableBuilder<T>(
+            valueListenable: notificador,
+            builder: (_, actual, __) => SegmentedButton<T>(
+              segments: [
+                for (final v in valores)
+                  ButtonSegment<T>(value: v, label: Text(texto(v))),
+              ],
+              selected: {actual},
+              onSelectionChanged: (s) => notificador.value = s.first,
+            ),
+          ),
         ],
       ),
     );

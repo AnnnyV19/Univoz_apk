@@ -4938,14 +4938,13 @@ void main() {
     // mismos nombres que esta pagina ya importaba de el.
     // ---------------------------------------------------------------------
     // ---- inicio rig_math.mjs (antes importado por separado) ----
-    const {chooseThumbBoneAxis, createFastFingerAngleFilter, createAdaptiveMotionCalibrator, createAdaptivePoseScheduler, createResponsiveRigFilter, createThumbCalibration, measureThumbPose, measureFingerLag, solveThumbPose} = (() => {
+    const {chooseThumbBoneAxis, createFastFingerAngleFilter, createMotionMeter, createAdaptivePoseScheduler, createThumbCalibration, measureThumbPose, measureFingerLag, solveThumbPose} = (() => {
       const FRAME_DIM = 152;
       const OFF_LOC_LEFT = 24;
       const OFF_LOC_RIGHT = 27;
       const OFF_PRES_LEFT = 30;
       const OFF_PRES_RIGHT = 31;
       const OFF_SHAPE_LEFT = 32;
-      const OFF_SHAPE_RIGHT = 92;
 
       const clamp = (value, min = 0, max = 1) =>
         Math.max(min, Math.min(max, Number(value)));
@@ -5241,311 +5240,44 @@ void main() {
         return Math.abs(value - center) / sigma > 3.5;
       }
 
-      function createResponsiveRigFilter(options = {}) {
-        const configs = {
-          body: {minCutoff: 1.5, beta: .05, jump: 1.0, intentional: .08, alpha: .72},
-          wrist: {minCutoff: 3, beta: .12, jump: 1.0, intentional: .06, alpha: .85},
-          shape: {minCutoff: 5, beta: .25, jump: 2.0, intentional: .08, alpha: .92},
-        };
-        const deadbands = {
-          body: Math.max(0, Number(options.deadbands?.body ?? .003)),
-          wrist: Math.max(0, Number(options.deadbands?.wrist ?? .004)),
-          shape: Math.max(0, Number(options.deadbands?.shape ?? 0)),
-          presence: 0,
-        };
+      /**
+       * Puntaje de movimiento entre frames crudos consecutivos (Traducir corta
+       * senas con el, y el panel de la camara web lo muestra). Es lo unico que
+       * quedo del filtro 152D en vivo: el suavizado visual es solo el de salida
+       * (rig_avatar_state createOutputSmoother). Umbrales = el movimiento minimo
+       * "intencional" de cada grupo, en unidades del vector.
+       */
+      function createMotionMeter() {
+        const umbral = {body: .08, wrist: .06, shape: .08, presence: .5};
         let previous = null;
-        let previousRaw = null;
-        let previousTime = 0;
-        let filters = [];
-        let histories = [];
-        let jumpStreak = [];
-
-        const emptyMotion = () => ({
-          motionScore: 0,
-          fingerMotionScore: 0,
+        const quieto = () => ({
+          motionScore: 0, fingerMotionScore: 0,
           motionByGroup: {body: 0, wrist: 0, shape: 0, presence: 0},
-          intentionalMotion: false,
-          quiet: true,
+          intentionalMotion: false, quiet: true,
         });
-        const motionDiagnostics = (frame) => {
-          if (!previousRaw) return emptyMotion();
-          const sums = {body: 0, wrist: 0, shape: 0, presence: 0};
-          const thresholds = {
-            body: Math.max(deadbands.body * 2, configs.body.intentional),
-            wrist: Math.max(deadbands.wrist * 2, configs.wrist.intentional),
-            shape: configs.shape.intentional,
-            presence: .5,
-          };
-          for (let i = 0; i < FRAME_DIM; i++) {
-            const group = groupFor(i);
-            const delta = Math.abs(Number(frame[i]) - previousRaw[i]);
-            sums[group] += delta ** 2;
-          }
-          const motionByGroup = Object.fromEntries(Object.keys(sums).map((group) => {
-            // Vector norm avoids one noisy coordinate turning whole body into motion.
-            return [group, clamp(Math.sqrt(sums[group]) / thresholds[group])];
-          }));
-          // Presence flags describe detector availability, not user motion. Shape
-          // has its own fast path; body score controls torso/arm deadband.
-          const motionScore = Math.max(motionByGroup.body, motionByGroup.wrist);
-          return {
-            motionScore,
-            fingerMotionScore: motionByGroup.shape,
-            motionByGroup,
-            intentionalMotion: motionScore >= .8,
-            quiet: motionScore < .25,
-          };
-        };
-
-        const reset = () => {
-          previous = null;
-          previousRaw = null;
-          previousTime = 0;
-          filters = [];
-          histories = [];
-          jumpStreak = [];
-        };
-
-        const setDeadbands = (next = {}) => {
-          for (const group of ['body', 'wrist', 'shape']) {
-            const value = Number(next[group]);
-            if (Number.isFinite(value) && value >= 0) deadbands[group] = value;
-          }
-          return {...deadbands};
-        };
-
-        const filter = (frame, timestampMs, quality = 1) => {
-          if (!Array.isArray(frame) || frame.length !== FRAME_DIM ||
-              frame.some((value) => !Number.isFinite(Number(value)))) return null;
-          const t = Number(timestampMs);
-          if (!previous) {
-            previous = frame.map(Number);
-            previousRaw = frame.map(Number);
-            previousTime = Number.isFinite(t) ? t : 0;
-            filters = Array.from({length: FRAME_DIM}, (_, index) => {
-              const group = groupFor(index);
-              return group === 'presence' ? null : createOneEuroFilter({
-                minCutoff: configs[group].minCutoff,
-                beta: configs[group].beta,
-                intentionalAlpha: configs[group].alpha,
-              });
-            });
-            histories = frame.map((value) => [Number(value)]);
-            jumpStreak = Array(FRAME_DIM).fill(0);
-            return {frame: previous.slice(), diagnostics: {
-              madOutliers: [], madRepaired: [], jumpRejected: [], deadbandHeld: 0,
-              delayMs: 0, rawToFilteredRms: 0, timestampRejected: false,
-              ...emptyMotion(),
-            }};
-          }
-          if (!Number.isFinite(t) || t <= previousTime) {
-            return {frame: previous.slice(), diagnostics: {
-              madOutliers: [], madRepaired: [], jumpRejected: [], deadbandHeld: 0,
-              delayMs: 0, rawToFilteredRms: 0, timestampRejected: true,
-              ...emptyMotion(),
-            }};
-          }
-
-          const dtMs = clamp(t - previousTime, 1, 200);
-          const motion = motionDiagnostics(frame);
-          const output = previous.slice();
-          const madOutliers = [];
-          const madRepaired = [];
-          const jumpRejected = [];
-          let deadbandHeld = 0;
-          const delays = [];
-          const presentLeft = Number(frame[OFF_PRES_LEFT]) >= .5;
-          const presentRight = Number(frame[OFF_PRES_RIGHT]) >= .5;
-          for (let i = 0; i < FRAME_DIM; i++) {
-            const group = groupFor(i);
-            const value = Number(frame[i]);
-            if (group === 'presence') {
-              output[i] = value >= .5 ? 1 : 0;
-              continue;
-            }
-            const belongsLeft = (i >= OFF_LOC_LEFT && i < OFF_LOC_LEFT + 3) ||
-              (i >= OFF_SHAPE_LEFT && i < OFF_SHAPE_RIGHT);
-            const belongsRight = (i >= OFF_LOC_RIGHT && i < OFF_LOC_RIGHT + 3) ||
-              i >= OFF_SHAPE_RIGHT;
-            if ((belongsLeft && !presentLeft) || (belongsRight && !presentRight)) continue;
-
-            const history = histories[i];
-            const madOutlier = madState(history, value);
-            if (madOutlier) madOutliers.push(i);
-            history.push(value);
-            if (history.length > 5) history.shift();
-
-            // A quiet group cannot move the avatar. This catches coordinated small
-            // calibration drift while still letting MAD observe the sample first.
-            if ((group === 'body' || group === 'wrist') &&
-                motion.motionByGroup[group] < .25) {
-              output[i] = previous[i];
-              deadbandHeld++;
-              continue;
-            }
-
-            // A quiet isolated deviation is more likely detector noise than user
-            // motion. Keep raw untouched, but hold visual state before One Euro so
-            // the spike cannot start a visible excursion. Intentional group motion
-            // bypasses this repair and remains responsive.
-            const groupIntentional = group === 'shape'
-              ? motion.fingerMotionScore >= .8 : motion.motionScore >= .8;
-            const repairThreshold = Math.max(deadbands[group] ?? 0, .005);
-            if (madOutlier && !groupIntentional &&
-                Math.abs(value - previous[i]) > repairThreshold) {
-              output[i] = previous[i];
-              madRepaired.push(i);
-              continue;
-            }
-
-            // Finger shape stays raw here. Filtering XYZ before deriving joint
-            // angles adds latency and bends chains. moverMano filters 15 angles.
-            if (group === 'shape') {
-              output[i] = value;
-              continue;
-            }
-
-            const cfg = configs[group];
-            const jump = Math.abs(value - previousRaw[i]) > cfg.jump;
-            jumpStreak[i] = jump ? jumpStreak[i] + 1 : 0;
-            if (jump && jumpStreak[i] === 1) {
-              jumpRejected.push(i);
-              continue;
-            }
-            const intentional = Math.abs(value - previous[i]) >= cfg.intentional;
-            output[i] = filters[i].filter(value, t, quality, intentional);
-            const deadband = deadbands[group] ?? 0;
-            if (deadband > 0 &&
-                Math.abs(output[i] - previous[i]) < deadband &&
-                Math.abs(value - previous[i]) <= deadband * 2) {
-              output[i] = previous[i];
-              deadbandHeld++;
-            }
-            const rawVelocity = Math.abs(value - previousRaw[i]) / (dtMs / 1000);
-            if (rawVelocity > .01) {
-              delays.push(Math.min(500, Math.abs(value - output[i]) / rawVelocity * 1000));
-            }
-          }
-          const error = output.reduce((sum, value, index) =>
-            sum + (value - Number(frame[index])) ** 2, 0);
-          previous = output;
-          previousRaw = frame.map(Number);
-          previousTime = t;
-          return {frame: output.slice(), diagnostics: {
-            madOutliers,
-            madRepaired,
-            jumpRejected,
-            deadbandHeld,
-            delayMs: median(delays),
-            rawToFilteredRms: Math.sqrt(error / FRAME_DIM),
-            timestampRejected: false,
-            ...motion,
-          }};
-        };
-        return {filter, reset, setDeadbands, getDeadbands: () => ({...deadbands})};
-      }
-
-      const calibrationGroups = {
-        bodyLeft: [0, 1, 2, 6, 7, 8, 12, 13, 14, 18, 19, 20],
-        bodyRight: [3, 4, 5, 9, 10, 11, 15, 16, 17, 21, 22, 23],
-        wristLeft: [24, 25, 26],
-        wristRight: [27, 28, 29],
-      };
-
-      function robustSigma(values) {
-        if (!values.length) return 0;
-        const center = median(values);
-        return 1.4826 * median(values.map((value) => Math.abs(value - center)));
-      }
-
-      /** Automatic quiet-state calibration for body/wrist deadbands. */
-      function createAdaptiveMotionCalibrator(options = {}) {
-        const warmupMs = Math.max(0, Number(options.warmupMs) || 1500);
-        const minSamples = Math.max(1, Math.floor(Number(options.minSamples) || 15));
-        const base = {
-          body: Math.max(0, Number(options.deadbands?.body ?? .003)),
-          wrist: Math.max(0, Number(options.deadbands?.wrist ?? .004)),
-        };
-        const samples = {bodyLeft: [], bodyRight: [], wristLeft: [], wristRight: []};
-        let previous = null;
-        let previousTime = null;
-        let startedAt = null;
-        let locked = false;
-        let state = 'WARMUP';
-        let deadbands = {...base};
-
-        const reset = () => {
-          for (const values of Object.values(samples)) values.length = 0;
-          previous = null;
-          previousTime = null;
-          startedAt = null;
-          locked = false;
-          state = 'WARMUP';
-          deadbands = {...base};
-        };
-
-        const snapshot = () => {
-          const noise = {
-            bodyLeft: robustSigma(samples.bodyLeft),
-            bodyRight: robustSigma(samples.bodyRight),
-            wristLeft: robustSigma(samples.wristLeft),
-            wristRight: robustSigma(samples.wristRight),
-          };
-          noise.body = Math.max(noise.bodyLeft, noise.bodyRight);
-          noise.wrist = Math.max(noise.wristLeft, noise.wristRight);
-          return {
-            state,
-            locked,
-            deadbands: {...deadbands},
-            noise,
-            samples: {
-              body: samples.bodyLeft.length + samples.bodyRight.length,
-              wrist: samples.wristLeft.length + samples.wristRight.length,
-            },
-          };
-        };
-
-        const update = (frame, timestampMs, motionScore = 0) => {
-          const values = Array.isArray(frame) ? frame.map(Number) : null;
-          const t = Number(timestampMs);
-          if (!values || values.length !== FRAME_DIM ||
-              values.some((value) => !Number.isFinite(value)) || !Number.isFinite(t) ||
-              (previousTime != null && t <= previousTime)) return snapshot();
-          if (startedAt == null) startedAt = t;
-          const score = Number.isFinite(Number(motionScore)) ? Number(motionScore) : 0;
-          if (previous) {
-            const delta = (indices) => Math.sqrt(indices.reduce((sum, index) =>
-              sum + (values[index] - previous[index]) ** 2, 0) / indices.length);
-            if (score < .25) {
-              for (const [name, indices] of Object.entries(calibrationGroups)) {
-                const value = delta(indices);
-                const list = samples[name];
-                list.push(value);
-                if (list.length > 120) list.shift();
+        return {
+          reset() { previous = null; },
+          update(frame) {
+            if (!Array.isArray(frame) || frame.length !== FRAME_DIM) return quieto();
+            const out = previous ? (() => {
+              const sums = {body: 0, wrist: 0, shape: 0, presence: 0};
+              for (let i = 0; i < FRAME_DIM; i++) {
+                sums[groupFor(i)] += (Number(frame[i]) - previous[i]) ** 2;
               }
-            }
-          }
-          previous = values;
-          previousTime = t;
-          const quiet = score < .25;
-          state = quiet ? (locked ? 'LOCKED' : 'WARMUP') : 'MOTION';
-          const elapsed = t - startedAt;
-          const enough = samples.bodyLeft.length >= minSamples &&
-            samples.bodyRight.length >= minSamples &&
-            samples.wristLeft.length >= minSamples &&
-            samples.wristRight.length >= minSamples;
-          if (!locked && quiet && elapsed >= warmupMs && enough) locked = true;
-          if (locked && quiet) {
-            const current = snapshot().noise;
-            deadbands = {
-              body: Math.max(base.body, current.body * 4),
-              wrist: Math.max(base.wrist, current.wrist * 4),
-            };
-            state = 'LOCKED';
-          }
-          return snapshot();
+              // Norma del grupo: una sola coordenada ruidosa no vuelve "movimiento"
+              // a todo el cuerpo.
+              const motionByGroup = Object.fromEntries(Object.keys(sums).map((g) =>
+                [g, clamp(Math.sqrt(sums[g]) / umbral[g])]));
+              // La presencia describe al detector, no al usuario: no cuenta.
+              const motionScore = Math.max(motionByGroup.body, motionByGroup.wrist);
+              return {motionScore, fingerMotionScore: motionByGroup.shape,
+                motionByGroup, intentionalMotion: motionScore >= .8,
+                quiet: motionScore < .25};
+            })() : quieto();
+            previous = frame.map(Number);
+            return out;
+          },
         };
-        return {update, reset, snapshot};
       }
 
       /** Pose stride controller; hands/fingers remain on every input frame. */
@@ -5594,7 +5326,7 @@ void main() {
         };
         return {update, shouldRun, reset, getStride: () => stride};
       }
-      return {chooseThumbBoneAxis, createFastFingerAngleFilter, createAdaptiveMotionCalibrator, createAdaptivePoseScheduler, createResponsiveRigFilter, createThumbCalibration, measureThumbPose, measureFingerLag, solveThumbPose};
+      return {chooseThumbBoneAxis, createFastFingerAngleFilter, createMotionMeter, createAdaptivePoseScheduler, createThumbCalibration, measureThumbPose, measureFingerLag, solveThumbPose};
     })();
     // ---- fin rig_math.mjs ----
 
@@ -8906,7 +8638,7 @@ void main() {
     // ---- fin rig_holistic_worker.mjs ----
 
     // ---- inicio rig_avatar_state.mjs (antes importado por separado) ----
-    const {AVATAR_STATES, smoothingAlpha, blendWeight, avatarStateFrom, createAvatarStateTracker, shouldSolveFrame, slerpQuaternion, createPoseTransitions, adaptiveTauMs, createOutputSmoother} = (() => {
+    const {AVATAR_STATES, smoothingAlpha, blendWeight, avatarStateFrom, createAvatarStateTracker, shouldSolveFrame, slerpQuaternion, createPoseTransitions, adaptiveTauMs, kGruposSuavizado, kModosSuavizado, normalizarModoSuavizado, createOutputSmoother} = (() => {
       // Estado del avatar y transiciones suaves de pose.
       //
       // El visor decidia "volver a reposo" escribiendo la pose de reposo de golpe
@@ -9124,6 +8856,31 @@ void main() {
         return tauMaxMs + (tauMinMs - tauMaxMs) * k;
       }
 
+      // Parametros del suavizado de salida por grupo de huesos. Es el UNICO
+      // suavizado de la pose en vivo (el One Euro 152D, la zona muerta y su
+      // calibrador se quitaron). Medido con sesiones reales a 12 FPS contra la
+      // pose cruda: anade ~22 ms de retraso en brazos y munecas (antes ~49 ms) y el
+      // temblor en reposo queda en ~1.3x el de antes. tauMaxMs es la perilla: mas
+      // bajo = menos retraso y mas temblor. Dedos: la forma de la mano en LSM
+      // necesita respuesta rapida.
+      const kGrados = Math.PI / 180;
+      const kGruposSuavizado = {
+        cuerpo: {tauMinMs: 36, tauMaxMs: 60, fastRad: 15 * kGrados,
+          maxSpeedRadS: 360 * kGrados},
+        brazo: {tauMinMs: 30, tauMaxMs: 60, fastRad: 20 * kGrados,
+          maxSpeedRadS: 900 * kGrados},
+        mano: {tauMinMs: 30, tauMaxMs: 60, fastRad: 25 * kGrados,
+          maxSpeedRadS: 720 * kGrados},
+        dedos: {tauMinMs: 15, tauMaxMs: 45, fastRad: 20 * kGrados,
+          maxSpeedRadS: 1440 * kGrados},
+      };
+
+      // Modos del toggle de desarrollador "Suavizado del avatar" (window.
+      // configurarSuavizado). Cualquier otro valor cae a 'normal'.
+      const kModosSuavizado = ['normal', 'off'];
+      const normalizarModoSuavizado = (modo) =>
+        kModosSuavizado.includes(modo) ? modo : 'normal';
+
       // Las cuentas de abajo son las de normalize/slerpQuaternion/quaternionGap
       // con escalares y buffers reutilizados: mismas operaciones en el mismo
       // orden y sin crear arreglos por tick. Solo el salto de huesos quietos
@@ -9273,19 +9030,23 @@ void main() {
           },
         };
       }
-      return {AVATAR_STATES, smoothingAlpha, blendWeight, avatarStateFrom, createAvatarStateTracker, shouldSolveFrame, slerpQuaternion, createPoseTransitions, adaptiveTauMs, createOutputSmoother};
+      return {AVATAR_STATES, smoothingAlpha, blendWeight, avatarStateFrom, createAvatarStateTracker, shouldSolveFrame, slerpQuaternion, createPoseTransitions, adaptiveTauMs, kGruposSuavizado, kModosSuavizado, normalizarModoSuavizado, createOutputSmoother};
     })();
     // ---- fin rig_avatar_state.mjs ----
 
     // ---- inicio rig_device_tier.mjs (antes importado por separado) ----
-    const {TIER_RENDER, renderBudgetForTier, shouldRenderFrame, IDLE_FRAME_INTERVAL_MS, idleBudgetFor} = (() => {
+    const {TIER_RENDER, renderBudgetForTier, shouldRenderFrame, IDLE_FRAME_INTERVAL_MS, idleBudgetFor, SLOW_FRAME_INTERVAL_MS, kTickLentoMs, kTickRapidoMs, createRenderGovernor} = (() => {
       // Presupuesto de render por nivel de dispositivo (DeviceTier.kt manda el
       // nivel en sourceMeta.tier). Spec:
       // docs/superpowers/specs/2026-10-05-android-niveles-dispositivo-design.md
+      //
+      // El nivel (que sigue la carga de MediaPipe) solo decide la resolucion del
+      // lienzo. El ritmo de dibujo NO sale de el: es el de la pantalla mientras el
+      // tick propio del visor quepa en el cuadro (createRenderGovernor).
 
       const TIER_RENDER = Object.freeze({
-        bajo: Object.freeze({frameIntervalMs: 1000 / 30, pixelRatio: .75}),
-        medio: Object.freeze({frameIntervalMs: 1000 / 30, pixelRatio: 1}),
+        bajo: Object.freeze({frameIntervalMs: 1000 / 60, pixelRatio: .75}),
+        medio: Object.freeze({frameIntervalMs: 1000 / 60, pixelRatio: 1}),
         alto: Object.freeze({frameIntervalMs: 1000 / 60, pixelRatio: 1.25}),
       });
 
@@ -9305,21 +9066,53 @@ void main() {
         return !lastRenderAt || now - lastRenderAt >= budget.frameIntervalMs - 2;
       }
 
+      // Mismo presupuesto con un intervalo minimo mayor; objeto cacheado por
+      // (presupuesto, intervalo) para comparar por identidad.
+      const topes = new Map();
+      function conIntervaloMinimo(budget, minMs) {
+        let porMs = topes.get(budget);
+        if (!porMs) topes.set(budget, porMs = new Map());
+        if (!porMs.has(minMs)) {
+          porMs.set(minMs, Object.freeze({
+            frameIntervalMs: Math.max(budget.frameIntervalMs, minMs),
+            pixelRatio: budget.pixelRatio,
+          }));
+        }
+        return porMs.get(minMs);
+      }
+
       // En reposo (sin frames en vivo, sin transiciones ni plantilla) el avatar
       // solo parpadea: 15 FPS bastan y el telefono no dibuja de mas. Mismo
       // pixelRatio que el nivel para que no cambie el tamano del lienzo.
       const IDLE_FRAME_INTERVAL_MS = 1000 / 15;
-      const idleBudgets = new Map();
-      function idleBudgetFor(budget) {
-        if (!idleBudgets.has(budget)) {
-          idleBudgets.set(budget, Object.freeze({
-            frameIntervalMs: Math.max(budget.frameIntervalMs, IDLE_FRAME_INTERVAL_MS),
-            pixelRatio: budget.pixelRatio,
-          }));
-        }
-        return idleBudgets.get(budget);
+      const idleBudgetFor = (budget) =>
+        conIntervaloMinimo(budget, IDLE_FRAME_INTERVAL_MS);
+
+      // Freno por costo propio: si el p95 de los ultimos 60 ticks (JS + envio del
+      // dibujo) pasa de kTickLentoMs (no cabe en un cuadro de 60 Hz), el visor baja
+      // a 30 FPS; vuelve a la pantalla por debajo de kTickRapidoMs (histeresis, para
+      // no oscilar en el borde).
+      const SLOW_FRAME_INTERVAL_MS = 1000 / 30;
+      const kTickLentoMs = 16;
+      const kTickRapidoMs = 12;
+      function createRenderGovernor(ventana = 60) {
+        const ticks = new Float32Array(ventana);
+        let n = 0;
+        let lento = false;
+        return {
+          tick(tickMs) {
+            ticks[n++ % ventana] = tickMs;
+            // El p95 se recalcula cada 15 ticks (copia ordenada de 60 numeros).
+            if (n < ventana || n % 15) return;
+            const p95 = Float32Array.from(ticks).sort()[Math.floor(ventana * .95)];
+            lento = p95 > (lento ? kTickRapidoMs : kTickLentoMs);
+          },
+          get lento() { return lento; },
+          budgetFor: (budget) => lento
+            ? conIntervaloMinimo(budget, SLOW_FRAME_INTERVAL_MS) : budget,
+        };
       }
-      return {TIER_RENDER, renderBudgetForTier, shouldRenderFrame, IDLE_FRAME_INTERVAL_MS, idleBudgetFor};
+      return {TIER_RENDER, renderBudgetForTier, shouldRenderFrame, IDLE_FRAME_INTERVAL_MS, idleBudgetFor, SLOW_FRAME_INTERVAL_MS, kTickLentoMs, kTickRapidoMs, createRenderGovernor};
     })();
     // ---- fin rig_device_tier.mjs ----
 
@@ -10730,6 +10523,102 @@ void main() {
     })();
     // ---- fin rig_encuadre.mjs ----
 
+    // ---- inicio rig_latency_diag.mjs (antes importado por separado) ----
+    const {createSeries, createLatencyDiag} = (() => {
+      // Diagnostico de latencia del visor embebido (Android). Solo mide; el visor
+      // lo crea unicamente cuando Dart enciende window.configurarLatencia(true)
+      // (modo desarrollador), asi que apagado no cuesta nada. Cada serie es un
+      // anillo de Float64Array: sin arreglos nuevos por frame. drain() se llama
+      // una vez por segundo y arma el resumen que viaja a Dart como 'lat:<json>'
+      // (Dart lo imprime con la etiqueta UnivozLat).
+
+      const kCapacidad = 256;
+
+      /** Anillo de muestras en ms con resumen p50/p95/max. */
+      function createSeries(capacity = kCapacidad) {
+        const buf = new Float64Array(capacity);
+        let count = 0;
+        let next = 0;
+        return {
+          push(ms) {
+            if (!Number.isFinite(ms)) return;
+            buf[next] = ms;
+            next = (next + 1) % capacity;
+            if (count < capacity) count++;
+          },
+          get size() { return count; },
+          // Copia y ordena: solo corre en drain (1 vez por segundo).
+          summary() {
+            if (!count) return {n: 0, p50: null, p95: null, max: null};
+            const sorted = Array.from(buf.subarray(0, count)).sort((a, b) => a - b);
+            const at = (q) => sorted[Math.min(count - 1, Math.max(0, Math.ceil(count * q) - 1))];
+            const r = (x) => Math.round(x * 10) / 10;
+            return {n: count, p50: r(at(.5)), p95: r(at(.95)), max: r(sorted[count - 1])};
+          },
+          reset() { count = 0; next = 0; },
+        };
+      }
+
+      function createLatencyDiag({capacity = kCapacidad} = {}) {
+        const apply = createSeries(capacity);   // aplicarFrameVivo completo
+        const tick = createSeries(capacity);    // un tick de animar() con render
+        const shown = createSeries(capacity);   // frame recibido -> primer render
+        let framesIn = 0;
+        let ticks = 0;
+        let superseded = 0;                     // frames pisados antes de verse
+        let latestId = -1;
+        let latestAt = 0;
+        let latestShown = true;
+        let startedAt = null;
+
+        const reset = () => {
+          apply.reset(); tick.reset(); shown.reset();
+          framesIn = 0; ticks = 0; superseded = 0;
+        };
+
+        return {
+          /** Fin de aplicarFrameVivo: [ms] que tardo y el instante de llegada. */
+          frameApplied(frameId, receivedAtMs, applyMs) {
+            if (startedAt === null) startedAt = receivedAtMs;
+            framesIn++;
+            apply.push(applyMs);
+            if (!latestShown) superseded++;
+            latestId = frameId;
+            latestAt = receivedAtMs;
+            latestShown = false;
+          },
+          /** Fin de un tick de animar(): [tickMs] de trabajo y [nowMs] al terminar. */
+          tickDone(tickMs, nowMs) {
+            ticks++;
+            tick.push(tickMs);
+            if (!latestShown) {
+              latestShown = true;
+              shown.push(nowMs - latestAt);
+            }
+          },
+          drain(nowMs) {
+            const windowMs = startedAt === null ? 0 : Math.max(1, nowMs - startedAt);
+            const out = {
+              frames_in: framesIn,
+              ticks,
+              superseded,
+              apply_ms: apply.summary(),
+              tick_ms: tick.summary(),
+              shown_ms: shown.summary(),
+              window_ms: Math.round(windowMs),
+            };
+            startedAt = nowMs;
+            reset();
+            return out;
+          },
+          reset,
+          get latestFrameId() { return latestId; },
+        };
+      }
+      return {createSeries, createLatencyDiag};
+    })();
+    // ---- fin rig_latency_diag.mjs ----
+
     // ---- fin modulos inline ----
 
 
@@ -10818,9 +10707,6 @@ void main() {
       processP95Ms: 0,
       framesSkipped: 0,
       poseStride: 2,
-      calibrationState: 'WARMUP',
-      bodyDeadband: .003,
-      wristDeadband: .004,
       handHolds: 0,
       handRecoveries: 0,
       handSwaps: 0,
@@ -11001,15 +10887,12 @@ void main() {
         `${webCameraState.latencyP99Ms.toFixed(1)} ms · ` +
         `drop ${webCameraState.framesSkipped || 0} · ` +
         `Q ${Math.round(webCameraState.quality * 100)}% · ` +
-        `delay ${Number(ultimoDiagnosticoFiltro?.delayMs ?? 0).toFixed(1)} ms · ` +
-        `deadband ${ultimoDiagnosticoFiltro?.deadbandHeld ?? 0} · ` +
         `fingerLag ${Math.max(
           ultimoDiagnosticoAngulos.left?.fingerLagMs ?? 0,
           ultimoDiagnosticoAngulos.right?.fingerLagMs ?? 0).toFixed(1)} ms · ` +
         `skew ${Number(ultimoSourceMeta?.source_skew_ms ?? 0).toFixed(0)} ms · ` +
         `avatar ${webCameraState.avatarState} · ` +
-        `cal ${webCameraState.calibrationState} ${Number(webCameraState.bodyDeadband).toFixed(4)}/` +
-        `${Number(webCameraState.wristDeadband).toFixed(4)} · stride ${webCameraState.poseStride} · ` +
+        `stride ${webCameraState.poseStride} · ` +
         `surf ${webCameraState.leftSurface}/${webCameraState.rightSurface} · ` +
         `holds/swaps ${webCameraState.handHolds}/${webCameraState.handSwaps} · ` +
         `${ultimoTrackingWeb?.contact?.active ? 'contacto' : 'separadas'} · ` +
@@ -11100,15 +10983,18 @@ void main() {
           right: rigThumbState.right ? {...rigThumbState.right} : null,
         },
         filter: {
-          delay_ms: Number(ultimoDiagnosticoFiltro?.delayMs ?? 0),
+          // Solo queda el filtro de angulos de los dedos (el 152D se quito).
+          delay_ms: Math.max(ultimoDiagnosticoAngulos.left?.delayMs ?? 0,
+            ultimoDiagnosticoAngulos.right?.delayMs ?? 0),
           finger_lag_ms: Math.max(
             ultimoDiagnosticoAngulos.left?.fingerLagMs ?? 0,
             ultimoDiagnosticoAngulos.right?.fingerLagMs ?? 0),
-          raw_to_filtered_rms: Number(ultimoDiagnosticoFiltro?.rawToFilteredRms ?? 0),
-          mad_outliers: ultimoDiagnosticoFiltro?.madOutliers?.slice() ?? [],
-          mad_repaired: ultimoDiagnosticoFiltro?.madRepaired?.slice() ?? [],
+          raw_to_filtered_rms: Math.max(
+            ultimoDiagnosticoAngulos.left?.rawToFilteredRms ?? 0,
+            ultimoDiagnosticoAngulos.right?.rawToFilteredRms ?? 0),
+          mad_outliers: [...(ultimoDiagnosticoAngulos.left?.madOutliers ?? []),
+            ...(ultimoDiagnosticoAngulos.right?.madOutliers ?? [])],
           jump_rejected: [
-            ...(ultimoDiagnosticoFiltro?.jumpRejected?.slice() ?? []),
             ...(ultimoDiagnosticoAngulos.left?.jumpRejectedChains ?? []).map(
               (chain) => `left:${chain}`),
             ...(ultimoDiagnosticoAngulos.right?.jumpRejectedChains ?? []).map(
@@ -11785,25 +11671,16 @@ void main() {
     // segundo con render a 144 Hz). tau adaptativo por grupo: temblor =
     // tauMax, movimiento real = tauMin. Cabeza y cuello quedan fuera (la cara
     // ya se suaviza por render). ?suavizado=0 lo apaga para comparar.
+    // Es el UNICO suavizado de la pose en vivo (el One Euro 152D, la zona
+    // muerta y su calibrador se quitaron). Parametros: kGruposSuavizado.
     // ---------------------------------------------------------------------
     let suavizadoSalidaActivo = true;
     try {
       suavizadoSalidaActivo =
         new URLSearchParams(location.search).get('suavizado') !== '0';
     } catch (_) { /* sin URL: activo */ }
-    const kGrados = Math.PI / 180;
-    const kSuavizadoGrupos = {
-      cuerpo: {tauMinMs: 40, tauMaxMs: 90, fastRad: 15 * kGrados,
-        maxSpeedRadS: 360 * kGrados},
-      brazo: {tauMinMs: 30, tauMaxMs: 80, fastRad: 20 * kGrados,
-        maxSpeedRadS: 900 * kGrados},
-      mano: {tauMinMs: 30, tauMaxMs: 90, fastRad: 25 * kGrados,
-        maxSpeedRadS: 720 * kGrados},
-      // Dedos: la forma de la mano en LSM necesita respuesta rapida.
-      dedos: {tauMinMs: 15, tauMaxMs: 45, fastRad: 20 * kGrados,
-        maxSpeedRadS: 1440 * kGrados},
-    };
     const suavizadorSalida = createOutputSmoother();
+    const suavizadoSalidaPorUrl = suavizadoSalidaActivo;
     let huesosSuavizados = null;
     let ultimoSuavizadoMs = 0;
 
@@ -11817,7 +11694,7 @@ void main() {
         for (const nombre of huesosMano(lado).slice(1)) lista.push([nombre, 'dedos']);
       }
       return lista.map(([nombre, grupo]) => ({nombre,
-        params: kSuavizadoGrupos[grupo],
+        params: kGruposSuavizado[grupo],
         hueso: VRMHumanBoneName[nombre] ? bone(VRMHumanBoneName[nombre]) : null}))
         .filter(({hueso}) => hueso);
     }
@@ -11841,6 +11718,19 @@ void main() {
         suavizadorSalida.stepQuaternion(nombre, hueso.quaternion, dt, params);
       }
     }
+
+    // Toggle de desarrollador "Suavizado del avatar" (Dart, AvatarBridge).
+    //  'normal': el de arriba (respeta ?suavizado=0 si vino en la URL).
+    //  'off':    sin suavizado de salida ni filtro de angulos de los dedos
+    //            (webCameraState.smoothing=false): pose cruda, para ver el
+    //            retraso del tracking.
+    let modoSuavizado = 'normal';
+    window.configurarSuavizado = function (modo) {
+      modoSuavizado = normalizarModoSuavizado(modo);
+      const apagado = modoSuavizado === 'off';
+      suavizadoSalidaActivo = apagado ? false : suavizadoSalidaPorUrl;
+      webCameraState.smoothing = !apagado;
+    };
 
     function volviendoAReposo() {
       return transicionesPose.keys().some((clave) => clave.startsWith('reposo:'));
@@ -13150,15 +13040,11 @@ void main() {
     const kPtHombroI = 0, kPtHombroD = 1, kPtCodoI = 2, kPtCodoD = 3,
       kPtMunI = 4, kPtMunD = 5, kPtCaderaI = 6, kPtCaderaD = 7;
 
-    // Suavizado visual único y sensible a grupo. MAD solo informa; no
-    // sustituye movimientos válidos. Reconocimiento y grabación usan raw.
-    const responsiveRigFilter = createResponsiveRigFilter({
-      deadbands: {body: .003, wrist: .004, shape: 0},
-    });
-    const adaptiveMotionCalibrator = createAdaptiveMotionCalibrator({
-      warmupMs: 1500,
-      deadbands: {body: .003, wrist: .004},
-    });
+    // El frame 152D llega SIN filtro al solucionador: el suavizado visual es el
+    // de salida por hueso (suavizarSalida) y el de angulos de los dedos
+    // (handAngleFilters). Reconocimiento y grabacion usan raw. Lo unico que
+    // queda de la entrada es medir el movimiento (Traducir corta senas con el).
+    const medidorMovimiento = createMotionMeter();
     const adaptivePoseScheduler = createAdaptivePoseScheduler({
       minStride: 2, maxStride: 4, processLimitMs: 50,
     });
@@ -13183,22 +13069,16 @@ void main() {
       left: {madOutliers: [], jumpRejectedChains: [], delayMs: 0, fingerLagMs: 0},
       right: {madOutliers: [], jumpRejectedChains: [], delayMs: 0, fingerLagMs: 0},
     };
-    let ultimoDiagnosticoFiltro = {
-      madOutliers: [], madRepaired: [], jumpRejected: [], deadbandHeld: 0,
-      delayMs: 0, rawToFilteredRms: 0, timestampRejected: false,
-    };
-    let ultimoModoSuavizado = webCameraState.smoothing;
+    // Movimiento del frame crudo (rig_math createMotionMeter) para el panel y
+    // para Traducir; no modifica el frame.
+    let ultimoMovimiento = null;
     // Filtro de SignSpaceFrame (ver filtrarSignSpace). Declarado antes de
     // reiniciarFiltroWeb para que exista en cualquier reinicio temprano.
     const filtroSignSpace = createSignSpaceFilter();
     function reiniciarFiltroWeb() {
-      filtroFrameWeb = null;
-      filtroTimestampWeb = 0;
       filtroSignSpace.reset();
-      responsiveRigFilter.reset();
-      adaptiveMotionCalibrator.reset();
+      medidorMovimiento.reset();
       adaptivePoseScheduler.reset();
-      responsiveRigFilter.setDeadbands({body: .003, wrist: .004});
       for (const lado of ['left', 'right']) {
         for (const filtro of handAngleFilters[lado]) filtro.reset();
       }
@@ -13215,53 +13095,15 @@ void main() {
       }
       resetSafetyGates();
       invalidarFrameResuelto();
-      ultimoDiagnosticoFiltro = {
-        madOutliers: [], madRepaired: [], jumpRejected: [], deadbandHeld: 0,
-        delayMs: 0, rawToFilteredRms: 0, timestampRejected: false,
-        motionScore: 0, motionByGroup: {body: 0, wrist: 0, shape: 0, presence: 0},
-        fingerMotionScore: 0,
-        intentionalMotion: false, quiet: true,
-      };
-      ultimoModoSuavizado = webCameraState.smoothing;
+      ultimoMovimiento = null;
     }
 
-    function suavizarFrameWeb(frame, timestampMs) {
-      if (!Array.isArray(frame) || frame.length !== kFrameDim) return null;
-      if (webCameraState.smoothing !== ultimoModoSuavizado) {
-        reiniciarFiltroWeb();
-      }
-      const t = Number(timestampMs);
-      const confianza = typeof frameVivoQuality !== 'undefined' &&
-          Number(frameVivoQuality) > 0
-        ? Math.max(0, Math.min(1, Number(frameVivoQuality))) : 1;
-      const result = responsiveRigFilter.filter(frame, t, confianza);
-      if (!result) return null;
-      filtroFrameWeb = result.frame;
-      filtroTimestampWeb = Number.isFinite(t) ? t : 0;
-      ultimoDiagnosticoFiltro = result.diagnostics;
-      const calibration = adaptiveMotionCalibrator.update(
-        frame, t, result.diagnostics.motionScore);
-      responsiveRigFilter.setDeadbands(calibration.deadbands);
-      webCameraState.calibrationState = calibration.state;
-      webCameraState.bodyDeadband = calibration.deadbands.body;
-      webCameraState.wristDeadband = calibration.deadbands.wrist;
-      webCameraState.motionScore = Number(result.diagnostics.motionScore ?? 0);
-      webCameraState.fingerMotionScore = Number(
-        result.diagnostics.fingerMotionScore ?? 0);
-      webCameraState.motionQuiet = result.diagnostics.quiet === true;
-      if (result.diagnostics.timestampRejected) {
-        guardarAudit({
-          frame: frameVivoFrameId + 1,
-          timestampMs: performance.now(), stage: 'filter', joint: null,
-          score: 0, severity: 'error', state: 'REJECTED',
-          action: 'hold_last', code: 'stale_frame',
-        });
-      }
-      if (!webCameraState.smoothing) return frame.slice();
-      return result.frame.slice();
+    function medirMovimiento(frame) {
+      ultimoMovimiento = medidorMovimiento.update(frame);
+      webCameraState.motionScore = ultimoMovimiento.motionScore;
+      webCameraState.fingerMotionScore = ultimoMovimiento.fingerMotionScore;
+      webCameraState.motionQuiet = ultimoMovimiento.quiet;
     }
-
-    window.suavizarFrameWeb = suavizarFrameWeb;
 
     let colaFrames = [];
     let frameActual = 0;
@@ -13292,8 +13134,6 @@ void main() {
     let frameVivoExterno = false;
     let frameVivoStale = false;
     const kFrameStaleMs = 450;
-    let filtroFrameWeb = null;
-    let filtroTimestampWeb = 0;
 
     const kThumbCalibrationSteps = [
       {side: 'left', pose: 'open', text: 'Abre mano izquierda y extiende pulgar'},
@@ -13652,6 +13492,24 @@ void main() {
         safetyAjustes = {};
         safetyAjustesArticulaciones = {};
         if (perf) window.SenasChannel.postMessage('perf:' + JSON.stringify(perf));
+      }, 1000);
+    };
+    // Resumen de latencia del visor, 'lat:<json>' por SenasChannel una vez por
+    // segundo mientras este encendido (solo modo desarrollador, ver
+    // diagnostico_latencia.dart). Apagado no hay temporizador ni mediciones.
+    let latDiag = null;
+    let latTimer = null;
+    window.configurarLatencia = function (activa) {
+      if (latTimer) clearInterval(latTimer);
+      latTimer = null;
+      latDiag = null;
+      if (activa !== true || standaloneWeb || !window.SenasChannel) return;
+      latDiag = createLatencyDiag();
+      latTimer = setInterval(() => {
+        const resumen = latDiag.drain(performance.now());
+        if (!resumen.frames_in && !resumen.ticks) return;
+        resumen.suavizado = modoSuavizado;
+        window.SenasChannel.postMessage('lat:' + JSON.stringify(resumen));
       }, 1000);
     };
     function descargarSesionWeb() {
@@ -14123,7 +13981,6 @@ void main() {
         ' · válidos ' + s.validFrames +
         ' · lados: ' + (s.handAssignmentMode || 'none') +
         ' · stride ' + (s.poseStride || 2) +
-        ' · calib ' + (s.calibrationState || 'WARMUP') +
         (s.recording ? ' · grabando ' + s.recordedFrames + '/32' :
           s.lastSequenceFrames ? ' · secuencia lista' : '') +
         (s.stale ? ' · sin tracking' : '') +
@@ -14292,7 +14149,8 @@ void main() {
           frameVivoFrameId++;
           frameVivoSourceFrameId = sourceFrameId;
           frameVivoSourceSkewMs = Math.abs(timestampMs - poseTimestampMs);
-          frameVivo = suavizarFrameWeb(vectorRender ?? vector, timestampMs);
+          frameVivo = vectorRender ?? vector;
+          medirMovimiento(frameVivo);
           frameVivoTimestampMs = timestampMs;
           frameVivoLlegadaMs = ahoraValido;
         }
@@ -14980,9 +14838,6 @@ void main() {
         webCameraState.poseFps = 0;
         webCameraState.renderFps = 0;
         webCameraState.poseStride = adaptivePoseScheduler.getStride();
-        webCameraState.calibrationState = 'WARMUP';
-        webCameraState.bodyDeadband = .003;
-        webCameraState.wristDeadband = .004;
         webCameraState.leftSurface = 'unknown';
         webCameraState.rightSurface = 'unknown';
         webCameraState.handHolds = 0;
@@ -15041,9 +14896,6 @@ void main() {
       webHandCapture.reset();
       reiniciarFiltroWeb();
       webCameraState.poseStride = adaptivePoseScheduler.getStride();
-      webCameraState.calibrationState = 'WARMUP';
-      webCameraState.bodyDeadband = .003;
-      webCameraState.wristDeadband = .004;
       webCameraState.leftSurface = 'unknown';
       webCameraState.rightSurface = 'unknown';
       webCameraState.handHolds = 0;
@@ -15425,14 +15277,18 @@ void main() {
       movimientoParaDart = activo === true;
     };
 
-    window.aplicarFrameVivo = function (frameJson, timestampMs, quality,
-        renderFrameJson = null, sourceMetaJson = null) {
+    // Un solo JSON por frame (AvatarBridge.mostrarFrame): v = vector 152D de
+    // reconocimiento, r = el de render (muneca estabilizada), t, q (calidad) y
+    // los metadatos que el visor lee (cara, tier, seguimiento nativo...).
+    window.aplicarFrameVivo = function (payloadJson) {
       if (!vrm) return;
-      let v, renderV = null, sourceMeta = null;
+      let v, renderV, sourceMeta, timestampMs, quality;
       try {
-        v = JSON.parse(frameJson);
-        if (renderFrameJson) renderV = JSON.parse(renderFrameJson);
-        if (sourceMetaJson) sourceMeta = JSON.parse(sourceMetaJson);
+        sourceMeta = JSON.parse(payloadJson);
+        v = sourceMeta.v;
+        renderV = sourceMeta.r;
+        timestampMs = sourceMeta.t;
+        quality = sourceMeta.q;
       } catch (e) {
         rigAudit.record(createAuditSnapshot({
           frame: frameVivoFrameId + 1,
@@ -15518,11 +15374,7 @@ void main() {
       diagnosticPointIssues = [];
       diagnosticErrors = [];
       ultimoTrackingWeb = null;
-      ultimoSourceMeta = sourceMeta ?? {
-        pose_t: frameVivoTimestampMs,
-        hands_t: frameVivoTimestampMs,
-        source_skew_ms: 0,
-      };
+      ultimoSourceMeta = sourceMeta;
       if (skew.mode === 'project') {
         errorDiagnostico('fusion', 'source_skew', null, null, 'yellow');
       }
@@ -15540,12 +15392,13 @@ void main() {
           }));
         }
       }
-      frameVivo = suavizarFrameWeb(renderV, frameVivoTimestampMs);
+      frameVivo = renderV;
+      medirMovimiento(renderV);
       // Traducir (Android) corta las senas con el mismo quieto/movimiento
-      // adaptativo del laboratorio web: movimiento intencional del cuerpo o
-      // la muneca, o de los dedos, con alguna mano presente.
+      // del laboratorio web: movimiento intencional del cuerpo o la muneca,
+      // o de los dedos, con alguna mano presente.
       if (movimientoParaDart && window.SenasChannel) {
-        const d = ultimoDiagnosticoFiltro ?? {};
+        const d = ultimoMovimiento ?? {};
         const conMano = v[kOffPresL] >= .5 || v[kOffPresR] >= .5;
         const dedos = Number(d.fingerMotionScore ?? 0);
         const enMovimiento = conMano &&
@@ -15560,6 +15413,23 @@ void main() {
       registrarDiagnostico(v, frameVivo, frameVivoTimestampMs,
         frameVivoQuality, ultimoSourceMeta);
       if (diagnosticoActivo) pintarDiagnostico();
+    };
+
+    // Diagnostico de latencia (rig_latency_diag.mjs): null = apagado, y entonces
+    // esta envoltura solo llama a la funcion de arriba. Dart lo enciende con
+    // configurarLatencia(true) en modo desarrollador.
+    const aplicarFrameVivoBase = window.aplicarFrameVivo;
+    window.aplicarFrameVivo = function (payloadJson) {
+      if (!latDiag) {
+        aplicarFrameVivoBase(payloadJson);
+        return;
+      }
+      const t0 = performance.now();
+      const antes = frameVivoFrameId;
+      aplicarFrameVivoBase(payloadJson);
+      if (frameVivoFrameId !== antes) {
+        latDiag.frameApplied(frameVivoFrameId, t0, performance.now() - t0);
+      }
     };
 
     // El editor de pose de desarrollo (panel "Editor de pose", huesos y
@@ -15727,12 +15597,18 @@ void main() {
     }
 
     let ultimoRenderAt = 0;
+    // Ritmo de dibujo = el de la pantalla (rAF) mientras haya entrada en vivo
+    // y el tick propio quepa en el cuadro; solo el costo medido de este tick
+    // lo baja a 30 FPS, no el nivel de MediaPipe (tier).
+    const renderGovernor = createRenderGovernor();
     function animar(t) {
       requestAnimationFrame(animar);
       const presupuesto = avatarEnReposo()
-        ? idleBudgetFor(presupuestoRender) : presupuestoRender;
+        ? idleBudgetFor(presupuestoRender)
+        : renderGovernor.budgetFor(presupuestoRender);
       if (!shouldRenderFrame(ultimoRenderAt, t, presupuesto)) return;
       ultimoRenderAt = t;
+      const tickT0 = performance.now();
       const dt = ultimoT ? t - ultimoT : 16;
       ultimoT = t;
 
@@ -15863,6 +15739,9 @@ void main() {
       const renderStartedAt = performance.now();
       if (vrm) vrm.update(dt / 1000);
       renderer.render(scene, camera);
+      const ahoraTick = performance.now();
+      renderGovernor.tick(ahoraTick - tickT0);
+      if (latDiag) latDiag.tickDone(ahoraTick - tickT0, ahoraTick);
       if (!standaloneWeb) perfEmbebido.renderTick();
       if (standaloneWeb) {
         registrarTiempoWeb('render', performance.now() - renderStartedAt);

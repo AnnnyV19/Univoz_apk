@@ -23,7 +23,7 @@ void main() {
     expect(html, contains('fingerRenderState'));
     expect(html, contains('fingerLag'));
     expect(html, contains('rigAudit'));
-    expect(html, contains('deadbandHeld'));
+    expect(html, contains('createMotionMeter'));
     expect(html, contains('posarReposoBrazo'));
   });
 

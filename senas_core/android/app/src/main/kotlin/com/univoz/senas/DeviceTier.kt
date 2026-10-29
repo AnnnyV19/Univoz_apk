@@ -45,6 +45,14 @@ class DeviceTier(
          */
         const val CALENTAMIENTO_FRAMES = 30
         const val HISTERESIS_MS = 10_000L
+        /**
+         * Ventanas seguidas por encima del presupuesto para bajar. Con p95 de
+         * 60 muestras, 3 picos sueltos (GPU compartida con el visor, GC)
+         * bastaban para bajar y, como la bajada por inferencia no se
+         * recupera (techoInferencia), el S22+ quedaba en medio con p50 de
+         * 65-80 ms. Dos ventanas (~11 s) piden que el exceso se sostenga.
+         */
+        const val VENTANAS_SOSTENIDAS = 2
         const val RECUPERACION_MS = 30_000L
         /** PowerManager.THERMAL_STATUS_NONE / THERMAL_STATUS_MODERATE. */
         const val TERMICO_NINGUNO = 0
@@ -79,6 +87,24 @@ class DeviceTier(
             return if (tMs - siguienteMs > intervalo) tMs + intervalo else siguienteMs + intervalo
         }
 
+        /**
+         * Rango AE de camara para [modo] ("auto" | "30" | "max") entre los
+         * [disponibles] (CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES). null = no
+         * tocar (CameraX/HAL deciden). Un rango FIJO impide que AE alargue la
+         * exposicion con poca luz y, a mas fps, acorta exposicion, lectura y
+         * cola del HAL: es la palanca de la latencia sensor->analizador.
+         * "max": el fijo mas alto hasta 60 (mas alla son modos de alta
+         * velocidad con otra resolucion).
+         */
+        fun rangoFps(modo: String?, disponibles: List<Pair<Int, Int>>): Pair<Int, Int>? {
+            val fijos = disponibles.filter { it.first == it.second }
+            return when (modo) {
+                "30" -> fijos.firstOrNull { it.first == 30 }
+                "max" -> fijos.filter { it.first in 1..60 }.maxByOrNull { it.first }
+                else -> null
+            }
+        }
+
         private fun p95(v: List<Double>): Double {
             val orden = v.sorted()
             return orden[(ceil(orden.size * .95).toInt() - 1).coerceIn(0, orden.size - 1)]
@@ -104,6 +130,11 @@ class DeviceTier(
 
     val config: TierConfig get() = config(nivel)
 
+    /** Por que cambio por ultima vez (para logcat); null si no ha cambiado. */
+    var causaCambio: String? = null
+        private set
+
+    private var ventanasExcedidas = 0
     private val muestras = ArrayList<Double>(VENTANA_FRAMES)
     private var porCalentar = calentamientoFrames.coerceAtLeast(0)
 
@@ -111,6 +142,7 @@ class DeviceTier(
     private fun cambio(ahoraMs: Long) {
         ultimoCambioMs = ahoraMs
         muestras.clear()
+        ventanasExcedidas = 0
         porCalentar = calentamientoFrames.coerceAtLeast(0)
     }
 
@@ -129,7 +161,13 @@ class DeviceTier(
         val medido = p95(muestras)
         muestras.clear()
         if (ahoraMs - ultimoCambioMs < HISTERESIS_MS) return false
-        if (medido <= config.presupuestoMs) return false
+        if (medido <= config.presupuestoMs) {
+            ventanasExcedidas = 0
+            return false
+        }
+        if (++ventanasExcedidas < VENTANAS_SOSTENIDAS) return false
+        causaCambio = "inferencia p95=%.0fms > %.0fms en %d ventanas seguidas"
+            .format(java.util.Locale.US, medido, config.presupuestoMs, ventanasExcedidas)
         if (nivel == Nivel.BAJO) {
             if (separado) return false
             separado = true
@@ -148,6 +186,7 @@ class DeviceTier(
         if (estado >= TERMICO_MODERADO) {
             ningunoDesdeMs = null
             if (nivel == Nivel.BAJO || ahoraMs - ultimoCambioMs < HISTERESIS_MS) return false
+            causaCambio = "termico=$estado"
             nivel = nivel.bajar()
             cambio(ahoraMs)
             return true
@@ -160,6 +199,7 @@ class DeviceTier(
         if (ahoraMs - desde < RECUPERACION_MS) return false
         if (nivel >= minOf(techo, techoInferencia)) return false
         if (ahoraMs - ultimoCambioMs < HISTERESIS_MS) return false
+        causaCambio = "termico=0 sostenido"
         nivel = nivel.subir()
         cambio(ahoraMs)
         ningunoDesdeMs = ahoraMs

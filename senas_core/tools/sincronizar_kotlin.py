@@ -20,7 +20,7 @@ DESTINO = os.path.normpath(os.path.join(
     HERE, "..", "..", "univoz", "android", "app", "src", "main", "kotlin"))
 ARCHIVOS = ["LandmarkPlugin.kt", "LandmarkEngine.kt", "HandTrackCoordinator.kt",
             "HandCandidateGate.kt", "CapturaManos.kt", "JsMath.kt", "DeviceTier.kt",
-            "DeviceProbe.kt", "VueloInferencia.kt"]
+            "DeviceProbe.kt", "VueloInferencia.kt", "LatenciaDiag.kt"]
 
 
 def main(check):

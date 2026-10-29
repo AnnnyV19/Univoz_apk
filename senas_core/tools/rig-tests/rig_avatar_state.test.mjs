@@ -8,6 +8,8 @@ import {
   createAvatarStateTracker,
   createOutputSmoother,
   createPoseTransitions,
+  kGruposSuavizado,
+  normalizarModoSuavizado,
   shouldSolveFrame,
   slerpQuaternion,
   smoothingAlpha,
@@ -197,4 +199,79 @@ test('a live frame is solved once, not on every render tick', () => {
   // reiniciados): el visor invalida la clave y el mismo frame se resuelve.
   assert.equal(shouldSolveFrame(null, {...clave}), true);
   assert.equal(shouldSolveFrame(undefined, {...clave}), true);
+});
+
+test('smoothing mode names fall back to normal', () => {
+  assert.equal(normalizarModoSuavizado('off'), 'off');
+  assert.equal(normalizarModoSuavizado('normal'), 'normal');
+  // 'rapido' se quito: el suavizado por defecto ya es ese.
+  assert.equal(normalizarModoSuavizado('rapido'), 'normal');
+  assert.equal(normalizarModoSuavizado('turbo'), 'normal');
+  assert.equal(normalizarModoSuavizado(undefined), 'normal');
+});
+
+// ---- el suavizado de salida es el unico en vivo: retraso y temblor ----
+// Entrada a 12 FPS (como el telefono) y salida a 60 Hz; la referencia es la
+// pose cruda tal como llega (mantenida hasta el frame siguiente).
+const kDt = 1000 / 60;
+const kDeg = Math.PI / 180;
+function simular(grupo, angulos12fps) {
+  const smoother = createOutputSmoother();
+  const ref = [];
+  const out = [];
+  const pasoTicks = 5; // 60 / 12
+  for (const a of angulos12fps) {
+    for (let k = 0; k < pasoTicks; k++) {
+      const q = smoother.step('hueso', qx(a * kDeg), kDt, kGruposSuavizado[grupo]);
+      ref.push(a);
+      out.push(angleOf(q) / kDeg);
+    }
+  }
+  return {ref, out};
+}
+// Retraso (ms) que maximiza la correlacion entre la referencia y la salida.
+function retrasoMs(ref, out) {
+  let mejor = {lag: 0, c: -Infinity};
+  const media = (v) => v.reduce((a, b) => a + b) / v.length;
+  const mr = media(ref), mo = media(out);
+  for (let lag = 0; lag <= 24; lag++) {
+    let sxy = 0, sxx = 0, syy = 0;
+    for (let k = 0; k + lag < ref.length; k++) {
+      const x = ref[k] - mr, y = out[k + lag] - mo;
+      sxy += x * y; sxx += x * x; syy += y * y;
+    }
+    const c = sxy / Math.sqrt(sxx * syy);
+    if (c > mejor.c) mejor = {lag, c};
+  }
+  return mejor.lag * kDt;
+}
+// Ruido repetible (no hay Math.random con semilla).
+const ruido = (n, sigma) => Array.from({length: n}, (_, i) =>
+  sigma * Math.sin(i * 12.9898 + 78.233) * 1.7);
+const rms = (v) => Math.sqrt(v.reduce((s, x) => s + x * x, 0) / v.length);
+
+test('live smoothing adds at most ~40 ms of lag to arms, hands and fingers in motion', () => {
+  // Seno de 1.5 Hz y 35 grados de amplitud: un saludo rapido.
+  const entrada = Array.from({length: 12 * 6}, (_, i) =>
+    45 + 35 * Math.sin(2 * Math.PI * 1.5 * i / 12));
+  for (const grupo of ['brazo', 'mano', 'dedos']) {
+    const {ref, out} = simular(grupo, entrada);
+    const lag = retrasoMs(ref, out);
+    assert.ok(lag <= 40, `${grupo}: retraso ${lag.toFixed(0)} ms`);
+  }
+});
+
+test('live smoothing never adds rest jitter and spreads each noise step over renders', () => {
+  // 2 s quietos con ruido de ~1.5 grados rms alrededor de 20 grados.
+  const entrada = ruido(24, 1.5).map((e) => 20 + e);
+  const pasoMax = (v) => Math.max(...v.slice(16).map((x, i) => Math.abs(x - v[15 + i])));
+  for (const grupo of ['cuerpo', 'brazo', 'mano']) {
+    const {ref, out} = simular(grupo, entrada);
+    const cruda = rms(ref.slice(15).map((v) => v - 20));
+    const suave = rms(out.slice(15).map((v) => v - 20));
+    assert.ok(suave <= cruda, `${grupo}: ${suave.toFixed(2)} vs ${cruda.toFixed(2)}`);
+    // El escalon del frame de camara (12/s) se reparte en varios renders.
+    assert.ok(pasoMax(out) < pasoMax(ref) * .5,
+      `${grupo}: paso ${pasoMax(out).toFixed(2)} vs ${pasoMax(ref).toFixed(2)}`);
+  }
 });

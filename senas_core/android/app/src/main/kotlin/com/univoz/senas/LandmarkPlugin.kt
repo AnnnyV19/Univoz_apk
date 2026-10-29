@@ -1,14 +1,21 @@
 package com.univoz.senas
 import android.annotation.SuppressLint
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
+import android.util.Range
 import android.util.Size
 import android.view.Surface
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExtendableBuilder
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
@@ -39,43 +46,32 @@ class LandmarkPlugin(
     companion object {
         const val CANAL_METODOS = "univoz/camara"
 
-        // Fusionado: solo dispara cuando pose y manos estan dentro de una
-        // ventana compatible de 120 ms. Usalo para guardar muestras o para
-        // el clasificador (DtwClassifier).
+        // Un solo evento por resultado. Lleva `fusionado` (pose y manos
+        // dentro de una ventana compatible de 120 ms): Dart reparte a su
+        // stream de UI (todos) y al de guardado/clasificador (fusionados).
         const val CANAL_EVENTOS = "univoz/landmarks"
-
-        // Preview: dispara apenas termina CUALQUIERA de los dos modelos.
-        // Es el que usa la UI en vivo (esqueleto en pantalla).
-        const val CANAL_EVENTOS_PREVIEW = "univoz/landmarks_preview"
 
         // Manos intentan cada captura; Pose corre cada ~66 ms. El reparto
         // conserva cadena anatomica fresca y deja CPU para dedos a 30 FPS.
         // Render/preview continua independiente a 60 FPS.
         private const val INTERVALO_MIN_POSE_NS = 66_000_000L
 
-        /**
-         * false (default): cada frame se rota con Bitmap.createBitmap (copia
-         * completa) antes de enviarlo. true: se envia el bitmap SIN rotar y
-         * MediaPipe aplica la rotacion (ImageProcessingOptions.rotationDegrees,
-         * tasks-vision 1.0.0), sin esa copia. NO activar sin validar en
-         * telefono: las coordenadas de los landmarks (y image_w/image_h) deben
-         * coincidir con las del camino por bitmap rotado en los 4 giros, con
-         * camara frontal y trasera, y el sentido de rotationDegrees de
-         * MediaPipe (horario) debe coincidir con el de CameraX.
-         */
-        private const val ROTACION_MEDIAPIPE = false
+        /** Etiqueta de logcat del diagnostico de latencia (igual que en Dart). */
+        private const val ETIQUETA_LATENCIA = "UnivozLat"
+
+        /** Tope de la vista previa chica (A/B de desarrollador). 4:3 como el analisis. */
+        private val PREVIEW_CHICA = Size(640, 480)
     }
     private val principal = Handler(Looper.getMainLooper())
     private val ejecutor = Executors.newSingleThreadExecutor()
     private var sink: EventChannel.EventSink? = null
-    private var sinkPreview: EventChannel.EventSink? = null
     @Volatile private var engine: LandmarkEngine? = null
     private var entry: TextureRegistry.SurfaceTextureEntry? = null
     private var cameraProvider: ProcessCameraProvider? = null
     @Volatile private var sessionToken = 0L
     private val probe = DeviceProbe(context)
     // Solo se toca en el hilo principal.
-    private var tier: DeviceTier? = null
+    @Volatile private var tier: DeviceTier? = null
     private var selectorActual: CameraSelector? = null
     private var analysisActual: ImageAnalysis? = null
     private var resolucionActual: Size? = null
@@ -86,6 +82,37 @@ class LandmarkPlugin(
     private var ultimoTimestamp = 0L
     private var ultimoPoseEnviadoNs = 0L
 
+    // Diagnostico de latencia (modo desarrollador). null = apagado y entonces
+    // procesar/emitir no miden nada. Lo crea enlazar() si Dart lo pidio.
+    @Volatile private var medidor: MedidorNativo? = null
+    private var diagnosticoPedido = false
+
+    // Toggle de desarrollador: true = MediaPipe solo con CPU. Aplica a los
+    // motores que se creen desde el proximo inicio de camara.
+    @Volatile private var forzarCpu = false
+
+    // Toggles de desarrollador (diagnostico_latencia.dart), se leen al
+    // iniciar la camara. Por defecto: lo que se cree mejor para latencia.
+    // fps: "auto" (CameraX/HAL), "30" (fijo) o "max" (fijo mas alto <= 60).
+    private var fpsModo = "max"
+    private var previewChica = true
+    @Volatile private var forzarSeparado = false
+    private var rangoFpsActual: Pair<Int, Int>? = null
+
+    private val reportero = object : Runnable {
+        override fun run() {
+            val m = medidor ?: return
+            val linea = m.cerrarSiToca(
+                SystemClock.elapsedRealtime(),
+                tier?.nivel?.wire,
+                engine?.delegadoNombre ?: "-",
+                if (engine?.holisticActivo == true) "holistic" else "separado",
+            )
+            if (linea != null) Log.i(ETIQUETA_LATENCIA, "nat $linea")
+            principal.postDelayed(this, 1000)
+        }
+    }
+
     // Cache de la matriz de rotacion: los grados no cambian frame a frame.
     private var gradosCacheados: Int? = null
     private var matrizCacheada: Matrix? = null
@@ -93,16 +120,6 @@ class LandmarkPlugin(
     fun registrar() {
         MethodChannel(messenger, CANAL_METODOS).setMethodCallHandler(this)
         EventChannel(messenger, CANAL_EVENTOS).setStreamHandler(this)
-        EventChannel(messenger, CANAL_EVENTOS_PREVIEW).setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    sinkPreview = events
-                }
-                override fun onCancel(arguments: Any?) {
-                    sinkPreview = null
-                }
-            }
-        )
     }
     override fun onMethodCall(
         call: io.flutter.plugin.common.MethodCall,
@@ -113,6 +130,13 @@ class LandmarkPlugin(
                 val frontal = call.argument<Boolean>("frontal") ?: true
                 val session = call.argument<Number>("session")?.toLong()
                     ?: ++sessionToken
+                // Solo modo desarrollador (diagnostico_latencia.dart); sin
+                // estos argumentos todo queda como siempre.
+                diagnosticoPedido = call.argument<Boolean>("diagnostico") ?: false
+                forzarCpu = call.argument<String>("delegado") == "cpu"
+                fpsModo = call.argument<String>("fps") ?: "max"
+                previewChica = (call.argument<String>("preview") ?: "chica") == "chica"
+                forzarSeparado = call.argument<String>("modelo") == "separado"
                 iniciar(frontal, session, result)
             }
             "detener" -> {
@@ -164,7 +188,7 @@ class LandmarkPlugin(
                         return@execute
                     }
                     val motor = try {
-                        crearMotor(false)
+                        crearMotor(forzarSeparado)
                     } catch (e: Throwable) {
                         // ExceptionInInitializerError/UnsatisfiedLinkError de
                         // MediaPipe no son Exception: sin esto cerraban la app
@@ -210,7 +234,12 @@ class LandmarkPlugin(
             val texEntry = textureRegistry.createSurfaceTexture()
             entry = texEntry
             val surfaceTexture = texEntry.surfaceTexture()
-            val preview = Preview.Builder().build()
+            val rango = DeviceTier.rangoFps(fpsModo, rangosFpsDisponibles(frontal))
+            rangoFpsActual = rango
+            val previewBuilder = Preview.Builder()
+            if (previewChica) previewBuilder.setResolutionSelector(seleccionTamano(PREVIEW_CHICA))
+            fijarFps(previewBuilder, rango)
+            val preview = previewBuilder.build()
             preview.setSurfaceProvider { request ->
                 surfaceTexture.setDefaultBufferSize(
                     request.resolution.width, request.resolution.height
@@ -221,7 +250,9 @@ class LandmarkPlugin(
             // Cada sesion parte del techo del hardware: una bajada por
             // inferencia o calor no se guarda (el S22+ quedo atascado en
             // bajo + separado por el calentamiento de la GPU, 2026-10-19).
-            val techo = DeviceTier.nivelInicial(probe.ramMb(), motor.gpuOk)
+            // Con CPU forzada el techo sigue siendo el del hardware (gpuOk seria
+            // falso a proposito y bajaria a "bajo", cambiando el tier a probar).
+            val techo = DeviceTier.nivelInicial(probe.ramMb(), motor.gpuOk || motor.forzarCpu)
             val nivelTier = DeviceTier(techo)
             val cfg = nivelTier.config
             motor.conCara = cfg.cara
@@ -246,6 +277,8 @@ class LandmarkPlugin(
                 result.error("camera_start_cancelled", null, null)
                 return
             }
+            registrarCamara(frontal, rango, preview, analysis)
+            if (diagnosticoPedido) iniciarMedicion(frontal)
 
             val info = preview.resolutionInfo
             val res = info?.resolution
@@ -281,46 +314,123 @@ class LandmarkPlugin(
 
     private fun crearMotor(forzarSeparado: Boolean) = LandmarkEngine(
         context,
-        onFrame = { emitir(it) },
-        onPreview = { emitirPreview(it) },
+        onResultado = { f, fusionado -> emitir(f, fusionado) },
         onError = { msg -> principal.post { sink?.error("mediapipe", msg, null) } },
-        onInferencia = { ms -> principal.post { alInferir(ms) } },
+        onInferencia = { ms ->
+            medidor?.inferencia?.agregar(ms)
+            principal.post { alInferir(ms) }
+        },
         forzadoSeparado = forzarSeparado,
+        forzarCpu = forzarCpu,
     )
 
-    private fun construirAnalisis(resolucion: Size): ImageAnalysis =
-        ImageAnalysis.Builder()
+    /**
+     * Enciende el diagnostico de latencia: lee la fuente de reloj de la camara
+     * (la edad de captura solo es valida si es REALTIME, igual que
+     * elapsedRealtimeNanos), la deja en logcat una vez y arranca el resumen
+     * por segundo. Hilo principal.
+     */
+    private fun iniciarMedicion(frontal: Boolean) {
+        val origen = caracteristicas(frontal)
+            ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+        val fuente = when (origen) {
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME -> "REALTIME"
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN -> "UNKNOWN"
+            else -> "?"
+        }
+        val nota = if (fuente == "REALTIME") "(edades de captura validas)"
+        else "(las edades de captura NO son fiables)"
+        Log.i(ETIQUETA_LATENCIA, "nat camera_ts_source=$fuente $nota")
+        medidor = MedidorNativo(fuente)
+        principal.removeCallbacks(reportero)
+        principal.postDelayed(reportero, 1000)
+    }
+
+    /** Caracteristicas Camera2 de la camara del lado pedido; null si no se pueden leer. */
+    private fun caracteristicas(frontal: Boolean): CameraCharacteristics? = try {
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val lente = if (frontal) CameraCharacteristics.LENS_FACING_FRONT
+        else CameraCharacteristics.LENS_FACING_BACK
+        cm.cameraIdList.map { cm.getCameraCharacteristics(it) }
+            .firstOrNull { it.get(CameraCharacteristics.LENS_FACING) == lente }
+    } catch (e: Exception) {
+        null // sin esto solo se pierde la optimizacion/advertencia
+    }
+
+    private fun rangosFpsDisponibles(frontal: Boolean): List<Pair<Int, Int>> =
+        caracteristicas(frontal)
+            ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.map { it.lower to it.upper } ?: emptyList()
+
+    private fun seleccionTamano(tam: Size) = ResolutionSelector.Builder()
+        .setResolutionStrategy(
+            ResolutionStrategy(tam, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+        )
+        .build()
+
+    /**
+     * Rango AE fijo para el caso de uso (null = lo que decida CameraX). Con
+     * rango variable AE puede alargar la exposicion; fijo y alto acorta
+     * exposicion, lectura y cola del HAL (DeviceTier.rangoFps).
+     */
+    @SuppressLint("UnsafeOptInUsageError")
+    private fun fijarFps(b: ExtendableBuilder<*>, rango: Pair<Int, Int>?) {
+        if (rango == null) return
+        Camera2Interop.Extender(b).setCaptureRequestOption(
+            CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(rango.first, rango.second)
+        )
+    }
+
+    /** Una vez por inicio de camara: lo que de verdad se pidio y lo que CameraX concedio. */
+    private fun registrarCamara(
+        frontal: Boolean,
+        rango: Pair<Int, Int>?,
+        preview: Preview,
+        analysis: ImageAnalysis,
+    ) {
+        fun tam(r: Size?) = r?.let { "${it.width}x${it.height}" } ?: "?"
+        Log.i(
+            ETIQUETA_LATENCIA,
+            "nat camera fps_modo=$fpsModo rango=${rango ?: "auto"} " +
+                "disponibles=${rangosFpsDisponibles(frontal)} " +
+                "preview=${tam(preview.resolutionInfo?.resolution)} " +
+                "(pedido=${if (previewChica) tam(PREVIEW_CHICA) else "auto"}) " +
+                "analisis=${tam(analysis.resolutionInfo?.resolution)} " +
+                "modelo=${if (forzarSeparado) "separado(forzado)" else "holistic"}"
+        )
+    }
+
+    private fun construirAnalisis(resolucion: Size): ImageAnalysis {
+        val b = ImageAnalysis.Builder()
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setResolutionSelector(
-                ResolutionSelector.Builder()
-                    .setResolutionStrategy(
-                        ResolutionStrategy(
-                            resolucion,
-                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
-                        )
-                    )
-                    .build()
-            )
-            .build()
-            .also { it.setAnalyzer(ejecutor) { proxy -> procesar(proxy) } }
+            .setResolutionSelector(seleccionTamano(resolucion))
+        fijarFps(b, rangoFpsActual)
+        return b.build().also { it.setAnalyzer(ejecutor) { proxy -> procesar(proxy) } }
+    }
 
     // Hilo principal: DeviceTier no es thread-safe.
     private fun alInferir(ms: Double) {
         val t = tier ?: return
         val ahora = SystemClock.elapsedRealtime()
+        val antes = t.nivel
         var cambio = t.registrarInferencia(ms, ahora)
         if (ahora - ultimoChequeoTermicoMs >= 1000) {
             ultimoChequeoTermicoMs = ahora
             cambio = t.registrarTermico(probe.termico(), ahora) || cambio
         }
-        if (cambio) aplicarNivel(t)
+        if (!cambio) return
+        Log.i(
+            ETIQUETA_LATENCIA,
+            "nat tier $antes->${t.nivel} separado=${t.separado} causa=${t.causaCambio}"
+        )
+        aplicarNivel(t)
     }
 
     private fun aplicarNivel(t: DeviceTier) {
         val cfg = t.config
         val sesion = sessionToken
-        val separado = t.separado
+        val separado = t.separado || forzarSeparado
         fpsMax = cfg.fpsMax
         engine?.conCara = cfg.cara
         // Cambiar de modelo en el hilo del ejecutor: procesar() corre ahi,
@@ -372,18 +482,31 @@ class LandmarkPlugin(
     private fun procesar(proxy: ImageProxy) {
         try {
             val motor = engine
+            val med = medidor
+            if (med != null) {
+                med.frameEntrada()
+                med.edadEntrada.agregar(edadCapturaMs(proxy))
+            }
             if (motor?.holisticActivo == true) {
                 // Holistic: un solo modelo para cuerpo, manos y cara; pose y
                 // manos salen del mismo frame (sin desfase entre fuentes).
-                if (motor.holisticOcupado()) return
+                if (motor.holisticOcupado()) {
+                    med?.descarteOcupado()
+                    return
+                }
                 val siguiente = DeviceTier.admitirFrame(
-                    siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax) ?: return
+                    siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax)
+                if (siguiente == null) {
+                    med?.descarteFps()
+                    return
+                }
                 siguienteFrameMs = siguiente
-                val (bitmap, giroMediaPipe) = prepararBitmap(proxy)
+                val bitmap = prepararBitmapMedido(proxy, med)
                 var t = proxy.imageInfo.timestamp / 1_000_000
                 if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
                 ultimoTimestamp = t
-                motor.analizarHolistic(bitmap, t, giroMediaPipe)
+                med?.edadInferencia?.agregar(edadCapturaMs(proxy))
+                if (!motor.analizarHolistic(bitmap, t)) med?.descarteOcupado()
                 return
             }
             val ahoraNs = proxy.imageInfo.timestamp
@@ -393,19 +516,27 @@ class LandmarkPlugin(
 
             // Ninguno de los dos modelos quiere este frame: no gastes CPU
             // convirtiendolo a bitmap.
-            if (!manosLibres && !tocaPose) return
+            if (!manosLibres && !tocaPose) {
+                med?.descarteSinPeticion()
+                return
+            }
             val siguiente = DeviceTier.admitirFrame(
-                siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax) ?: return
+                siguienteFrameMs, proxy.imageInfo.timestamp / 1_000_000, fpsMax)
+            if (siguiente == null) {
+                med?.descarteFps()
+                return
+            }
             siguienteFrameMs = siguiente
 
-            val (bitmap, giroMediaPipe) = prepararBitmap(proxy)
+            val bitmap = prepararBitmapMedido(proxy, med)
             var t = proxy.imageInfo.timestamp / 1_000_000
             if (t <= ultimoTimestamp) t = ultimoTimestamp + 1
             ultimoTimestamp = t
+            med?.edadInferencia?.agregar(edadCapturaMs(proxy))
 
-            if (manosLibres) engine?.analizarManos(bitmap, t, giroMediaPipe)
+            if (manosLibres) engine?.analizarManos(bitmap, t)
             if (tocaPose) {
-                engine?.analizarPose(bitmap, t, giroMediaPipe)
+                engine?.analizarPose(bitmap, t)
                 ultimoPoseEnviadoNs = ahoraNs
             }
         } catch (e: Exception) {
@@ -414,27 +545,39 @@ class LandmarkPlugin(
             proxy.close()
         }
     }
+    /**
+     * Edad del frame desde que la camara lo capturo, ms. Valida solo si el
+     * reloj de la camara es REALTIME (se avisa al encender el diagnostico).
+     */
+    private fun edadCapturaMs(proxy: ImageProxy): Double =
+        (SystemClock.elapsedRealtimeNanos() - proxy.imageInfo.timestamp) / 1e6
+
+    /** prepararBitmap, midiendo su duracion si el diagnostico esta encendido. */
+    private fun prepararBitmapMedido(proxy: ImageProxy, med: MedidorNativo?): Bitmap {
+        if (med == null) return prepararBitmap(proxy)
+        val t0 = System.nanoTime()
+        val r = prepararBitmap(proxy)
+        med.preparar.agregar((System.nanoTime() - t0) / 1e6)
+        return r
+    }
+
     @Volatile private var imagenAncho = 0
     @Volatile private var imagenAlto = 0
 
     /**
-     * Bitmap a enviar y grados que debe aplicar MediaPipe (0 si ya va
-     * rotado). Deja en imagenAncho/imagenAlto el tamano de la imagen ya
-     * rotada, que es el de las coordenadas de los landmarks.
+     * Bitmap ya rotado para el modelo. Deja en imagenAncho/imagenAlto su
+     * tamano, que es el de las coordenadas de los landmarks.
      */
-    private fun prepararBitmap(proxy: ImageProxy): Pair<Bitmap, Int> {
-        val grados = proxy.imageInfo.rotationDegrees
+    private fun prepararBitmap(proxy: ImageProxy): Bitmap {
         val crudo = proxy.toBitmap()
-        if (ROTACION_MEDIAPIPE && grados != 0) {
-            val girado = grados == 90 || grados == 270
-            imagenAncho = if (girado) crudo.height else crudo.width
-            imagenAlto = if (girado) crudo.width else crudo.height
-            return crudo to grados
-        }
-        val bitmap = rotar(crudo, grados)
+        val bitmap = rotar(crudo, proxy.imageInfo.rotationDegrees)
+        // ponytail: el crudo (~0.7 MB a 360x480) era basura por frame a 30/s;
+        // se recicla. Si la rotacion pasa a ser de CameraX
+        // (setOutputImageRotationEnabled) desaparece tambien esta copia.
+        if (bitmap !== crudo) crudo.recycle()
         imagenAncho = bitmap.width
         imagenAlto = bitmap.height
-        return bitmap to 0
+        return bitmap
     }
 
     private fun rotar(bitmap: Bitmap, grados: Int): Bitmap {
@@ -449,17 +592,30 @@ class LandmarkPlugin(
         }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, false)
     }
-    private fun emitir(f: LandmarkEngine.FrameResult) {
-        principal.post { sink?.success(aMapa(f)) }
+    /**
+     * El mapa se arma en el hilo del modelo y al hilo principal (el unico
+     * donde se puede llamar al sink) solo va la entrega.
+     */
+    private fun emitir(f: LandmarkEngine.FrameResult, fusionado: Boolean) {
+        val payload = aMapa(f, fusionado)
+        principal.post {
+            // Diagnostico de latencia: edad de captura al entregar el frame
+            // al canal (Dart la suma a su propia espera). Ausente con el
+            // diagnostico apagado.
+            medidor?.let { med ->
+                val edad = SystemClock.elapsedRealtimeNanos() / 1e6 - f.timestampMs
+                payload["cap_age_ms"] = edad
+                med.edadEmision.agregar(edad)
+                med.frameSalida()
+            }
+            sink?.success(payload)
+        }
     }
 
-    private fun emitirPreview(f: LandmarkEngine.FrameResult) {
-        principal.post { sinkPreview?.success(aMapa(f)) }
-    }
-
-    private fun aMapa(f: LandmarkEngine.FrameResult): HashMap<String, Any?> {
+    private fun aMapa(f: LandmarkEngine.FrameResult, fusionado: Boolean): HashMap<String, Any?> {
         val payload = HashMap<String, Any?>(24)
         payload["t"] = f.timestampMs
+        payload["fusionado"] = fusionado
         payload["pose"] = f.pose
         // Esqueleto metrico en 3D: es el unico con el que se puede
         // reconstruir una postura (ver LandmarkEngine.FrameResult).
@@ -502,6 +658,8 @@ class LandmarkPlugin(
         limpiarRecursos()
     }
     private fun limpiarRecursos() {
+        principal.removeCallbacks(reportero)
+        medidor = null
         cameraProvider?.unbindAll()
         cameraProvider = null
         engine?.cerrar()

@@ -6,7 +6,6 @@ import kotlin.math.abs
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
-import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.components.containers.Landmark
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
@@ -23,18 +22,18 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
  * PoseLandmarker corriendo en LIVE_STREAM, descritos abajo.
  *
  * Los dos tasks son independientes y devuelven resultados por callbacks
- * asincronos que llegan en orden impredecible. Hay DOS salidas distintas
- * a proposito:
+ * asincronos que llegan en orden impredecible. Cada resultado sale UNA vez
+ * por [onResultado], con una marca de "fusionado":
  *
- * - [onFrame]: solo dispara cuando pose y manos disponibles pertenecen a
- *   instantes compatibles (ventana maxima de 120 ms). Las tareas pueden
- *   terminar con latencias distintas; exigir timestamp exacto dejaria el
- *   canal de grabacion vacio en dispositivos lentos. Usar para guardar
- *   muestras o alimentar el clasificador (DtwClassifier).
+ * - Siempre: se dispara cada vez que CUALQUIERA de los dos modelos termina,
+ *   combinando con el ultimo dato conocido del otro. Es para pintar el
+ *   esqueleto en pantalla en vivo.
  *
- * - [onPreview]: dispara cada vez que CUALQUIERA de los dos modelos
- *   termina, combinando con el ultimo dato conocido del otro. Es para
- *   pintar el esqueleto en pantalla en vivo.
+ * - Fusionado = true: pose y manos disponibles pertenecen a instantes
+ *   compatibles (ventana maxima de 120 ms). Las tareas pueden terminar con
+ *   latencias distintas; exigir timestamp exacto dejaria el canal de
+ *   grabacion vacio en dispositivos lentos. Usar para guardar muestras o
+ *   alimentar el clasificador (DtwClassifier).
  *
  * [analizarManos] y [analizarPose] son independientes: cada una tiene su
  * propia compuerta de backpresion (no aceptan un frame nuevo mientras el
@@ -46,13 +45,22 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
  */
 class LandmarkEngine(
     context: Context,
-    private val onFrame: (FrameResult) -> Unit,
-    private val onPreview: (FrameResult) -> Unit,
+    /**
+     * Un solo aviso por resultado (antes dos: preview y fusionado, y el
+     * plugin armaba el mismo mapa dos veces). El Boolean es "fusionado": pose
+     * y manos compatibles; Dart reparte a sus dos streams.
+     */
+    private val onResultado: (FrameResult, Boolean) -> Unit,
     private val onError: (String) -> Unit,
     /** ms de inferencia de cada resultado (Holistic, o manos en separado). */
     private val onInferencia: (Double) -> Unit = {},
     /** true: no intentar Holistic (nivel bajo con Holistic lento). */
     val forzadoSeparado: Boolean = false,
+    /**
+     * true: solo delegado CPU (toggle de desarrollador "Delegado MediaPipe").
+     * false (default): GPU primero y CPU si no carga, como siempre.
+     */
+    val forzarCpu: Boolean = false,
 ) {
 
     /**
@@ -150,13 +158,20 @@ class LandmarkEngine(
 
     val holisticActivo: Boolean get() = holisticLandmarker != null
 
+    /** Delegado con el que quedo cargado (para el diagnostico de latencia). */
+    val delegadoNombre: String get() = if (gpuOk) "GPU" else "CPU"
+
+    /** Delegados a intentar, en orden. */
+    private val delegados: List<Delegate> =
+        if (forzarCpu) listOf(Delegate.CPU) else listOf(Delegate.GPU, Delegate.CPU)
+
     init {
         holisticLandmarker = if (forzadoSeparado) null else crearHolistic(context)
         if (holisticLandmarker == null) crearSeparados(context)
     }
 
     private fun crearHolistic(context: Context): HolisticLandmarker? {
-        for (delegate in listOf(Delegate.GPU, Delegate.CPU)) {
+        for (delegate in delegados) {
             try {
                 val options = HolisticLandmarker.HolisticLandmarkerOptions.builder()
                     .setBaseOptions(
@@ -200,7 +215,7 @@ class LandmarkEngine(
         // queda en true solo si los dos modelos corren en GPU.
         var enGpu = true
         fun <T> crear(nombre: String, construir: (Delegate) -> T): T? {
-            for (delegate in listOf(Delegate.GPU, Delegate.CPU)) {
+            for (delegate in delegados) {
                 try {
                     return construir(delegate).also { if (delegate == Delegate.CPU) enGpu = false }
                 } catch (e: Exception) {
@@ -256,12 +271,11 @@ class LandmarkEngine(
     fun holisticOcupado(): Boolean = holisticVuelo.ocupado(System.nanoTime())
 
     /** [timestampMs] estrictamente creciente. False si ya hay un frame en vuelo. */
-    fun analizarHolistic(bitmap: Bitmap, timestampMs: Long, rotacionGrados: Int = 0): Boolean {
+    fun analizarHolistic(bitmap: Bitmap, timestampMs: Long): Boolean {
         val tarea = holisticLandmarker ?: return false
         return detectar(holisticVuelo) {
             val imagen = BitmapImageBuilder(bitmap).build()
-            if (rotacionGrados == 0) tarea.detectAsync(imagen, timestampMs)
-            else tarea.detectAsync(imagen, opcionesRotacion(rotacionGrados), timestampMs)
+            tarea.detectAsync(imagen, timestampMs)
         }
     }
 
@@ -270,31 +284,24 @@ class LandmarkEngine(
     fun poseOcupada(): Boolean = poseVuelo.ocupado(System.nanoTime())
 
     /** [timestampMs] estrictamente creciente. Devuelve false si ya hay manos en vuelo. */
-    fun analizarManos(bitmap: Bitmap, timestampMs: Long, rotacionGrados: Int = 0): Boolean {
+    fun analizarManos(bitmap: Bitmap, timestampMs: Long): Boolean {
         // El modelo se revisa ANTES de tomar la compuerta: sin modelo no hay
         // resultado que la libere y quedaria tomada hasta el timeout.
         val tarea = handLandmarker ?: return false
         return detectar(manosVuelo) {
             val imagen = BitmapImageBuilder(bitmap).build()
-            if (rotacionGrados == 0) tarea.detectAsync(imagen, timestampMs)
-            else tarea.detectAsync(imagen, opcionesRotacion(rotacionGrados), timestampMs)
+            tarea.detectAsync(imagen, timestampMs)
         }
     }
 
     /** [timestampMs] estrictamente creciente. Devuelve false si ya hay pose en vuelo. */
-    fun analizarPose(bitmap: Bitmap, timestampMs: Long, rotacionGrados: Int = 0): Boolean {
+    fun analizarPose(bitmap: Bitmap, timestampMs: Long): Boolean {
         val tarea = poseLandmarker ?: return false
         return detectar(poseVuelo) {
             val imagen = BitmapImageBuilder(bitmap).build()
-            if (rotacionGrados == 0) tarea.detectAsync(imagen, timestampMs)
-            else tarea.detectAsync(imagen, opcionesRotacion(rotacionGrados), timestampMs)
+            tarea.detectAsync(imagen, timestampMs)
         }
     }
-
-    /** Rotacion que aplica MediaPipe por dentro (sin copiar el bitmap). */
-    private fun opcionesRotacion(grados: Int) = ImageProcessingOptions.builder()
-        .setRotationDegrees(grados)
-        .build()
 
     /**
      * Toma la compuerta y envia. Si detectAsync lanza (modelo ya cerrado,
@@ -541,8 +548,7 @@ class LandmarkEngine(
             crearFrame(t, pose, poseMundo, poseT, candidatas, r, erroresEntrada,
                 extras?.invoke(r))
         }
-        onPreview(frame)
-        if (vigente) onFrame(frame)
+        onResultado(frame, vigente)
     }
 
     fun cerrar() {

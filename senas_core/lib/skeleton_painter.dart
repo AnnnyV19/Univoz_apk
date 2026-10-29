@@ -343,7 +343,6 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   final _bridge = AvatarBridge();
   late final _alimentador = AlimentadorAvatar(
     enviar: _bridge.mostrarFrame,
-    perfilMedidas: () => _almacen.ajustes.perfilCorporal?.measures,
   );
   StreamSubscription<LandmarkFrame>? _subAvatar;
   StreamSubscription<LandmarkFrame>? _subSinMano;

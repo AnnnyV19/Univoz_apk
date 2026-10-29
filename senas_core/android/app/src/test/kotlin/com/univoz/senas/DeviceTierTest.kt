@@ -13,6 +13,12 @@ class DeviceTierTest {
         return cambio
     }
 
+    /** Ventanas lentas SEGUIDAS que hacen falta para bajar (la primera no cambia). */
+    private fun ventanasLentas(t: DeviceTier, ms: Double, ahoraMs: Long): Boolean {
+        repeat(DeviceTier.VENTANAS_SOSTENIDAS - 1) { assertFalse(ventana(t, ms, ahoraMs)) }
+        return ventana(t, ms, ahoraMs)
+    }
+
     @Test fun nivelInicialPorHardware() {
         assertEquals(Nivel.BAJO, DeviceTier.nivelInicial(2048, true))
         assertEquals(Nivel.BAJO, DeviceTier.nivelInicial(4096, false))
@@ -50,7 +56,7 @@ class DeviceTierTest {
     @Test fun trasUnCambioVuelveACalentar() {
         val c = DeviceTier(Nivel.ALTO)
         repeat(DeviceTier.CALENTAMIENTO_FRAMES) { c.registrarInferencia(50.0, 20_000) }
-        assertTrue(ventana(c, 150.0, 20_000))
+        assertTrue(ventanasLentas(c, 150.0, 20_000))
         assertEquals(Nivel.MEDIO, c.nivel)
         // Motor nuevo o reenlace: sus primeros resultados son lentos y no
         // cuentan; si contaran, esta ventana bajaria otra vez a bajo.
@@ -93,14 +99,14 @@ class DeviceTierTest {
 
     @Test fun inferenciaLentaBajaUnNivelConHisteresis() {
         val t = DeviceTier(Nivel.ALTO, calentamientoFrames = 0)
-        assertTrue(ventana(t, 115.0, 20_000))
+        assertTrue(ventanasLentas(t, 115.0, 20_000))
         assertEquals(Nivel.MEDIO, t.nivel)
         assertEquals(Nivel.MEDIO, t.techoInferencia)
         // 5 s despues: dentro de la histeresis, no baja otra vez.
         assertFalse(ventana(t, 115.0, 25_000))
         assertEquals(Nivel.MEDIO, t.nivel)
         // 11 s despues: 115 ms > 110 ms de medio, baja a bajo.
-        assertTrue(ventana(t, 115.0, 31_000))
+        assertTrue(ventanasLentas(t, 115.0, 31_000))
         assertEquals(Nivel.BAJO, t.nivel)
     }
 
@@ -110,10 +116,53 @@ class DeviceTierTest {
         assertFalse(ventana(t, 115.0, 20_000))
         assertFalse(t.separado)
         // Menos de 8 FPS: Pose lite + Hand.
-        assertTrue(ventana(t, 140.0, 31_000))
+        assertTrue(ventanasLentas(t, 140.0, 31_000))
         assertEquals(Nivel.BAJO, t.nivel)
         assertTrue(t.separado)
-        assertFalse(ventana(t, 140.0, 60_000))
+        assertFalse(ventanasLentas(t, 140.0, 60_000))
+    }
+
+    @Test fun unaVentanaMalaAisladaNoBaja() {
+        // Regresion S22+ 2026-10-21: p50 65-80 ms, una ventana con picos de
+        // GPU compartida (p95 > 100) bajaba de alto a medio para siempre.
+        val t = DeviceTier(Nivel.ALTO, calentamientoFrames = 0)
+        repeat(4) {
+            assertFalse(ventana(t, 80.0, 20_000L + it * 15_000L))
+            assertFalse(ventana(t, 130.0, 25_000L + it * 15_000L)) // mala aislada
+        }
+        assertEquals(Nivel.ALTO, t.nivel)
+        assertNull(t.causaCambio)
+    }
+
+    @Test fun picosDeUnaVentanaSinSostenerNoCuentan() {
+        // 3 picos de 205 ms entre 57 muestras de 80: p95 = 205 > 100.
+        val t = DeviceTier(Nivel.ALTO, calentamientoFrames = 0)
+        repeat(3) { assertFalse(t.registrarInferencia(205.0, 20_000)) }
+        repeat(DeviceTier.VENTANA_FRAMES - 3) { assertFalse(t.registrarInferencia(80.0, 20_000)) }
+        assertEquals(Nivel.ALTO, t.nivel)
+    }
+
+    @Test fun causaDelCambioSeRegistra() {
+        val t = DeviceTier(Nivel.ALTO, calentamientoFrames = 0)
+        assertTrue(ventanasLentas(t, 115.0, 20_000))
+        assertTrue(t.causaCambio!!.startsWith("inferencia p95=115ms > 100ms"))
+        val c = DeviceTier(Nivel.ALTO)
+        assertTrue(c.registrarTermico(2, 20_000))
+        assertEquals("termico=2", c.causaCambio)
+    }
+
+    @Test fun rangoFpsPorModo() {
+        val s22 = listOf(15 to 15, 20 to 20, 24 to 24, 30 to 30, 7 to 30, 15 to 30, 60 to 60, 120 to 120)
+        assertNull(DeviceTier.rangoFps("auto", s22))
+        assertNull(DeviceTier.rangoFps(null, s22))
+        assertEquals(30 to 30, DeviceTier.rangoFps("30", s22))
+        // 120 es alta velocidad (otra resolucion): el tope es 60.
+        assertEquals(60 to 60, DeviceTier.rangoFps("max", s22))
+        // Solo rangos variables salvo 30: max cae al fijo mas alto.
+        assertEquals(30 to 30, DeviceTier.rangoFps("max", listOf(15 to 30, 30 to 30)))
+        // Sin ningun fijo no se toca nada.
+        assertNull(DeviceTier.rangoFps("max", listOf(15 to 30)))
+        assertNull(DeviceTier.rangoFps("30", emptyList()))
     }
 
     @Test fun inferenciaInvalidaSeIgnora() {
@@ -147,7 +196,7 @@ class DeviceTierTest {
 
     @Test fun enfriarNoSubePorEncimaDeLoQuePermitioLaInferencia() {
         val t = DeviceTier(Nivel.ALTO, calentamientoFrames = 0)
-        assertTrue(ventana(t, 115.0, 20_000))
+        assertTrue(ventanasLentas(t, 115.0, 20_000))
         assertEquals(Nivel.MEDIO, t.nivel)
         assertFalse(t.registrarTermico(0, 31_000))
         assertFalse(t.registrarTermico(0, 70_000))

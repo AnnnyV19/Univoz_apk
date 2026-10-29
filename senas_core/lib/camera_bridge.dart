@@ -11,21 +11,23 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/services.dart';
 
+import 'diagnostico_latencia.dart';
 import 'sign_norm.dart';
 import 'sign_space.dart';
 
 const String kCanalMetodos = 'univoz/camara';
 
-// Fusionado: solo llegan frames donde pose y manos estan dentro de una
-// ventana temporal compatible de 120 ms. Usar para normalizar/clasificar
-// (DtwClassifier) o guardar muestras; preview queda separado para UI.
-const String kCanalEventos = 'univoz/landmarks';
+final Stopwatch _relojDiagnostico = Stopwatch()..start();
 
-// Preview: llega un frame apenas termina CUALQUIERA de los dos modelos del
-// lado nativo, sin esperar al otro (puede traer pose y manos de instantes
-// ligeramente distintos). Es el que hay que usar para pintar el esqueleto
-// en pantalla: se siente a tiempo real. No usar para guardar datos.
-const String kCanalEventosPreview = 'univoz/landmarks_preview';
+/// Reloj monotono en microsegundos para medir latencia dentro de Dart
+/// (diagnostico_latencia.dart). No es comparable con los de Kotlin ni del visor.
+int relojDiagnosticoUs() => _relojDiagnostico.elapsedMicroseconds;
+
+// Un solo evento por resultado nativo, con la marca `fusionado` (pose y manos
+// dentro de una ventana compatible de 120 ms). Dart lo decodifica una vez y lo
+// reparte a [CameraBridge.framesPreview] (todos: para pintar el esqueleto) y
+// a [CameraBridge.frames] (solo fusionados: normalizar/clasificar o guardar).
+const String kCanalEventos = 'univoz/landmarks';
 
 /// Error for a native-only capability requested from an unsupported target.
 class UnsupportedFeatureException implements Exception {
@@ -158,6 +160,11 @@ class LandmarkFrame {
   final List<List<double>>? leftWorld;
   final List<List<double>>? rightWorld;
 
+  /// Pose y manos de instantes compatibles (<= 120 ms): el frame sirve para
+  /// reconocer y guardar, no solo para pintar. Un payload sin la marca (plugin
+  /// viejo) cuenta como fusionado, como cuando solo existia ese canal.
+  final bool fusionado;
+
   /// `holistic` o `separado` (respaldo).
   final String captureMode;
 
@@ -183,6 +190,13 @@ class LandmarkFrame {
   /// La pose de este frame salio del mismo instante (no del cache).
   final bool? poseRan;
 
+  /// Solo con el diagnostico de latencia encendido: edad de captura del frame
+  /// (ms) cuando Kotlin lo mando al canal. null si no vino.
+  final double? capAgeMs;
+
+  /// [relojDiagnosticoUs] al decodificar el frame en Dart. Solo para medir.
+  final int? llegadaUs;
+
   const LandmarkFrame({
     required this.timestampMs,
     this.pose,
@@ -199,6 +213,7 @@ class LandmarkFrame {
     this.face,
     this.leftWorld,
     this.rightWorld,
+    this.fusionado = true,
     this.captureMode = 'separado',
     this.imageAspect,
     this.tier,
@@ -207,6 +222,8 @@ class LandmarkFrame {
     this.handsIn,
     this.track,
     this.poseRan,
+    this.capAgeMs,
+    this.llegadaUs,
   });
 
   /// Copia de este frame con otros landmarks de pose y de manos (en imagen) y
@@ -236,6 +253,7 @@ class LandmarkFrame {
         face: face,
         leftWorld: leftWorld,
         rightWorld: rightWorld,
+        fusionado: fusionado,
         captureMode: captureMode,
         imageAspect: imageAspect,
         tier: tier,
@@ -244,6 +262,8 @@ class LandmarkFrame {
         handsIn: handsIn,
         track: track,
         poseRan: poseRan,
+        capAgeMs: capAgeMs,
+        llegadaUs: llegadaUs,
       );
 
   /// El aspecto a usar para corregir la forma de la mano.
@@ -303,6 +323,7 @@ class LandmarkFrame {
       face: _desempacar(map['face'], 3),
       leftWorld: mundoIzq,
       rightWorld: mundoDer,
+      fusionado: map['fusionado'] != false,
       captureMode: map['capture_mode'] as String? ?? 'separado',
       imageAspect: _aspecto(map['image_w'], map['image_h']),
       tier: map['tier'] is String ? map['tier'] as String : null,
@@ -311,6 +332,8 @@ class LandmarkFrame {
       handsIn: _mapa(map['hands_in']),
       track: _mapa(map['track']),
       poseRan: map['pose_ran'] is bool ? map['pose_ran'] as bool : null,
+      capAgeMs: (map['cap_age_ms'] as num?)?.toDouble(),
+      llegadaUs: relojDiagnosticoUs(),
     );
   }
 
@@ -508,14 +531,13 @@ class CamaraIniciada {
 class CameraBridge {
   static const MethodChannel _metodos = MethodChannel(kCanalMetodos);
   static const EventChannel _eventos = EventChannel(kCanalEventos);
-  static const EventChannel _eventosPreview =
-      EventChannel(kCanalEventosPreview);
 
   /// Campo legado. La asociación anatómica nativa es la única fuente de lado;
   /// no se permite cruzar manos desde una preferencia persistida.
   @Deprecated('La asociación anatómica determina izquierda y derecha')
   bool cruzarManos = false;
 
+  Stream<LandmarkFrame>? _todos;
   Stream<LandmarkFrame>? _stream;
   Stream<LandmarkFrame>? _streamPreview;
   // Global al proceso, como el token nativo (solo crece): con un contador por
@@ -532,7 +554,17 @@ class CameraBridge {
     try {
       r = await _metodos.invokeMapMethod<String, Object?>(
         'iniciar',
-        {'frontal': frontal, 'session': session},
+        {
+          'frontal': frontal,
+          'session': session,
+          // Toggles de desarrollador (diagnostico_latencia.dart); fuera del
+          // modo, los valores por defecto del producto.
+          'diagnostico': DiagnosticoLatencia.activo,
+          'delegado': DiagnosticoLatencia.delegadoEfectivo.wire,
+          'modelo': DiagnosticoLatencia.modeloEfectivo.wire,
+          'fps': DiagnosticoLatencia.fpsEfectivo.wire,
+          'preview': DiagnosticoLatencia.vistaPreviaEfectiva.wire,
+        },
       );
     } on MissingPluginException {
       // En iPhone el lado nativo aun no existe: mensaje propio, no el
@@ -571,17 +603,23 @@ class CameraBridge {
     // se quedarian mudas para siempre.
   }
 
+  /// Todos los resultados nativos, decodificados UNA vez (antes eran dos
+  /// canales y se armaba y decodificaba el mismo mapa dos veces por frame).
+  /// Broadcast: los dos streams de abajo cuelgan de aqui.
+  Stream<LandmarkFrame> get _canalUnico => _todos ??= _eventos
+      .receiveBroadcastStream()
+      .map((e) =>
+          LandmarkFrame.fromMap(e as Map<Object?, Object?>, swapHands: false))
+      .asBroadcastStream();
+
   /// Stream de frames FUSIONADOS: pose y manos garantizadas del mismo
   /// instante. Es broadcast: se puede escuchar desde el reconocedor y para
   /// guardar muestras a la vez. Para pintar el esqueleto en vivo usa
-  /// [framesPreview], que responde mucho mas rapido.
+  /// [framesPreview], que responde mucho mas rapido. Es el unico que recibe
+  /// los errores del lado nativo (los controladores los clasifican una vez).
   Stream<LandmarkFrame> get frames {
     if (kIsWeb) return _stream ??= Stream<LandmarkFrame>.empty();
-    return _stream ??= _eventos
-        .receiveBroadcastStream()
-        .map((e) =>
-            LandmarkFrame.fromMap(e as Map<Object?, Object?>, swapHands: false))
-        .asBroadcastStream();
+    return _stream ??= _canalUnico.where((f) => f.fusionado);
   }
 
   /// Stream de frames en vivo para UI: se actualiza apenas termina
@@ -589,14 +627,11 @@ class CameraBridge {
   /// Puede traer pose y manos de instantes ligeramente distintos entre si
   /// -- para el ojo humano no se nota, y es lo que hace que el esqueleto en
   /// pantalla se sienta a tiempo real. No usar esto para normalizar ni
-  /// guardar muestras (usa [frames] para eso).
+  /// guardar muestras (usa [frames] para eso). No propaga errores (como
+  /// cuando era un canal aparte): los ve [frames].
   Stream<LandmarkFrame> get framesPreview {
     if (kIsWeb) return _streamPreview ??= Stream<LandmarkFrame>.empty();
-    return _streamPreview ??= _eventosPreview
-        .receiveBroadcastStream()
-        .map((e) =>
-            LandmarkFrame.fromMap(e as Map<Object?, Object?>, swapHands: false))
-        .asBroadcastStream();
+    return _streamPreview ??= _canalUnico.handleError((Object _) {});
   }
 
   /// Solo los frames normalizables, ya como vectores de 152 dimensiones.

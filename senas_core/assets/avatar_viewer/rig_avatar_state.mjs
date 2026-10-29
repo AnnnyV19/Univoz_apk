@@ -215,6 +215,31 @@ export function adaptiveTauMs(gapRad, {tauMinMs, tauMaxMs, fastRad}) {
   return tauMaxMs + (tauMinMs - tauMaxMs) * k;
 }
 
+// Parametros del suavizado de salida por grupo de huesos. Es el UNICO
+// suavizado de la pose en vivo (el One Euro 152D, la zona muerta y su
+// calibrador se quitaron). Medido con sesiones reales a 12 FPS contra la
+// pose cruda: anade ~22 ms de retraso en brazos y munecas (antes ~49 ms) y el
+// temblor en reposo queda en ~1.3x el de antes. tauMaxMs es la perilla: mas
+// bajo = menos retraso y mas temblor. Dedos: la forma de la mano en LSM
+// necesita respuesta rapida.
+const kGrados = Math.PI / 180;
+export const kGruposSuavizado = {
+  cuerpo: {tauMinMs: 36, tauMaxMs: 60, fastRad: 15 * kGrados,
+    maxSpeedRadS: 360 * kGrados},
+  brazo: {tauMinMs: 30, tauMaxMs: 60, fastRad: 20 * kGrados,
+    maxSpeedRadS: 900 * kGrados},
+  mano: {tauMinMs: 30, tauMaxMs: 60, fastRad: 25 * kGrados,
+    maxSpeedRadS: 720 * kGrados},
+  dedos: {tauMinMs: 15, tauMaxMs: 45, fastRad: 20 * kGrados,
+    maxSpeedRadS: 1440 * kGrados},
+};
+
+// Modos del toggle de desarrollador "Suavizado del avatar" (window.
+// configurarSuavizado). Cualquier otro valor cae a 'normal'.
+export const kModosSuavizado = ['normal', 'off'];
+export const normalizarModoSuavizado = (modo) =>
+  kModosSuavizado.includes(modo) ? modo : 'normal';
+
 // Las cuentas de abajo son las de normalize/slerpQuaternion/quaternionGap
 // con escalares y buffers reutilizados: mismas operaciones en el mismo
 // orden y sin crear arreglos por tick. Solo el salto de huesos quietos

@@ -5,8 +5,7 @@ import {
   chooseThumbBoneAxis,
   createHandAngleFilter,
   createFastFingerAngleFilter,
-  createResponsiveRigFilter,
-  createAdaptiveMotionCalibrator,
+  createMotionMeter,
   createAdaptivePoseScheduler,
   createThumbCalibration,
   measureThumbPose,
@@ -108,57 +107,6 @@ test('isolated impossible jump freezes only affected finger chain for one frame'
   assert.deepEqual(a.diagnostics.jumpRejectedChains, [1]);
 });
 
-test('frame filter leaves hand shape XYZ untouched for angle-domain filtering', () => {
-  const filter = createResponsiveRigFilter();
-  filter.filter(baseFrame(0), 0, 1);
-  const next = baseFrame(0); next[32] = .37; next[91] = -.22;
-  const result = filter.filter(next, 33, 1);
-  assert.equal(result.frame[32], .37);
-  assert.equal(result.frame[91], -.22);
-});
-
-test('responsive body filter holds micro-motion but passes intentional movement', () => {
-  const filter = createResponsiveRigFilter();
-  filter.filter(baseFrame(0), 0, 1);
-  const micro = baseFrame(0); micro[0] = .001;
-  const held = filter.filter(micro, 33, 1);
-  assert.equal(held.frame[0], 0);
-  assert.ok(held.diagnostics.deadbandHeld > 0);
-  assert.ok(held.diagnostics.quiet);
-  assert.ok(held.diagnostics.motionScore < .25);
-
-  const intentional = baseFrame(0); intentional[0] = .25;
-  const moved = filter.filter(intentional, 66, 1);
-  assert.ok(moved.frame[0] > .003);
-  assert.ok(moved.diagnostics.intentionalMotion);
-  assert.ok(moved.diagnostics.motionScore >= .8);
-});
-
-test('MAD repairs quiet isolated spike only in render output and records it', () => {
-  const filter = createResponsiveRigFilter();
-  const stable = baseFrame(0);
-  filter.filter(stable, 0, 1);
-  for (const t of [33, 66, 99, 132]) filter.filter(stable, t, 1);
-  const spike = stable.slice();
-  spike[0] = .03;
-  const result = filter.filter(spike, 165, 1);
-  assert.equal(spike[0], .03);
-  assert.equal(result.frame[0], 0);
-  assert.ok(result.diagnostics.madOutliers.includes(0));
-  assert.ok(result.diagnostics.madRepaired.includes(0));
-});
-
-test('responsive body filter rejects regressive timestamps without a jump', () => {
-  const filter = createResponsiveRigFilter();
-  filter.filter(baseFrame(0), 100, 1);
-  const moved = baseFrame(0); moved[0] = .03;
-  const forward = filter.filter(moved, 133, 1);
-  const stale = baseFrame(0); stale[0] = .8;
-  const result = filter.filter(stale, 120, 1);
-  assert.equal(result.frame[0], forward.frame[0]);
-  assert.equal(result.diagnostics.timestampRejected, true);
-});
-
 test('fast finger route keeps incremental palm closure under 66ms lag', () => {
   const filter = createFastFingerAngleFilter(3);
   const samples = [];
@@ -184,34 +132,6 @@ test('finger lag metric ignores duplicate render samples', () => {
   assert.equal(lag, 33);
 });
 
-test('adaptive calibration locks only after quiet warm-up and uses MAD deadband', () => {
-  const calibrator = createAdaptiveMotionCalibrator({
-    warmupMs: 1500, minSamples: 4, deadbands: {body: .003, wrist: .004},
-  });
-  const quiet = baseFrame(0);
-  let state = calibrator.update(quiet, 0, 0);
-  for (let n = 1; n <= 30; n++) {
-    const frame = quiet.slice();
-    frame[0] = n % 2 ? .004 : 0;
-    state = calibrator.update(frame, n * 50, .1);
-  }
-  assert.equal(state.state, 'LOCKED');
-  assert.ok(state.deadbands.body >= .003);
-  assert.ok(state.noise.body >= 0);
-  assert.equal(state.samples.body > 0, true);
-});
-
-test('adaptive calibration never locks warm-up while user moves', () => {
-  const calibrator = createAdaptiveMotionCalibrator({warmupMs: 1500, minSamples: 4});
-  let state = calibrator.update(baseFrame(0), 0, 0);
-  for (let n = 1; n <= 40; n++) {
-    const frame = baseFrame(n * .03);
-    state = calibrator.update(frame, n * 50, .9);
-  }
-  assert.equal(state.state, 'MOTION');
-  assert.equal(state.locked, false);
-});
-
 test('adaptive pose scheduler degrades stride 2 to 3 to 4 then recovers', () => {
   const scheduler = createAdaptivePoseScheduler();
   assert.equal(scheduler.update(0, {processP95Ms: 80, inputFps: 25}).stride, 2);
@@ -222,4 +142,27 @@ test('adaptive pose scheduler degrades stride 2 to 3 to 4 then recovers', () => 
   assert.equal(scheduler.shouldRun(1, true), false);
   scheduler.update(3001, {processP95Ms: 10, inputFps: 60});
   assert.equal(scheduler.update(5001, {processP95Ms: 10, inputFps: 60}).stride, 3);
+});
+
+test('motion meter: quiet body, intentional arm motion and finger-only motion', () => {
+  const meter = createMotionMeter();
+  assert.equal(meter.update(baseFrame(0)).quiet, true); // primer frame: sin referencia
+  const micro = baseFrame(0); micro[0] = .001;
+  const quieto = meter.update(micro);
+  assert.ok(quieto.quiet && quieto.motionScore < .25);
+
+  const brazo = baseFrame(0); brazo[0] = .25;
+  const movido = meter.update(brazo);
+  assert.ok(movido.intentionalMotion && movido.motionScore >= .8);
+
+  // Solo dedos (forma de la mano): el cuerpo queda quieto y los dedos cuentan.
+  const dedos = brazo.slice(); dedos[32] += .4; dedos[40] -= .4;
+  const forma = meter.update(dedos);
+  assert.ok(forma.fingerMotionScore >= .8, `dedos ${forma.fingerMotionScore}`);
+  assert.ok(forma.motionScore < .25, `cuerpo ${forma.motionScore}`);
+
+  // Frame invalido: no rompe ni cuenta como movimiento; reset olvida el anterior.
+  assert.equal(meter.update([1, 2, 3]).quiet, true);
+  meter.reset();
+  assert.equal(meter.update(baseFrame(1)).quiet, true);
 });

@@ -20,8 +20,7 @@ avatar) es común. Lo único que falta es el lado nativo, que en Android es
 | Canal | Tipo | Uso |
 |---|---|---|
 | `univoz/camara` | `MethodChannel` | arrancar y detener la cámara |
-| `univoz/landmarks` | `EventChannel` | frames **fusionados** (pose y manos dentro de 120 ms): para reconocer y guardar |
-| `univoz/landmarks_preview` | `EventChannel` | frames apenas termina **cualquiera** de los modelos: solo para pintar el esqueleto |
+| `univoz/landmarks` | `EventChannel` | un evento por resultado de los modelos, con `fusionado: bool` (pose y manos dentro de 120 ms). Dart reparte: todos para pintar el esqueleto, solo los fusionados para reconocer y guardar |
 
 ### Métodos de `univoz/camara`
 

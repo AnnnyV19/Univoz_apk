@@ -152,3 +152,24 @@ test('golden of Python and Dart: same vectors and rejection reasons', async () =
     else assert.ok(r.vector && cerca(r.vector, c.expected), c.name);
   }
 });
+
+test('no usable pose: the held body plus live hands keeps moving wrist and fingers', () => {
+  // Mismo contrato que AlimentadorAvatar (avatar_vivo.dart): la pose nueva no
+  // sirve (hombros fuera de cuadro), se reusa la del ultimo frame valido y se
+  // le ponen las manos de ahora.
+  const image = validPoseImage();
+  const world = validPoseWorld();
+  const nueva = validPoseImage(); nueva[11] = coord(.4, .35, 0, .1);
+  assert.equal(normalizeMotionFrame(nueva, world, validHand(), null).vector, null);
+
+  const antes = normalizeMotionFrame(image, world, validHand(), null).vector;
+  // Mano que se mueve: muñeca 0.1 a la derecha en imagen y el indice doblado.
+  const mano = validHand().map((p, i) => i === 8 ? coord(p.x + .1, p.y + .12) : p);
+  const muneca = coord(.60, .70);
+  const ahora = normalizeMotionFrame(image, world, mano, null,
+    {renderWrists: {left: muneca, right: null}}).vector;
+  assert.deepEqual(ahora.slice(0, 24), antes.slice(0, 24)); // cuerpo sostenido
+  assert.equal(ahora[30], 1);
+  assert.notDeepEqual(ahora.slice(24, 27), antes.slice(24, 27)); // la muñeca sigue
+  assert.notDeepEqual(ahora.slice(32, 92), antes.slice(32, 92)); // y los dedos
+});
