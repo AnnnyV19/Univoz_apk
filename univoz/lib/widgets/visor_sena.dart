@@ -1,9 +1,52 @@
+import 'dart:collection' show LinkedHashMap;
+
 import 'package:flutter/material.dart';
 import 'package:senas_core/avatar_bridge.dart';
 import 'package:senas_core/avatar_vista.dart';
 import 'package:senas_core/avatar_toma.dart';
 import 'package:senas_core/muestras_locales.dart';
 import 'package:senas_core/plantillas.dart';
+
+/// Las últimas secuencias que pidió el visor, con tope: guardar la primera de
+/// CADA glosa (~21 MB) las mantenía vivas en toda la sesión aunque el
+/// diccionario ya se hubiera soltado. Al llegar al tope sale la menos usada.
+@visibleForTesting
+class CacheSecuenciasLru {
+  static const int capacidadPorDefecto = 64;
+
+  final int capacidad;
+  final LinkedHashMap<String, List<List<double>>> _entradas = LinkedHashMap();
+
+  CacheSecuenciasLru({this.capacidad = capacidadPorDefecto});
+
+  int get length => _entradas.length;
+
+  List<List<double>>? obtener(String glosa) {
+    final seq = _entradas.remove(glosa);
+    if (seq != null) _entradas[glosa] = seq; // pasa a ser la más reciente
+    return seq;
+  }
+
+  void guardar(String glosa, List<List<double>> seq) {
+    _entradas.remove(glosa);
+    _entradas[glosa] = seq;
+    while (_entradas.length > capacidad) {
+      _entradas.remove(_entradas.keys.first);
+    }
+  }
+}
+
+/// Lo que se recuerda de un diccionario mientras no cambie su versión: qué
+/// glosas tiene (unos cientos de textos) y unas pocas secuencias. El
+/// diccionario se referencia débil: si nadie lo usa, el GC lo suelta.
+class _CacheVisor {
+  final int version;
+  final Set<String> glosas;
+  final WeakReference<Diccionario> diccionario;
+  final CacheSecuenciasLru secuencias = CacheSecuenciasLru();
+  _CacheVisor(this.version, this.glosas, Diccionario d)
+      : diccionario = WeakReference(d);
+}
 
 /// Quien maneja el avatar de una pantalla de "Aprender": carga el
 /// diccionario, reproduce señas (una o varias seguidas) y recuerda la
@@ -19,12 +62,15 @@ class ControladorVisor extends ChangeNotifier {
   static const double velocidadMin = 0.5;
   static const double velocidadMax = 2.0;
 
-  /// Las secuencias se arman una vez por versión del diccionario: grabar,
-  /// borrar o sincronizar la sube y la siguiente pantalla ve lo nuevo (y
-  /// suelta las `seq` del diccionario anterior).
-  static (int, Future<Map<String, List<List<double>>>>)? _cacheSecuencias;
+  /// Las glosas se leen una vez por versión del diccionario: grabar, borrar
+  /// o sincronizar la sube y la siguiente pantalla ve lo nuevo (y suelta lo
+  /// del diccionario anterior). Las secuencias se piden de a una y solo las
+  /// últimas quedan guardadas (ver [CacheSecuenciasLru]).
+  static (int, Future<_CacheVisor>)? _cacheSecuencias;
 
-  Map<String, List<List<double>>> _secuencias = const {};
+  _CacheVisor? _cache;
+  // Mientras la pantalla vive, el diccionario no se suelta entre secuencias.
+  Diccionario? _diccionario;
   double _velocidad = _ultimaVelocidad;
   bool _listo = false;
   bool _reproduciendo = false;
@@ -51,24 +97,43 @@ class ControladorVisor extends ChangeNotifier {
   int get total => _cola.length;
 
   /// Si el diccionario tiene la seña de [glosa].
-  bool tiene(String glosa) => _secuencias.containsKey(glosa);
+  bool tiene(String glosa) => _cache?.glosas.contains(glosa) ?? false;
 
-  static Future<Map<String, List<List<double>>>> _leerSecuencias() {
+  static Future<_CacheVisor> _leerCache() {
     final version = AlmacenMuestras.instancia.versionDiccionario;
     final previo = _cacheSecuencias;
     if (previo != null && previo.$1 == version) return previo.$2;
     final futuro = () async {
       final d = await cargarDiccionario();
-      final out = <String, List<List<double>>>{};
-      for (final t in d.clasificador.templates) {
-        // Si hay varias muestras de la misma seña, la primera: es lo que
-        // hace PantallaAvatar y mantiene las dos pantallas coherentes.
-        out.putIfAbsent(t.gloss, () => t.seq);
-      }
-      return out;
+      return _CacheVisor(
+          version, {for (final t in d.clasificador.templates) t.gloss}, d);
     }();
     _cacheSecuencias = (version, futuro);
     return futuro;
+  }
+
+  /// La secuencia de [glosa], o null si no la hay. Si hay varias muestras de
+  /// la misma seña, la primera: es lo que hace PantallaAvatar y mantiene las
+  /// dos pantallas coherentes.
+  Future<List<List<double>>?> _secuenciaDe(String glosa) async {
+    final cache = _cache;
+    if (cache == null || !cache.glosas.contains(glosa)) return null;
+    final guardada = cache.secuencias.obtener(glosa);
+    if (guardada != null) return guardada;
+    // Si el GC soltó el diccionario, se vuelve a pedir (cargarDiccionario lo
+    // comparte o lo rearma).
+    final d =
+        _diccionario ??= cache.diccionario.target ?? await cargarDiccionario();
+    for (final t in d.clasificador.templates) {
+      if (t.gloss != glosa) continue;
+      // Si la versión cambió, esta es del diccionario nuevo: se usa, pero no
+      // se guarda en lo del viejo.
+      if (cache.version == AlmacenMuestras.instancia.versionDiccionario) {
+        cache.secuencias.guardar(glosa, t.seq);
+      }
+      return t.seq;
+    }
+    return null;
   }
 
   Future<void> iniciar() async {
@@ -80,7 +145,8 @@ class ControladorVisor extends ChangeNotifier {
       // Sin la calibración guardada el avatar se ve con la de fábrica.
     }
     try {
-      _secuencias = await _leerSecuencias();
+      _cache = await _leerCache();
+      _diccionario = _cache!.diccionario.target;
     } catch (_) {
       _cacheSecuencias = null; // que el próximo intento vuelva a leerlo
     }
@@ -119,7 +185,8 @@ class ControladorVisor extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final cruda = _secuencias[_cola[_indice]];
+    final cruda = await _secuenciaDe(_cola[_indice]);
+    if (gen != _generacion || _descartado) return;
     if (cruda == null) {
       _reproduciendo = false;
       notifyListeners();
@@ -184,6 +251,7 @@ class ControladorVisor extends ChangeNotifier {
   void dispose() {
     _descartado = true;
     _generacion++;
+    _diccionario = null;
     bridge.dispose();
     super.dispose();
   }
