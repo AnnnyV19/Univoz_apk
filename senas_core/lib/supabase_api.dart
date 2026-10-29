@@ -16,13 +16,14 @@ import 'dart:math' show Random;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha1;
+import 'package:flutter/foundation.dart' show compute;
 import 'package:http/http.dart' as http;
 
 import 'config_supabase.dart';
 import 'motion_contract.dart';
 import 'red.dart';
 import 'sign_norm.dart'
-    show kNormVersion, kTFrames, kFrameDim, packF16, unpackF16;
+    show kNormVersion, kTFrames, kFrameDim, packF16, unpackF16Plano;
 
 class SupabaseError implements Exception, ErrorHumano {
   /// Texto para el equipo (puede nombrar archivos SQL o configuracion).
@@ -42,35 +43,68 @@ class SupabaseError implements Exception, ErrorHumano {
 const String _kNoDisponible = 'Esto no está disponible por ahora.';
 
 /// Una plantilla bajada de la base, lista para el DtwClassifier.
+///
+/// Los cuadros viven en UN Float64List ([plano], kTFrames x kFrameDim): con
+/// ~1000 plantillas en memoria todo el proceso, los `List<List<double>>` con
+/// un objeto por numero costaban ~3x mas que los 8 bytes por valor.
 class PlantillaRemota {
   final String signId;
   final String gloss;
   final String espanol;
-  final List<List<double>> seq;
 
-  const PlantillaRemota(this.signId, this.gloss, this.espanol, this.seq);
+  /// Cuadros seguidos, de [kFrameDim] valores cada uno.
+  final Float64List plano;
+
+  PlantillaRemota(this.signId, this.gloss, this.espanol, List<List<double>> seq)
+      : plano = _aplanar(seq);
+
+  const PlantillaRemota.plano(
+      this.signId, this.gloss, this.espanol, this.plano);
+
+  /// Los cuadros como vistas del [plano] (no copian). Cada llamada arma una
+  /// lista nueva de vistas; quien las modifique modifica la plantilla.
+  List<List<double>> get seq => [
+        for (var i = 0; i + kFrameDim <= plano.length; i += kFrameDim)
+          Float64List.sublistView(plano, i, i + kFrameDim),
+      ];
+
+  static Float64List _aplanar(List<List<double>> seq) {
+    final out = Float64List(seq.length * kFrameDim);
+    for (var i = 0; i < seq.length; i++) {
+      final f = seq[i];
+      if (f.length != kFrameDim) {
+        throw ArgumentError('Cuadro de ${f.length} valores; se esperaban '
+            '$kFrameDim.');
+      }
+      out.setRange(i * kFrameDim, (i + 1) * kFrameDim, f);
+    }
+    return out;
+  }
 
   Map<String, dynamic> toJson() => {
         'sign_id': signId,
         'gloss': gloss,
         'espanol': espanol,
-        'seq': seq
-            .map((f) =>
-                f.map((v) => double.parse(v.toStringAsFixed(5))).toList())
-            .toList(),
+        'seq': [
+          for (final f in seq)
+            [for (final v in f) double.parse(v.toStringAsFixed(5))],
+        ],
       };
 
   factory PlantillaRemota.fromJson(Map<String, dynamic> j) {
-    final seq = (j['seq'] as List<dynamic>)
-        .map((f) =>
-            (f as List<dynamic>).map((v) => (v as num).toDouble()).toList())
-        .toList();
-    MotionSequenceV2.fromFrames(seq);
+    final crudos = j['seq'] as List<dynamic>;
+    final cuadros = <Float64List>[
+      for (final f in crudos)
+        Float64List.fromList([
+          for (final v in f as List<dynamic>) (v as num).toDouble(),
+        ]),
+    ];
+    MotionSequenceV2.fromFrames(cuadros);
     return PlantillaRemota(
       j['sign_id'] as String,
       j['gloss'] as String,
       (j['espanol'] as String?) ?? '',
-      seq,
+      cuadros,
     );
   }
 }
@@ -148,6 +182,41 @@ Uint8List _desdeHexPostgres(String texto) {
   return out;
 }
 
+/// Cuerpo de [SupabaseApi.descargarPlantillas] (corre en un isolate).
+List<PlantillaRemota> _plantillasDeRespuesta(String cuerpo) {
+  final filas = jsonDecode(cuerpo) as List<dynamic>;
+  final out = <PlantillaRemota>[];
+  for (final f in filas) {
+    final m = f as Map<String, dynamic>;
+    final crudo = m['data'];
+    if (crudo is! String) continue;
+    final dim = (m['frame_dim'] as num?)?.toInt() ?? kFrameDim;
+    final t = (m['t_frames'] as num?)?.toInt() ?? kTFrames;
+    if (dim != kFrameDim ||
+        t != kTFrames ||
+        (m['norm_version'] as String?) != kNormVersion) {
+      continue;
+    }
+    final bytes = _desdeHexPostgres(crudo);
+    if (bytes.length != kTFrames * kFrameDim * 2) continue;
+    final plantilla = PlantillaRemota.plano(
+      m['sign_id'] as String,
+      m['gloss'] as String,
+      (m['espanol'] as String?) ?? '',
+      unpackF16Plano(bytes, dim: dim),
+    );
+    final seq = plantilla.seq;
+    if (seq.isEmpty) continue;
+    try {
+      MotionSequenceV2.fromFrames(seq);
+    } catch (_) {
+      continue;
+    }
+    out.add(plantilla);
+  }
+  return out;
+}
+
 class SupabaseApi {
   final String url;
   final String clave;
@@ -181,8 +250,7 @@ class SupabaseApi {
 
   /// GET con tiempo maximo y un reintento; los fallos de red salen como
   /// SupabaseError con mensaje humano.
-  Future<http.Response> _get(Uri uri,
-      {Duration timeout = kTimeoutRed}) async {
+  Future<http.Response> _get(Uri uri, {Duration timeout = kTimeoutRed}) async {
     try {
       return await redGet(_http, uri, headers: _cabeceras, timeout: timeout);
     } on FalloRed catch (e) {
@@ -343,8 +411,7 @@ class SupabaseApi {
         // siempre null, null nunca es igual a '2.0.0', y el bucle descarta
         // TODAS las filas en silencio -- el diccionario bajaba vacio por
         // muchas muestras aprobadas que hubiera en la base.
-        'select':
-            'sign_id,gloss,espanol,norm_version,t_frames,frame_dim,data',
+        'select': 'sign_id,gloss,espanol,norm_version,t_frames,frame_dim,data',
         'norm_version': 'eq.$kNormVersion',
       }),
       // El diccionario completo pesa varios MB: con datos lentos no cabe en
@@ -352,42 +419,16 @@ class SupabaseApi {
       timeout: kTimeoutDescargaDiccionario,
     );
     if (r.statusCode == 404) {
-      throw SupabaseError('No existe la vista v_motion_v2_aprobadas. Corre '
+      throw SupabaseError(
+          'No existe la vista v_motion_v2_aprobadas. Corre '
           'sql/004_motion_v2.sql en el SQL Editor de Supabase.',
           humano: _kNoDisponible);
     }
     if (r.statusCode >= 400) _fallo('Descargar el diccionario', r);
 
-    final filas = jsonDecode(r.body) as List<dynamic>;
-    final out = <PlantillaRemota>[];
-    for (final f in filas) {
-      final m = f as Map<String, dynamic>;
-      final crudo = m['data'];
-      if (crudo is! String) continue;
-      final dim = (m['frame_dim'] as num?)?.toInt() ?? kFrameDim;
-      final t = (m['t_frames'] as num?)?.toInt() ?? kTFrames;
-      if (dim != kFrameDim ||
-          t != kTFrames ||
-          (m['norm_version'] as String?) != kNormVersion) {
-        continue;
-      }
-      final bytes = _desdeHexPostgres(crudo);
-      if (bytes.length != kTFrames * kFrameDim * 2) continue;
-      final seq = unpackF16(bytes, dim: dim);
-      if (seq.isEmpty) continue;
-      try {
-        MotionSequenceV2.fromFrames(seq);
-      } catch (_) {
-        continue;
-      }
-      out.add(PlantillaRemota(
-        m['sign_id'] as String,
-        m['gloss'] as String,
-        (m['espanol'] as String?) ?? '',
-        seq,
-      ));
-    }
-    return out;
+    // Varios MB de JSON y de hex: se leen en otro isolate, no en el de la
+    // interfaz.
+    return compute(_plantillasDeRespuesta, r.body);
   }
 
   /// Sube raw landmarks comprimidos a Storage. Nunca se invoca durante la

@@ -28,15 +28,17 @@
 library plantillas;
 
 import 'dart:convert';
+import 'dart:isolate' show TransferableTypedData;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show compute, visibleForTesting;
+import 'package:flutter/foundation.dart' show compute, kIsWeb, visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'dtw.dart';
 import 'motion_contract.dart';
 import 'muestras_locales.dart';
+import 'supabase_api.dart' show PlantillaRemota;
 import 'sign_norm.dart'
     show
         isotropizarSecuencia,
@@ -407,14 +409,12 @@ Future<Diccionario> cargarDiccionario({String ruta = kRutaPaquete}) async {
 Future<Diccionario> _cargarSinCompartir(
     AlmacenMuestras almacen, String ruta) {
   final ajustes = almacen.ajustes;
-  // De lo sincronizado solo entran las glosas que el paquete no trae (ver
-  // armarClasificador); la forma se corrige aqui con 16:9, el aspecto de
-  // casi todos los videos.
-  final sincronizadas = [
-    for (final p in almacen.sincronizadas)
-      PlantillaFuente(p.signId, p.gloss, p.espanol,
-          isotropizarSecuencia(p.seq, kAspectoVideo)),
-  ];
+  // Las sincronizadas viajan tal cual (Float64List por plantilla): la forma
+  // se corrige con 16:9, el aspecto de casi todos los videos, DENTRO del
+  // isolate y solo para las glosas que el paquete no trae (ver
+  // armarClasificador). Hacerlo aqui armaba copias de todas en el hilo de la
+  // interfaz.
+  final sincronizadas = List<PlantillaRemota>.of(almacen.sincronizadas);
   final locales = [
     for (final m in almacen.muestras)
       PlantillaFuente('local:${m.gloss}', m.gloss, m.espanol,
@@ -424,11 +424,11 @@ Future<Diccionario> _cargarSinCompartir(
 }
 
 Future<Diccionario> _armarEnIsolate(String ruta,
-    List<PlantillaFuente> sincronizadas, List<PlantillaFuente> locales,
+    List<PlantillaRemota> sincronizadas, List<PlantillaFuente> locales,
     Ajustes ajustes) async {
   final encargo = _EncargoDiccionario(
-    paquete: await _leerBytesAsset(ruta),
-    aprendizaje: await _leerBytesAsset(kRutaAprendizaje),
+    paquete: _paraEnviar(await _leerBytesAsset(ruta)),
+    aprendizaje: _paraEnviar(await _leerBytesAsset(kRutaAprendizaje)),
     sincronizadas: sincronizadas,
     locales: locales,
     espejar: ajustes.espejoAutomatico,
@@ -437,6 +437,20 @@ Future<Diccionario> _armarEnIsolate(String ruta,
   );
   return compute(_construirDiccionario, encargo);
 }
+
+/// Los bytes pasan al isolate como TransferableTypedData: se copian una vez a
+/// memoria nativa y el isolate los recibe sin otra copia ni pasar por su heap
+/// de Dart (el paquete son 51 MB).
+///
+/// En web no existe TransferableTypedData ni hay isolates reales: ahi van los
+/// bytes tal cual.
+Object? _paraEnviar(Uint8List? bytes) => bytes == null || kIsWeb
+    ? bytes
+    : TransferableTypedData.fromList([bytes]);
+
+Uint8List? _recibir(Object? enviado) => enviado is TransferableTypedData
+    ? enviado.materialize().asUint8List()
+    : enviado as Uint8List?;
 
 /// Bytes de un asset, o null si no existe (no es un error: se puede reconocer
 /// solo con muestras locales).
@@ -454,9 +468,9 @@ Future<Uint8List?> _leerBytesAsset(String ruta) async {
 /// Lo que viaja al isolate de [cargarDiccionario]. Solo tipos que se pueden
 /// enviar (bytes, listas y clases de datos).
 class _EncargoDiccionario {
-  final Uint8List? paquete;
-  final Uint8List? aprendizaje;
-  final List<PlantillaFuente> sincronizadas;
+  final Object? paquete; // Uint8List o TransferableTypedData
+  final Object? aprendizaje;
+  final List<PlantillaRemota> sincronizadas;
   final List<PlantillaFuente> locales;
   final bool espejar;
   final double maxDistance;
@@ -475,11 +489,13 @@ class _EncargoDiccionario {
 /// Cuerpo de [cargarDiccionario] (corre en un isolate; funcion de nivel
 /// superior). Es la parte pura: bytes y listas adentro, [Diccionario] afuera.
 Diccionario _construirDiccionario(_EncargoDiccionario e) {
+  final bytesPaquete = _recibir(e.paquete);
+  final bytesAprendizaje = _recibir(e.aprendizaje);
   // Un paquete que no se pueda leer (corrupto, otro formato) no tumba las
   // muestras locales: se sigue sin el, como si no estuviera.
-  final delApk = e.paquete == null
+  final delApk = bytesPaquete == null
       ? const <_Plantilla>[]
-      : _leerPaqueteBytes(e.paquete!);
+      : _leerPaqueteBytes(bytesPaquete);
   // El paquete del APK manda: pasa por tools/curar_plantillas.py (forma
   // corregida con el aspecto de cada grabacion, plantilla "de muestra" de cada
   // sena elegida a mano, cuadros corruptos reparados), y lo que baja la
@@ -494,7 +510,9 @@ Diccionario _construirDiccionario(_EncargoDiccionario e) {
     origenBase: OrigenPlantillas.paquete,
     adicionales: [
       for (final p in e.sincronizadas)
-        if (!glosasApk.contains(p.gloss)) p,
+        if (!glosasApk.contains(p.gloss))
+          PlantillaFuente(p.signId, p.gloss, p.espanol,
+              isotropizarSecuencia(p.seq, kAspectoVideo)),
     ],
     locales: e.locales,
     espejar: e.espejar,
@@ -503,9 +521,9 @@ Diccionario _construirDiccionario(_EncargoDiccionario e) {
   );
   // Solo de aprendizaje: no van al clasificador (ver kRutaAprendizaje).
   List<Template> aprendizaje = const [];
-  if (e.aprendizaje != null) {
+  if (bytesAprendizaje != null) {
     try {
-      aprendizaje = leerAprendizaje(utf8.decode(e.aprendizaje!));
+      aprendizaje = leerAprendizaje(utf8.decode(bytesAprendizaje));
     } catch (_) {}
   }
   return Diccionario(d.clasificador, d.resumen, aprendizaje: aprendizaje);

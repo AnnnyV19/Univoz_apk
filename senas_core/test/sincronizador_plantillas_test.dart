@@ -108,6 +108,11 @@ void main() {
       expect(r, ResultadoSync.actualizado);
       expect(recargas, 1);
       expect(leerPaqueteSync(archivo.readAsStringSync())!.single.gloss, 'HOLA');
+      // Deja los metadatos al lado para que el proximo arranque no lea el
+      // paquete entero.
+      final meta = (await leerMetadatosSync(archivo))!;
+      expect(meta.cantidad, 1);
+      expect(File('${dir.path}/$kNombreArchivoMetaSync').existsSync(), isTrue);
       expect(dir.listSync().where((e) => e.path.endsWith('.tmp')), isEmpty);
     });
 

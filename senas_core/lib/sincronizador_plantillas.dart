@@ -80,7 +80,9 @@ class SincronizadorPlantillas {
       int? cantidadActual;
       DateTime? ultima;
       if (await archivo.exists()) {
-        final meta = metadatosPaqueteSync(await archivo.readAsString());
+        // Con el archivo chico de al lado no se lee el paquete (decenas de
+        // MB); sin el, se lee en otro isolate.
+        final meta = await leerMetadatosSync(archivo);
         huellaActual = meta?.huella;
         cantidadActual = meta?.cantidad;
         ultima = meta?.cuando;
@@ -104,8 +106,10 @@ class SincronizadorPlantillas {
       final plantillas = await cliente.descargarPlantillas();
       // Se valida exactamente lo que se va a escribir: si no se puede leer
       // de vuelta, no reemplaza nada.
-      final texto = construirPaqueteSync(plantillas, ahoraReal);
-      if (leerPaqueteSync(texto) == null) {
+      // Todo el JSON (huella, texto, validacion) se hace en un solo pase en
+      // otro isolate, sin decodificar de vuelta lo recien codificado.
+      final armado = await armarPaqueteSyncEnIsolate(plantillas, ahoraReal);
+      if (!armado.valido) {
         debugPrint('[sync] descarga invalida (${plantillas.length}); '
             'se conserva el diccionario anterior');
         await _anotarIntento(intento, ahoraReal);
@@ -121,9 +125,9 @@ class SincronizadorPlantillas {
         await _anotarIntento(intento, ahoraReal);
         return ResultadoSync.invalido;
       }
-      await escribirAtomico(archivo, texto);
+      await escribirPaqueteSync(archivo, armado);
 
-      if (huellaActual != null && huellaActual == huellaPlantillas(plantillas)) {
+      if (huellaActual != null && huellaActual == armado.huella) {
         debugPrint('[sync] sin cambios');
         return ResultadoSync.sinCambios;
       }

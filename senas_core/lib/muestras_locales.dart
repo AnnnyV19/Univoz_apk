@@ -360,6 +360,33 @@ String paraMostrar(String gloss, String? espanol) {
   return e.isNotEmpty ? e : gloss;
 }
 
+/// Lo que se leyo de plantillas_sync.json.
+class _SincronizadasLeidas {
+  final String? sincronizadoEn;
+  final List<PlantillaRemota> plantillas;
+  const _SincronizadasLeidas(this.sincronizadoEn, this.plantillas);
+}
+
+/// Cuerpo de [AlmacenMuestras._cargarSincronizadas] (corre en un isolate).
+/// Null si el archivo es de otra version; lanza si esta roto.
+_SincronizadasLeidas? _leerSincronizadas(String ruta) {
+  final j = jsonDecode(File(ruta).readAsStringSync()) as Map<String, dynamic>;
+  // Los archivos guardados antes de que se escribieran t_frames y
+  // frame_dim no los traen: sin ellos se confia en norm_version. Si
+  // vienen, tienen que coincidir.
+  if (j['norm_version'] != kNormVersion ||
+      ((j['t_frames'] as num?)?.toInt() ?? kTFrames) != kTFrames ||
+      ((j['frame_dim'] as num?)?.toInt() ?? kFrameDim) != kFrameDim) {
+    return null;
+  }
+  // Se lee todo ANTES de tocar lo cargado: un archivo a medias no debe
+  // dejar el diccionario vacio.
+  return _SincronizadasLeidas(j['sincronizado_en'] as String?, [
+    for (final p in (j['plantillas'] as List?) ?? const [])
+      PlantillaRemota.fromJson((p as Map).cast<String, dynamic>()),
+  ]);
+}
+
 class AlmacenMuestras extends ChangeNotifier {
   static final AlmacenMuestras instancia = AlmacenMuestras._();
   AlmacenMuestras._();
@@ -527,23 +554,14 @@ class AlmacenMuestras extends ChangeNotifier {
       final dir = await getApplicationDocumentsDirectory();
       final f = File('${dir.path}/$kNombreArchivoSync');
       if (!await f.exists()) return;
-      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      // Los archivos guardados antes de que se escribieran t_frames y
-      // frame_dim no los traen: sin ellos se confia en norm_version. Si
-      // vienen, tienen que coincidir.
-      if (j['norm_version'] != kNormVersion ||
-          ((j['t_frames'] as num?)?.toInt() ?? kTFrames) != kTFrames ||
-          ((j['frame_dim'] as num?)?.toInt() ?? kFrameDim) != kFrameDim) return;
-      // Se lee todo ANTES de tocar lo cargado: un archivo a medias no debe
-      // dejar el diccionario vacio.
-      final nuevas = [
-        for (final p in (j['plantillas'] as List?) ?? const [])
-          PlantillaRemota.fromJson((p as Map).cast<String, dynamic>()),
-      ];
-      sincronizadoEn = j['sincronizado_en'] as String?;
+      // Leer y decodificar decenas de MB de JSON no corre en el hilo de la
+      // interfaz; lo que vuelve ya son los cuadros en Float64List.
+      final leido = await compute(_leerSincronizadas, f.path);
+      if (leido == null) return;
+      sincronizadoEn = leido.sincronizadoEn;
       sincronizadas
         ..clear()
-        ..addAll(nuevas);
+        ..addAll(leido.plantillas);
     } catch (_) {
       // Sin cache se sigue reconociendo con el paquete del APK y las
       // muestras propias; la proxima sincronizacion la reconstruye.
@@ -580,8 +598,10 @@ class AlmacenMuestras extends ChangeNotifier {
     // lleno), si no el diccionario compartido seguiria con las viejas.
     _versionDiccionario++;
     try {
-      await escribirAtomico(f,
-          construirPaqueteSync(plantillas, DateTime.parse(sincronizadoEn!)));
+      await escribirPaqueteSync(
+          f,
+          await armarPaqueteSyncEnIsolate(
+              plantillas, DateTime.parse(sincronizadoEn!)));
     } finally {
       notifyListeners();
     }

@@ -654,6 +654,19 @@ List<List<double>> unpackF16(Uint8List bytes, {int dim = kFrameDim}) {
   return filas;
 }
 
+/// Como [unpackF16] pero devuelve los frames seguidos en UN solo Float64List
+/// (8 bytes por valor, sin objetos por numero ni por fila). Solo cuadros
+/// completos: lo que sobre de dividir entre [dim] se descarta, igual que antes.
+Float64List unpackF16Plano(Uint8List bytes, {int dim = kFrameDim}) {
+  final n = (bytes.length ~/ 2) ~/ dim * dim;
+  final vista = ByteData.sublistView(bytes);
+  final out = Float64List(n);
+  for (var i = 0; i < n; i++) {
+    out[i] = _fromF16(vista.getUint16(i * 2, Endian.little));
+  }
+  return out;
+}
+
 /// bits de float16 -> double.
 double _fromF16(int bits) {
   final signo = (bits & 0x8000) != 0 ? -1.0 : 1.0;
