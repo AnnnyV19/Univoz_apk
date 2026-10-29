@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'avatar_bridge.dart';
 import 'avatar_view_platform.dart' as platform;
+import 'tema_univoz.dart';
 
 /// Visor único del avatar usado por todas las pantallas que muestran señas.
 /// En Android usa WebView; en web usa un iframe con el mismo visor.
@@ -27,7 +28,7 @@ class _AvatarNoDisponible extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const ColoredBox(
-        color: Color(0xFFEDE4FB),
+        color: ColoresUnivoz.moradoTenue,
         child: Center(
           child: Padding(
             padding: EdgeInsets.all(16),

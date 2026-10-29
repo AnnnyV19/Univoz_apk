@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Una fuente de datos que se usa en UNIVOZ y cuya licencia obliga a dar
 /// crédito. Los textos salen de `senas_core/datasets_lsm/CREDITOS.md`.
@@ -71,10 +72,10 @@ const List<FuenteDeDatos> fuentesDeDatos = [
 class AcercaScreen extends StatelessWidget {
   const AcercaScreen({super.key});
 
-  static const Color _bgColor = Color(0xFFF7F2FA);
-  static const Color _ink = Color(0xFF1A1A2E);
-  static const Color _gray = Color(0xFF6B6478);
-  static const Color _accent = Color(0xFF6C63FF);
+  static const Color _bgColor = ColoresUnivoz.fondoSuave;
+  static const Color _ink = ColoresUnivoz.tinta;
+  static const Color _gray = ColoresUnivoz.tintaSuave;
+  static const Color _accent = ColoresUnivoz.morado;
 
   @override
   Widget build(BuildContext context) {

@@ -125,4 +125,90 @@ void main() {
     expect(fin, isTrue);
     expect(d.ultimoMovimientoMs, 297);
   });
+
+  test('frames del preview que alternan manos y solo pose siguen contando', () {
+    // El preview sale cuando termina cualquiera de los dos modelos: uno trae
+    // las manos y el siguiente solo la pose. Una seña así debe arrancar y
+    // cortarse igual.
+    final entrada = StreamController<LandmarkFrame>(sync: true);
+    final detector = DetectorAutomatico(framesQuietosParaCortar: 10);
+    var inicio = false;
+    var fin = false;
+    detector.onInicioDetectado = () => inicio = true;
+    detector.onFinDetectado = () => fin = true;
+    detector.iniciar(entrada.stream);
+    for (var i = 0; i < 120 && !fin; i++) {
+      final t = i * 17;
+      if (i.isEven) {
+        final x = .3 + 1.8 * (t <= 600 ? t : 600) / 1000;
+        entrada.add(_mano(t, x));
+      } else {
+        entrada.add(LandmarkFrame.fromMap({'t': t}));
+      }
+    }
+    expect(inicio, isTrue);
+    expect(fin, isTrue);
+    detector.detener();
+    entrada.close();
+  });
+
+  group('MovimientoTipoVisor (el quieto/movimiento del visor, sin avatar)', () {
+    List<double> frame({double muneca = 0, double dedo = 0, bool mano = true}) {
+      final v = List<double>.filled(152, 0);
+      v[30] = mano ? 1 : 0;
+      v[24] = muneca;
+      v[40] = dedo;
+      return v;
+    }
+
+    test('quieto no es movimiento; muñeca o dedos que se mueven sí', () {
+      final m = MovimientoTipoVisor();
+      expect(m.alFrame(frame(), 0), isFalse); // primero: referencia
+      expect(m.alFrame(frame(muneca: .001), 40), isFalse);
+      expect(m.alFrame(frame(muneca: .1), 80), isTrue);
+      expect(m.alFrame(frame(muneca: .1, dedo: .2), 120), isTrue);
+      expect(m.alFrame(frame(muneca: .1, dedo: .2), 160), isFalse);
+    });
+
+    test('sin mano no cuenta, aunque se mueva el cuerpo', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(mano: false), 0);
+      final v = frame(mano: false)..[0] = .5;
+      expect(m.alFrame(v, 40), isFalse);
+    });
+
+    test('una mano que aparece y desaparece no es movimiento', () {
+      final m = MovimientoTipoVisor();
+      List<double> dos({required bool otra}) {
+        final v = frame(muneca: .3, dedo: .2);
+        if (otra) {
+          v[31] = 1;
+          v[27] = -.4;
+          v[100] = .5;
+        }
+        return v;
+      }
+
+      var t = 0;
+      m.alFrame(dos(otra: false), t);
+      for (var i = 0; i < 12; i++) {
+        t += 34;
+        expect(m.alFrame(dos(otra: i.isEven), t), isFalse, reason: 'frame $i');
+      }
+    });
+
+    test('frames más espaciados se miden por 33 ms', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(), 0);
+      // .1 en 100 ms equivale a .033 por frame: por debajo de .06.
+      expect(m.alFrame(frame(muneca: .1), 100), isFalse);
+    });
+
+    test('respeta el ritmo del visor (33 ms)', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(), 0);
+      expect(m.alFrame(frame(muneca: .1), 10), isNull);
+      expect(m.alFrame(frame(muneca: .1), 40), isTrue);
+    });
+  });
 }

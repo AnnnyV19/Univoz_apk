@@ -8,28 +8,43 @@ void main() {
       final tema = temaUnivoz();
       expect(tema.useMaterial3, isTrue);
       expect(tema.brightness, Brightness.light);
-      expect(tema.colorScheme.primary, const Color(0xFF6C63FF));
-      expect(tema.colorScheme.surface, const Color(0xFFF7F2FA));
-      expect(tema.colorScheme.onSurface, const Color(0xFF1A1A2E));
-      expect(tema.colorScheme.error, const Color(0xFFE85D5D));
-      expect(tema.scaffoldBackgroundColor, const Color(0xFFF7F2FA));
+      expect(tema.colorScheme.primary, ColoresUnivoz.morado);
+      expect(tema.colorScheme.surface, Colors.white);
+      expect(tema.colorScheme.onSurface, ColoresUnivoz.tinta);
+      expect(tema.colorScheme.error, const Color(0xFFDC2626));
+      expect(tema.scaffoldBackgroundColor, Colors.white);
     });
 
     test('oscuro: esquema oscuro con primario legible', () {
       final tema = temaUnivoz(brightness: Brightness.dark);
       expect(tema.useMaterial3, isTrue);
       expect(tema.brightness, Brightness.dark);
-      expect(tema.colorScheme.primary, isNot(const Color(0xFF6C63FF)));
-      expect(tema.colorScheme.onSurface, isNot(const Color(0xFF1A1A2E)));
+      expect(tema.colorScheme.primary, isNot(ColoresUnivoz.morado));
+      expect(tema.colorScheme.onSurface, isNot(ColoresUnivoz.tinta));
+      expect(tema.colorScheme.surface.computeLuminance(), lessThan(0.05));
     });
 
-    test('formas redondeadas y snackbar flotante', () {
+    test('tarjetas planas con borde y snackbar flotante', () {
       final tema = temaUnivoz();
       final tarjeta = tema.cardTheme.shape as RoundedRectangleBorder;
-      expect(tarjeta.borderRadius, BorderRadius.circular(20));
+      expect(tarjeta.borderRadius, BorderRadius.circular(kRadioUnivoz));
+      expect(tarjeta.side.width, 2);
+      expect(tema.cardTheme.elevation, 0);
       expect(tema.snackBarTheme.behavior, SnackBarBehavior.floating);
       expect(
           tema.pageTransitionsTheme.builders, contains(TargetPlatform.android));
+    });
+
+    test('estados verde / ambar / rojo en claro y oscuro', () {
+      final claro = temaUnivoz().extension<EstadosUnivoz>();
+      final oscuro =
+          temaUnivoz(brightness: Brightness.dark).extension<EstadosUnivoz>();
+      expect(claro, isNotNull);
+      expect(oscuro, isNotNull);
+      expect(claro!.error.icono, const Color(0xFFDC2626));
+      // En oscuro el fondo del aviso es oscuro y el texto claro.
+      expect(oscuro!.exito.fondo.computeLuminance(),
+          lessThan(oscuro.exito.texto.computeLuminance()));
     });
 
     test('botones con alto minimo de 48 dp', () {

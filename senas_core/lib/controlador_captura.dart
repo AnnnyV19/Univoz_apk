@@ -9,6 +9,7 @@ library controlador_captura;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
@@ -25,6 +26,11 @@ import 'sign_norm.dart'
         fillGaps,
         isotropizarSecuencia,
         kAspectoAnalisisApp,
+        kOffLocL,
+        kOffPresL,
+        kOffPresR,
+        kOffShapeL,
+        kOffShapeR,
         kTFrames,
         resample;
 import 'suavizado_landmarks.dart';
@@ -593,6 +599,95 @@ class ControladorCaptura extends ChangeNotifier {
 /// laboratorio web). Si el visor no esta listo (cargando, error, tiempo
 /// agotado, renderer caido) no manda motion: el detector se alimenta de los
 /// frames de preview con su umbral propio. Nunca las dos fuentes a la vez.
+/// El mismo "quieto/movimiento" que el visor del avatar le manda a Traducir
+/// (rig_math.mjs, createResponsiveRigFilter.motionDiagnostics + el criterio
+/// de index.html), calculado en Dart sobre los frames FUSIONADOS ya
+/// normalizados. Así el modo automático funciona igual con o sin avatar:
+/// antes, sin el visor, se caía al detector por pixeles del preview, que
+/// casi nunca arrancaba ni cortaba bien.
+class MovimientoTipoVisor {
+  MovimientoTipoVisor({this.intervaloMs = 33});
+
+  /// Igual que kIntervaloEnvio: el visor medía entre frames recibidos a
+  /// este ritmo, no entre todos los de la cámara.
+  final int intervaloMs;
+
+  List<double>? _anterior;
+  int? _anteriorMs;
+  // Cada mano se compara con la última vez que estuvo presente (como el
+  // DetectorAutomatico): una mano que aparece o desaparece no es movimiento.
+  // Sin esto, la otra mano entrando y saliendo de cuadro contaba como
+  // movimiento sin parar y la seña nunca terminaba.
+  final List<List<double>?> _mano = [null, null];
+  final List<int?> _manoMs = [null, null];
+
+  void reiniciar() {
+    _anterior = null;
+    _anteriorMs = null;
+    _mano[0] = _mano[1] = null;
+    _manoMs[0] = _manoMs[1] = null;
+  }
+
+  /// null si el frame se salta por el ritmo; si no, si hay movimiento.
+  bool? alFrame(List<double> v, int timestampMs) {
+    final antMs = _anteriorMs;
+    if (antMs != null && timestampMs - antMs < intervaloMs && timestampMs >= antMs) {
+      return null;
+    }
+    if (v.length < kOffShapeR + 60) return false;
+    final ant = _anterior;
+    _anterior = List<double>.of(v);
+    _anteriorMs = timestampMs;
+
+    // Todo llevado a "por frame de 33 ms": si los frames fusionados llegan
+    // más espaciados, el mismo gesto no debe parecer más brusco.
+    double escala(int dt) => intervaloMs / dt.clamp(10, 200);
+
+    var cuerpo = 0.0, muneca = 0.0, forma = 0.0;
+    if (ant != null && ant.length == v.length && antMs != null) {
+      final k = escala(timestampMs - antMs);
+      for (var i = 0; i < kOffLocL; i++) {
+        final d = (v[i] - ant[i]) * k;
+        cuerpo += d * d;
+      }
+    }
+    const loc = [kOffLocL, kOffLocL + 3];
+    const pres = [kOffPresL, kOffPresR];
+    const shape = [kOffShapeL, kOffShapeR];
+    var conMano = false;
+    for (var lado = 0; lado < 2; lado++) {
+      if (v[pres[lado]] < .5) continue;
+      conMano = true;
+      final actual = <double>[
+        ...v.sublist(loc[lado], loc[lado] + 3),
+        ...v.sublist(shape[lado], shape[lado] + 60),
+      ];
+      final previa = _mano[lado];
+      final previaMs = _manoMs[lado];
+      _mano[lado] = actual;
+      _manoMs[lado] = timestampMs;
+      if (previa == null || previaMs == null) continue;
+      final dt = timestampMs - previaMs;
+      if (dt <= 0 || dt > 250) continue; // reapareció: no es movimiento
+      final k = escala(dt);
+      for (var i = 0; i < 3; i++) {
+        final d = (actual[i] - previa[i]) * k;
+        muneca += d * d;
+      }
+      for (var i = 3; i < actual.length; i++) {
+        final d = (actual[i] - previa[i]) * k;
+        forma += d * d;
+      }
+    }
+    if (ant == null) return false;
+    double c(double x) => x < 0 ? 0 : (x > 1 ? 1 : x);
+    // Umbrales "intentional" del filtro: cuerpo .08, muñeca .06, dedos .08.
+    final puntaje = math.max(c(math.sqrt(cuerpo) / 0.08), c(math.sqrt(muneca) / 0.06));
+    final dedos = c(math.sqrt(forma) / 0.08);
+    return conMano && (puntaje >= .8 || dedos >= .8);
+  }
+}
+
 class FuenteMovimientoAuto {
   FuenteMovimientoAuto(this.detector);
 
@@ -737,48 +832,71 @@ class DetectorAutomatico {
     _sub = preview.listen(_procesarFrame);
   }
 
-  double _calcularMovimiento(LandmarkFrame ant, LandmarkFrame act) {
-    double suma = 0;
-    int n = 0;
-
-    void agregarMano(List<List<double>>? a, List<List<double>>? b) {
-      if (a == null || b == null) return;
-      final len = a.length < b.length ? a.length : b.length;
-      for (int i = 0; i < len; i++) {
-        suma += (b[i][0] - a[i][0]).abs();
-        suma += (b[i][1] - a[i][1]).abs();
-        n += 2;
-      }
-    }
-
-    agregarMano(ant.left, act.left);
-    agregarMano(ant.right, act.right);
-    return n > 0 ? suma / n : 0.0;
-  }
-
   void _procesarFrame(LandmarkFrame frame) {
     if (_estado == EstadoAuto.reconociendo || _estado == EstadoAuto.pausa) {
-      _frameAnterior = null;
+      _resetContadores();
       return;
     }
 
+    final t = frame.timestampMs;
     final anterior = _frameAnterior;
     _frameAnterior = frame;
+
+    // Cada mano se compara con la ULTIMA vez que se vio esa mano, no con el
+    // frame anterior: el preview sale apenas termina cualquiera de los dos
+    // modelos nativos, así que puede alternar frames con manos y frames solo
+    // con pose. Comparando contra el frame anterior, una mano en movimiento
+    // junto a un frame sin manos daba 0 y la seña nunca arrancaba (Traducir
+    // sin avatar y la pantalla partida de Comunicarse).
+    var suma = 0.0;
+    var n = 0;
+    void mano(List<List<double>>? act, bool izquierda) {
+      if (act == null) return;
+      final ant = izquierda ? _izqAnt : _derAnt;
+      final antMs = izquierda ? _izqMs : _derMs;
+      if (ant != null && antMs != null) {
+        final dt = t - antMs;
+        // Timestamp repetido o hacia atrás: sin dato. Hueco largo: la mano
+        // reapareció, no es movimiento.
+        if (dt > 0 && dt <= 250) {
+          final len = ant.length < act.length ? ant.length : act.length;
+          var s = 0.0;
+          for (var i = 0; i < len; i++) {
+            s += (act[i][0] - ant[i][0]).abs();
+            s += (act[i][1] - ant[i][1]).abs();
+          }
+          if (len > 0) {
+            // Llevado a "por frame de 30 FPS".
+            suma += s / (2 * len) * _msPorFrameReferencia / dt.clamp(10, 200);
+            n++;
+          }
+        }
+      }
+      if (izquierda) {
+        _izqAnt = act;
+        _izqMs = t;
+      } else {
+        _derAnt = act;
+        _derMs = t;
+      }
+    }
+
+    mano(frame.left, true);
+    mano(frame.right, false);
     if (anterior == null) return;
 
-    // Timestamp repetido o hacia atras (preview de dos modelos del mismo
-    // frame): tratarlo como un frame de referencia, sin escalar.
-    final crudoMs = frame.timestampMs - anterior.timestampMs;
+    final crudoMs = t - anterior.timestampMs;
     final dtMs = crudoMs > 0
         ? crudoMs.clamp(10, 200).toDouble()
         : _msPorFrameReferencia;
-    final tieneManos = frame.left != null || frame.right != null;
-    // Movimiento llevado a "por frame de 30 FPS".
-    final mov = tieneManos
-        ? _calcularMovimiento(anterior, frame) * _msPorFrameReferencia / dtMs
-        : 0.0;
-    _avanzar(mov > umbralMovimiento, dtMs, frame.timestampMs);
+    final mov = n > 0 ? suma / n : 0.0;
+    _avanzar(mov > umbralMovimiento, dtMs, t);
   }
+
+  List<List<double>>? _izqAnt;
+  List<List<double>>? _derAnt;
+  int? _izqMs;
+  int? _derMs;
 
   /// Movimiento ya decidido por otra fuente: el visor (rig_math.mjs, el
   /// mismo filtro adaptativo del laboratorio web) en Traducir. Misma maquina
@@ -850,6 +968,10 @@ class DetectorAutomatico {
 
   void _resetContadores() {
     _frameAnterior = null;
+    _izqAnt = null;
+    _derAnt = null;
+    _izqMs = null;
+    _derMs = null;
     _ultimoAlimentadoMs = null;
     _msQuietos = 0;
   }

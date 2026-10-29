@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:flutter/services.dart'
+    show HapticFeedback, SystemUiOverlayStyle;
 
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
@@ -201,9 +202,11 @@ class _MenuPerfilState extends State<MenuPerfil> {
   }
 }
 
-/// Encabezado morado con flecha de regreso, título "UNIVOZ", el chip de
-/// perfil y el logo. Se reutiliza en Aprender, Comunicarse y Traducir
-/// señas.
+/// Encabezado con flecha de regreso, título "UNIVOZ", el chip de perfil y
+/// el logo. Se reutiliza en Aprender, Comunicarse y Traducir señas.
+///
+/// Diseño de Lucía: barra blanca con texto en tinta, la marca en morado y
+/// una línea fina debajo (antes era una barra con degradado morado).
 class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
   final String? subtitle;
 
@@ -217,20 +220,27 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     // La barra no crece con el texto grande del sistema: se limita a 1.3 para
     // que nunca desborde (el contenido de la pantalla sí escala completo).
-    return MediaQuery.withClampedTextScaling(
-      maxScaleFactor: 1.3,
-      child: _contenido(context),
+    // Barra clara: los iconos del sistema (hora, batería) van oscuros.
+    final oscuro = Theme.of(context).brightness == Brightness.dark;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: oscuro ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.3,
+        child: _contenido(context),
+      ),
     );
   }
 
   Widget _contenido(BuildContext context) {
+    final colores = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
+      color: colores.surface,
+      // La línea va encima (foregroundDecoration), sin quitarle alto al
+      // contenido: la barra tiene alto fijo y con texto grande no cabía.
+      foregroundDecoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: colores.outlineVariant, width: 1.5),
         ),
       ),
       child: SafeArea(
@@ -241,24 +251,24 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
             Row(
               children: [
                 IconButton(
-                  icon: const Icon(Icons.chevron_left,
-                      color: Colors.white, size: 28),
+                  icon: Icon(Icons.chevron_left,
+                      color: colores.onSurface, size: 28),
                   tooltip: 'Regresar',
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
-                const Text(
+                Text(
                   'UNIVOZ',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: colores.primary,
                     fontSize: 18,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 1,
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Flexible(child: MenuPerfil(sobreFondoOscuro: true)),
+                const Flexible(child: MenuPerfil()),
                 const Spacer(),
-                const Icon(Icons.favorite, color: Colors.pinkAccent),
+                Icon(Icons.favorite, color: colores.primary),
                 const SizedBox(width: 12),
               ],
             ),
@@ -267,8 +277,8 @@ class UnivozHeader extends StatelessWidget implements PreferredSizeWidget {
                 padding: const EdgeInsets.only(left: 20, bottom: 8),
                 child: Text(
                   subtitle!,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: colores.onSurfaceVariant,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -293,7 +303,12 @@ class SosButton extends StatefulWidget {
   final LanzadorUrl? lanzador;
   final LectorVoz? lector;
 
-  const SosButton({super.key, this.lanzador, this.lector});
+  /// true: círculo rojo chico con el ícono (encima de la cámara en
+  /// Comunicarse, para no tapar); igual se mantiene presionado.
+  final bool compacto;
+
+  const SosButton(
+      {super.key, this.lanzador, this.lector, this.compacto = false});
 
   /// Cuánto hay que mantenerlo presionado.
   static const Duration duracionPresion = Duration(milliseconds: 800);
@@ -352,6 +367,44 @@ class _SosButtonState extends State<SosButton>
     m.showSnackBar(const SnackBar(content: Text('Mantén presionado para SOS')));
   }
 
+  Widget _circulo(ColorScheme colores) {
+    return Container(
+      width: 52,
+      height: 52,
+      decoration: BoxDecoration(
+        color: colores.error,
+        shape: BoxShape.circle,
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            'SOS',
+            style: TextStyle(
+              color: colores.onError,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          if (_progreso.value > 0)
+            SizedBox(
+              width: 48,
+              height: 48,
+              child: CircularProgressIndicator(
+                key: const ValueKey('anillo-sos'),
+                value: _progreso.value,
+                strokeWidth: 3,
+                color: colores.onError,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colores = Theme.of(context).colorScheme;
@@ -374,32 +427,23 @@ class _SosButtonState extends State<SosButton>
           onTapCancel: () => _soltar(fueToque: false),
           child: AnimatedBuilder(
             animation: _progreso,
-            builder: (context, _) => Container(
-              width: double.infinity,
-              // Mínimo 52: con texto grande el rótulo pasa a dos renglones.
-              constraints: const BoxConstraints(minHeight: 52),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: colores.error,
-                borderRadius: BorderRadius.circular(26),
-              ),
-              clipBehavior: Clip.antiAlias,
+            // El relleno que avanza va ENCIMA del botón, del mismo tamaño;
+            // el contenido va centrado (antes se pegaba arriba del rojo).
+            builder: (context, _) => widget.compacto
+                ? _circulo(colores)
+                : ClipRRect(
+              borderRadius: BorderRadius.circular(26),
               child: Stack(
                 children: [
-                  // Relleno que avanza mientras se mantiene presionado.
-                  Positioned.fill(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: _progreso.value,
-                        child: ColoredBox(
-                          color: colores.onError.withValues(alpha: 0.22),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Center(
-                    heightFactor: 1,
+                  Container(
+                    width: double.infinity,
+                    // Mínimo 52: con texto grande el rótulo pasa a dos
+                    // renglones.
+                    constraints: const BoxConstraints(minHeight: 52),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    alignment: Alignment.center,
+                    color: colores.error,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -426,21 +470,115 @@ class _SosButtonState extends State<SosButton>
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
-                            'SOS (Emergencia)',
+                            'SOS',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: colores.onError,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1,
                             ),
                           ),
                         ),
                       ],
                     ),
                   ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: _progreso.value,
+                          heightFactor: 1,
+                          child: ColoredBox(
+                            color: colores.onError.withValues(alpha: 0.22),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarjeta con un dibujo grande y una o dos palabras debajo: la usan los
+/// menús de perfiles y las preguntas de sí/no. No todas las personas leen
+/// el español con soltura, así que en pantalla va poco texto; la frase
+/// completa ([lector]) es la que lee TalkBack.
+///
+/// Toma el alto que le den (va dentro de un Expanded): las pantallas que la
+/// usan no se deslizan.
+class TarjetaDibujo extends StatelessWidget {
+  const TarjetaDibujo({
+    super.key,
+    required this.ilustracion,
+    required this.titulo,
+    required this.lector,
+    required this.color,
+    required this.seleccionada,
+    required this.onTap,
+    this.colorTexto,
+  });
+
+  /// Nombre del PNG en assets/ilustraciones/ (sin extensión).
+  final String ilustracion;
+  final String titulo;
+  final String lector;
+  final Color color;
+  final Color? colorTexto;
+  final bool seleccionada;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final texto = colorTexto ?? Theme.of(context).colorScheme.onSurface;
+    return Semantics(
+      button: true,
+      selected: seleccionada,
+      label: lector,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: seleccionada ? Colors.black87 : Colors.transparent,
+              width: 3,
+            ),
+          ),
+          child: Column(
+            children: [
+              Expanded(
+                child: Image.asset(
+                  'assets/ilustraciones/$ilustracion.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+              const SizedBox(height: 4),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  titulo,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: texto,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -8,6 +8,7 @@ import 'univoz_shared_widgets.dart';
 import '../services/tarjeta_perfil.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Pantalla para elegir el perfil de la persona con la que el usuario se
 /// va a comunicar. Ofrece dos caminos:
@@ -48,12 +49,17 @@ class _OtherPersonText {
   final String refinementSubtitle;
   final List<String> refinementOptions;
 
+  /// Palabra corta en pantalla para cada respuesta (los dibujos son los de
+  /// [refinementConfigs]); [refinementOptions] completas van a TalkBack.
+  final List<String> cortos;
+
   const _OtherPersonText({
     required this.title,
     required this.subtitle,
     required this.refinementTitle,
     required this.refinementSubtitle,
     required this.refinementOptions,
+    required this.cortos,
   });
 }
 
@@ -64,6 +70,7 @@ const Map<ProfileType, _OtherPersonText> _otherPersonConfigs = {
     refinementTitle: '¿Cómo prefiere usar la app?',
     refinementSubtitle: 'Elige una opción para personalizar la experiencia',
     refinementOptions: ['No usa lector de pantalla', 'Usa lector de pantalla'],
+    cortos: ['Sin lector', 'Con lector'],
   ),
   ProfileType.sordo: _OtherPersonText(
     title: 'Es sordo/a',
@@ -71,6 +78,7 @@ const Map<ProfileType, _OtherPersonText> _otherPersonConfigs = {
     refinementTitle: '¿Conoce Lengua de Señas Mexicana?',
     refinementSubtitle: 'Esto nos ayuda a elegir cómo se comunicarán',
     refinementOptions: ['No conoce LSM', 'Conoce LSM'],
+    cortos: ['No sabe LSM', 'Sabe LSM'],
   ),
   ProfileType.mudo: _OtherPersonText(
     title: 'Es mudo/a',
@@ -78,6 +86,7 @@ const Map<ProfileType, _OtherPersonText> _otherPersonConfigs = {
     refinementTitle: '¿Conoce Lengua de Señas Mexicana?',
     refinementSubtitle: 'Esto nos ayuda a elegir cómo se comunicarán',
     refinementOptions: ['No conoce LSM', 'Conoce LSM'],
+    cortos: ['No sabe LSM', 'Sabe LSM'],
   ),
 };
 
@@ -121,10 +130,8 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
 
   Timer? _scanTimer;
 
-  static const Color _grayText = Color(0xFF6B6478);
-  static const Color _comenzarColor = Color(0xFF8F84A6);
-  static const Color _radioCardColor = Color(0xFF241B35);
-  static const Color _radioAccent = Color(0xFFB388E8);
+  static const Color _grayText = ColoresUnivoz.tintaSuave;
+  static const Color _comenzarColor = ColoresUnivoz.morado;
 
   /// El perfil propio cambió desde el chip de arriba. Hay que redibujar
   /// y limpiar lo que estuviera elegido: los perfiles que se ofrecen para
@@ -186,7 +193,8 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     ConversationProfile.other = answer;
     if (answer == ProfileType.oyente) {
       ConversationProfile.otherKnowsLsm = false;
-      Navigator.of(context).pushReplacement(
+      if (!mounted) return;
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
             initialIndex: 1,
@@ -211,8 +219,8 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
       knowsLsm = cmd == VoiceCommand.yes;
     }
     ConversationProfile.otherKnowsLsm = knowsLsm;
-    if (!isCurrent()) return;
-    Navigator.of(context).pushReplacement(
+    if (!isCurrent() || !mounted) return;
+    Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MainShellScreen(
           initialIndex: 1,
@@ -282,7 +290,10 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
         .map((e) => 'Opción ${e.key + 1}: ${e.value}.')
         .join(' ');
     final message = '${other.title}. ${other.refinementTitle} $optionsSpeech';
-    SemanticsService.announce(message, TextDirection.ltr);
+    if (mounted) {
+      SemanticsService.sendAnnouncement(
+          View.of(context), message, TextDirection.ltr);
+    }
     BlindNarrator.speak(message);
   }
 
@@ -301,7 +312,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     if (_selectedOyente) {
       ConversationProfile.other = ProfileType.oyente;
       ConversationProfile.otherKnowsLsm = false;
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
             initialIndex: 1,
@@ -321,7 +332,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
       final bool otherKnowsLsm = _expandedOptionIndex == 1;
       ConversationProfile.other = _expandedProfile;
       ConversationProfile.otherKnowsLsm = otherKnowsLsm;
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => MainShellScreen(
             initialIndex: 1,
@@ -395,8 +406,41 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     });
   }
 
+  /// Preguntas que no cambian nada y se saltan:
+  ///  - de una persona ciega no importa si usa lector de pantalla (el
+  ///    teléfono es el tuyo);
+  ///  - si tú eres sordo/a o mudo/a y sabes LSM, la otra persona sorda o
+  ///    muda con la que necesitas la app es porque NO sabe LSM (si supiera,
+  ///    se entenderían firmando).
+  bool _preguntaSobra(ProfileType type) {
+    if (type == ProfileType.ciego) return true;
+    final mine = ConversationProfile.mine;
+    final yoFirmo = (mine == ProfileType.sordo || mine == ProfileType.mudo) &&
+        ConversationProfile.mineKnowsLsm;
+    return yoFirmo && (type == ProfileType.sordo || type == ProfileType.mudo);
+  }
+
   void _expandCard(ProfileType type) {
     BlindNarrator.interruptFlow();
+    if (_preguntaSobra(type)) {
+      ConversationProfile.other = type;
+      ConversationProfile.otherKnowsLsm = false;
+      setState(() {
+        _expandedProfile = null;
+        _expandedOptionIndex = null;
+        _selectedOyente = false;
+        _detectedProfile = null;
+      });
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => MainShellScreen(
+            initialIndex: 1,
+            modo: resolverComunicacionModo(),
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       _expandedProfile = type;
       _expandedOptionIndex = null;
@@ -452,16 +496,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                   height: 1.2,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Escanea su código o elige su perfil',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: _grayText,
-                ),
-              ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 14),
               Expanded(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 320),
@@ -492,7 +527,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _comenzarColor,
                     disabledBackgroundColor:
-                        _comenzarColor.withOpacity(0.4),
+                        _comenzarColor.withValues(alpha: 0.4),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -516,8 +551,9 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   }
 
   /// Contenido principal: botón de escaneo + resultado detectado (si aplica)
-  /// + cuadrícula manual (2 tarjetas por fila, adaptada según cuántos
-  /// perfiles apliquen — ver [_selectableProfiles]).
+  /// + cuadrícula (2 tarjetas por fila, según cuántos perfiles apliquen —
+  /// ver [_selectableProfiles]). Sin desplazar: las filas se reparten el
+  /// alto que queda.
   Widget _buildMainContent({required Key key}) {
     final cards = [
       for (final p in _selectableProfiles) _buildCard(profileConfigs[p]!),
@@ -526,67 +562,51 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     final rows = <Widget>[];
     for (var i = 0; i < cards.length; i += 2) {
       final segunda = i + 1 < cards.length ? cards[i + 1] : null;
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: 12));
       rows.add(
-        Row(
-          children: [
-            Expanded(child: cards[i]),
-            const SizedBox(width: 14),
-            Expanded(child: segunda ?? const SizedBox.shrink()),
-          ],
-        ),
-      );
-      rows.add(const SizedBox(height: 14));
-    }
-    if (rows.isNotEmpty) rows.removeLast();
-
-    return SingleChildScrollView(
-      key: key,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildScanButton(),
-          if (_detectedProfile != null) ...[
-            const SizedBox(height: 14),
-            if (_detectedTarjeta != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Codigo leido: ${_detectedTarjeta!.resumen}',
-                  style: TextStyle(
-                    color: _grayText,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            _buildDetectedCard(profileConfigs[_detectedProfile]!),
-          ],
-          const SizedBox(height: 20),
-          Row(
+        Expanded(
+          child: Row(
             children: [
-              Expanded(
-                child: Divider(color: _grayText.withOpacity(0.3)),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Text(
-                  'o selecciona manualmente',
-                  style: TextStyle(
-                    color: _grayText,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Divider(color: _grayText.withOpacity(0.3)),
-              ),
+              Expanded(child: cards[i]),
+              const SizedBox(width: 12),
+              Expanded(child: segunda ?? const SizedBox.shrink()),
             ],
           ),
-          const SizedBox(height: 16),
-          ...rows,
+        ),
+      );
+    }
+
+    return Column(
+      key: key,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildScanButton(),
+        if (_detectedProfile != null) ...[
+          const SizedBox(height: 12),
+          _buildDetectedCard(profileConfigs[_detectedProfile]!),
         ],
-      ),
+        const SizedBox(height: 14),
+        const Row(
+          children: [
+            Expanded(child: Divider()),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                'o elige',
+                semanticsLabel: 'o selecciona su perfil manualmente',
+                style: TextStyle(
+                  color: _grayText,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Expanded(child: Divider()),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ...rows,
+      ],
     );
   }
 
@@ -595,7 +615,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
       onTap: _scanning ? null : _startScan,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [Theme.of(context).colorScheme.primary, const Color(0xFFB84FCE)],
@@ -616,8 +636,8 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 ),
               )
             else
-              const Icon(Icons.bluetooth_searching,
-                  color: Colors.white, size: 24),
+              const Icon(Icons.qr_code_scanner,
+                  color: Colors.white, size: 26),
             const SizedBox(width: 14),
             Expanded(
               child: Text(
@@ -640,17 +660,22 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   Widget _buildDetectedCard(ProfileConfig config) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
       decoration: BoxDecoration(
         color: config.cardColor,
         borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: config.iconBgColor,
-            child: Icon(config.icon, size: 20, color: Colors.white),
+          ExcludeSemantics(
+            child: SizedBox(
+              width: 64,
+              height: 48,
+              child: Image.asset(
+                'assets/ilustraciones/${config.ilustracion}.png',
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -668,7 +693,7 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                 Text(
                   '¿Es correcto?',
                   style: TextStyle(
-                    color: config.textColor.withOpacity(0.8),
+                    color: config.textColor.withValues(alpha: 0.8),
                     fontSize: 12,
                   ),
                 ),
@@ -691,40 +716,27 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
   }
 
   Widget _buildCard(ProfileConfig config) {
-    return GestureDetector(
+    final other = _otherPersonConfigs[config.type]!;
+    return TarjetaDibujo(
+      ilustracion: config.ilustracion,
+      titulo: config.corto,
+      lector: '${other.title}. ${other.subtitle}',
+      color: config.cardColor,
+      colorTexto: config.textColor,
+      seleccionada: false,
       onTap: () => _expandCard(config.type),
-      child: Container(
-        height: 130,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: config.cardColor,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CircleAvatar(
-              radius: 15,
-              backgroundColor: config.iconBgColor,
-              child: Icon(config.icon, size: 16, color: Colors.white),
-            ),
-            const Spacer(),
-            Text(
-              _otherPersonConfigs[config.type]!.title,
-              style: TextStyle(
-                color: config.textColor,
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
+  /// "Es oyente": antes un botón verde; ahora en el morado tenue del
+  /// diseño de Lucía.
   Widget _buildOyenteButton() {
-    return GestureDetector(
+    return TarjetaDibujo(
+      ilustracion: 'oyente',
+      titulo: 'Oyente',
+      lector: 'Es oyente, sin discapacidades',
+      color: ColoresUnivoz.moradoTenue,
+      seleccionada: _selectedOyente,
       onTap: () {
         BlindNarrator.interruptFlow();
         setState(() {
@@ -733,35 +745,6 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
           _detectedProfile = null;
         });
       },
-      child: Container(
-        height: 130,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF6FCF6F), Color(0xFF3F9142)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(18),
-          border: _selectedOyente
-              ? Border.all(color: Colors.black87, width: 3)
-              : null,
-        ),
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Spacer(),
-            Text(
-              'Es oyente, sin\ndiscapacidades',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -770,30 +753,38 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
     required Key key,
   }) {
     final other = _otherPersonConfigs[config.type]!;
+    final dibujos = refinementConfigs[config.type]!.ilustraciones;
     return Container(
       key: key,
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 14),
       decoration: BoxDecoration(
         color: config.cardColor,
         borderRadius: BorderRadius.circular(22),
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: config.iconBgColor,
-                  child:
-                      Icon(config.icon, size: 20, color: Colors.white),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ExcludeSemantics(
+                child: SizedBox(
+                  width: 56,
+                  height: 42,
+                  child: Image.asset(
+                    'assets/ilustraciones/${config.ilustracion}.png',
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Semantics(
+                  header: true,
                   child: Text(
                     other.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: config.textColor,
                       fontSize: 18,
@@ -801,112 +792,51 @@ class _OtherPersonProfileScreenState extends State<OtherPersonProfileScreen> {
                     ),
                   ),
                 ),
-                IconButton(
-                  icon: Icon(Icons.close, color: config.textColor),
-                  tooltip: 'Cerrar',
-                  onPressed: _collapseCard,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
+              ),
+              IconButton(
+                icon: Icon(Icons.close, color: config.textColor),
+                tooltip: 'Cerrar',
+                onPressed: _collapseCard,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Text(
               other.refinementTitle,
+              maxLines: 2,
               style: TextStyle(
                 color: config.textColor,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              other.refinementSubtitle,
-              style: TextStyle(
-                color: config.textColor.withOpacity(0.8),
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-              decoration: BoxDecoration(
-                color: _radioCardColor,
-                borderRadius: BorderRadius.circular(18),
-              ),
-              // Cada opción es un objetivo táctil de al menos 48x48dp
-              // (mínimo recomendado por las normas de accesibilidad —
-              // WCAG 2.5.5 / Android — para personas con baja visión o
-              // ceguera), con más separación entre opciones para evitar
-              // toques accidentales.
-              child: Column(
-                children:
-                    List.generate(other.refinementOptions.length, (i) {
-                  final bool isSelected = _expandedOptionIndex == i;
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom:
-                          i == other.refinementOptions.length - 1 ? 0 : 8,
-                    ),
-                    child: Semantics(
-                      button: true,
-                      selected: isSelected,
-                      label: other.refinementOptions[i],
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(14),
-                          onTap: () =>
-                              setState(() => _expandedOptionIndex = i),
-                          child: Container(
-                            constraints: const BoxConstraints(minHeight: 56),
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 14, horizontal: 10),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 28,
-                                  height: 28,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color: _radioAccent, width: 2.5),
-                                    color: isSelected
-                                        ? _radioAccent
-                                        : Colors.transparent,
-                                  ),
-                                  child: isSelected
-                                      ? const Icon(Icons.circle,
-                                          size: 12, color: Colors.white)
-                                      : null,
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Text(
-                                    other.refinementOptions[i],
-                                    style: TextStyle(
-                                      color: isSelected
-                                          ? _radioAccent
-                                          : Colors.white70,
-                                      fontWeight: isSelected
-                                          ? FontWeight.w700
-                                          : FontWeight.w500,
-                                      fontSize: 17,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Row(
+                children: [
+                  for (var i = 0; i < other.refinementOptions.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 10),
+                    Expanded(
+                      child: TarjetaDibujo(
+                        ilustracion: dibujos[i],
+                        titulo: other.cortos[i],
+                        lector: other.refinementOptions[i],
+                        color: Colors.white,
+                        seleccionada: _expandedOptionIndex == i,
+                        onTap: () => setState(() => _expandedOptionIndex = i),
                       ),
                     ),
-                  );
-                }),
+                  ],
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

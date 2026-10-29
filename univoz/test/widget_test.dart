@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -5,13 +7,36 @@ import 'package:univoz/main.dart';
 import 'package:univoz/screens/purpose_screen.dart';
 import 'package:univoz/screens/traducir_senas_screen.dart';
 import 'package:univoz/screens/welcome_screen.dart';
+import 'package:univoz/screens/tutorial_screen.dart';
+import 'package:univoz/services/tutorial_visto.dart';
 
 void main() {
-  testWidgets('welcome navigates to purpose selection', (tester) async {
+  testWidgets('primera vez: bienvenida -> tutorial -> menu', (tester) async {
+    TutorialVisto.restablecerParaPruebas(visto: false);
+    TutorialVisto.directorioParaPruebas =
+        () async => throw const FileSystemException('sin disco');
+    addTearDown(() => TutorialVisto.directorioParaPruebas = null);
     await tester.pumpWidget(const MaterialApp(home: WelcomeScreen()));
 
-    expect(find.text('COMENZAR'), findsOneWidget);
-    await tester.tap(find.text('COMENZAR'));
+    await tester.tap(find.text('Comenzar'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TutorialScreen), findsOneWidget);
+    for (var i = 0; i < 4; i++) {
+      await tester.tap(find.text('Siguiente'));
+      await tester.pump();
+    }
+    await tester.tap(find.text('Empezar'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PurposeScreen), findsOneWidget);
+    expect(TutorialVisto.visto, isTrue);
+  });
+
+  testWidgets('welcome navigates to purpose selection', (tester) async {
+    TutorialVisto.restablecerParaPruebas(visto: true);
+    await tester.pumpWidget(const MaterialApp(home: WelcomeScreen()));
+
+    expect(find.text('Comenzar'), findsOneWidget);
+    await tester.tap(find.text('Comenzar'));
     await tester.pumpAndSettle();
 
     expect(find.byType(PurposeScreen), findsOneWidget);
@@ -22,15 +47,9 @@ void main() {
       (tester) async {
     await tester.pumpWidget(const MaterialApp(home: PurposeScreen()));
 
-    final configuracion = find.byKey(const ValueKey('purpose-configuracion'));
-    await tester.ensureVisible(configuracion);
-    await tester.tap(configuracion);
-    await tester.pump();
-    expect(
-      tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed,
-      isNotNull,
-    );
-    await tester.tap(find.text('Comenzar ahora'));
+    // Configuración es la tuerca de arriba, no una de las opciones.
+    expect(find.text('Configuración'), findsNothing);
+    await tester.tap(find.byTooltip('Configuración'));
     await tester.pumpAndSettle();
 
     expect(find.byType(TraducirSenasScreen), findsOneWidget);
@@ -49,7 +68,7 @@ void main() {
     await tester.pump();
 
     expect(find.byType(MaterialApp), findsOneWidget);
-    expect(find.text('COMENZAR'), findsOneWidget);
+    expect(find.text('Comenzar'), findsOneWidget);
     expect(find.text('¿Cómo funciona?'), findsOneWidget);
   });
 }

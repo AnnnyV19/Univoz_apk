@@ -6,13 +6,14 @@ import '../services/descripcion_senas.dart';
 import '../services/perfil_guardado.dart';
 import '../services/progreso_aprendizaje.dart';
 import '../widgets/visor_sena.dart';
+import 'package:senas_core/tema_univoz.dart';
 
-const Color _kFondo = Color(0xFFF7F2FA);
-const Color _kMorado = Color(0xFF6C63FF);
-const Color _kMoradoOscuro = Color(0xFF4F46C9);
-const Color _kTexto = Color(0xFF1A1A2E);
-const Color _kGris = Color(0xFF5B5470);
-const Color _kBorde = Color(0xFFDDD3EE);
+const Color _kFondo = ColoresUnivoz.fondoSuave;
+const Color _kMorado = ColoresUnivoz.morado;
+const Color _kMoradoOscuro = ColoresUnivoz.moradoOscuro;
+const Color _kTexto = ColoresUnivoz.tinta;
+const Color _kGris = ColoresUnivoz.tintaSuave;
+const Color _kBorde = ColoresUnivoz.bordeControl;
 const Color _kVerde = Color(0xFF3FBF8F);
 const Color _kAmbar = Color(0xFFE8A33D);
 
@@ -157,8 +158,10 @@ class _LeccionScreenState extends State<LeccionScreen> {
             Expanded(
               child: enPantalla == null
                   ? const SizedBox.shrink()
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                  // Sin desplazar: el avatar toma el alto que dejan las
+                  // opciones.
+                  : Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
                       child: _contenido(enPantalla),
                     ),
             ),
@@ -185,8 +188,8 @@ class _LeccionScreenState extends State<LeccionScreen> {
               child: LinearProgressIndicator(
                 value: _sesion.progreso,
                 minHeight: 12,
-                backgroundColor: const Color(0xFFE3DAF2),
-                valueColor: const AlwaysStoppedAnimation<Color>(_kVerde),
+                backgroundColor: ColoresUnivoz.lavanda,
+                valueColor: const AlwaysStoppedAnimation<Color>(_kMorado),
               ),
             ),
           ),
@@ -206,6 +209,10 @@ class _LeccionScreenState extends State<LeccionScreen> {
 
   // ---------------------------------------------------------------- cuerpo
 
+  /// El avatar en el alto que quede (nada se desliza).
+  Widget _visorFlexible({String? etiqueta}) =>
+      VisorSena(controlador: _visor, alto: null, etiqueta: etiqueta);
+
   Widget _contenido(Ejercicio e) {
     switch (e.tipo) {
       case TipoEjercicio.miraYElige:
@@ -221,26 +228,19 @@ class _LeccionScreenState extends State<LeccionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          tipo.toUpperCase(),
-          style: const TextStyle(
-            color: _kMoradoOscuro,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
-          ),
-        ),
-        const SizedBox(height: 6),
+        // Solo la pregunta, corta; el tipo de ejercicio lo lee TalkBack.
         Text(
           titulo,
+          semanticsLabel: '$tipo. $titulo',
+          maxLines: 2,
           style: const TextStyle(
             color: _kTexto,
-            fontSize: 23,
+            fontSize: 21,
             fontWeight: FontWeight.w800,
-            height: 1.25,
+            height: 1.2,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
       ],
     );
   }
@@ -261,8 +261,8 @@ class _LeccionScreenState extends State<LeccionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _encabezado('Mira y elige', '¿Qué seña es ésta?'),
-        VisorSena(controlador: _visor, alto: 240),
-        const SizedBox(height: 14),
+        Expanded(child: _visorFlexible()),
+        const SizedBox(height: 12),
         for (final o in e.opciones)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
@@ -282,8 +282,8 @@ class _LeccionScreenState extends State<LeccionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _encabezado('Elige la seña', '¿Cuál es la seña de “$palabra”?'),
-        VisorSena(controlador: _visor, alto: 190),
-        const SizedBox(height: 14),
+        Expanded(child: _visorFlexible()),
+        const SizedBox(height: 12),
         GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,
@@ -306,16 +306,6 @@ class _LeccionScreenState extends State<LeccionScreen> {
               ),
           ],
         ),
-        const SizedBox(height: 12),
-        const Text(
-          'Toca cada seña para verla. Elige la que crees que es y comprueba.',
-          style: TextStyle(
-            color: _kGris,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            height: 1.4,
-          ),
-        ),
       ],
     );
   }
@@ -325,20 +315,20 @@ class _LeccionScreenState extends State<LeccionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _encabezado('Deletrea', 'Mira las letras y arma el nombre'),
+        _encabezado('Deletrea', 'Arma el nombre'),
         // El rótulo cambia mientras el avatar avanza de letra, así que este
         // pedazo se redibuja con el visor.
-        AnimatedBuilder(
-          animation: _visor,
-          builder: (context, _) => VisorSena(
-            controlador: _visor,
-            alto: 200,
-            etiqueta: _visor.reproduciendo
-                ? 'Letra ${_visor.posicion} de ${_visor.total}'
-                : '$n letras',
+        Expanded(
+          child: AnimatedBuilder(
+            animation: _visor,
+            builder: (context, _) => _visorFlexible(
+              etiqueta: _visor.reproduciendo
+                  ? 'Letra ${_visor.posicion} de ${_visor.total}'
+                  : '$n letras',
+            ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         // Wrap y no Row: un nombre de 8 letras no cabe en una sola fila.
         Wrap(
           alignment: WrapAlignment.center,
@@ -358,7 +348,7 @@ class _LeccionScreenState extends State<LeccionScreen> {
               ),
           ],
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 12),
         GridView.count(
           crossAxisCount: 5,
           shrinkWrap: true,
@@ -489,7 +479,7 @@ class _BotonGrande extends StatelessWidget {
           height: 58,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: activo ? color : const Color(0xFFE3DAF2),
+            color: activo ? color : ColoresUnivoz.lavanda,
             borderRadius: BorderRadius.circular(18),
             boxShadow: activo
                 ? [BoxShadow(color: sombra, offset: const Offset(0, 4))]
@@ -499,7 +489,7 @@ class _BotonGrande extends StatelessWidget {
             child: Text(
               texto,
               style: TextStyle(
-                color: activo ? colorTexto : const Color(0xFF8077A0),
+                color: activo ? colorTexto : ColoresUnivoz.tintaTenue,
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.3,
@@ -538,7 +528,7 @@ class _BotonOpcion extends StatelessWidget {
         letra = _kTexto;
         break;
       case _EstadoOpcion.elegida:
-        fondo = const Color(0xFFE7E4FF);
+        fondo = ColoresUnivoz.moradoTenue;
         borde = _kMorado;
         letra = const Color(0xFF3A33A8);
         break;
@@ -610,7 +600,7 @@ class _Casilla extends StatelessWidget {
     final Color borde;
     switch (estado) {
       case _EstadoOpcion.elegida:
-        fondo = const Color(0xFFE7E4FF);
+        fondo = ColoresUnivoz.moradoTenue;
         borde = _kMorado;
         break;
       case _EstadoOpcion.correcta:
@@ -674,7 +664,7 @@ class _Tecla extends StatelessWidget {
             child: Text(
               letra,
               style: TextStyle(
-                color: alTocar == null ? const Color(0xFF8077A0) : _kTexto,
+                color: alTocar == null ? ColoresUnivoz.tintaTenue : _kTexto,
                 fontSize: 19,
                 fontWeight: FontWeight.w800,
               ),
@@ -814,8 +804,9 @@ class _HojaResultado extends StatelessWidget {
             _BotonGrande(
               texto: 'Continuar',
               alTocar: alContinuar,
-              color: acento,
-              sombra: acierto ? const Color(0xFF2E9570) : const Color(0xFFBC7F22),
+              // Acierto: el botón morado de siempre (antes verde).
+              color: acierto ? _kMorado : acento,
+              sombra: acierto ? _kMoradoOscuro : const Color(0xFFBC7F22),
               colorTexto: acierto ? Colors.white : const Color(0xFF3D2503),
             ),
           ],
@@ -855,7 +846,7 @@ class _PantallaFin extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(28, 84, 28, 40),
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xFF6C63FF), Color(0xFF8B5CF6)],
+                colors: [ColoresUnivoz.morado, ColoresUnivoz.moradoOscuro],
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
               ),
@@ -884,7 +875,7 @@ class _PantallaFin extends StatelessWidget {
                   '${leccion.titulo} · ${leccion.glosas.length} '
                   '${leccion.glosas.length == 1 ? 'seña' : 'señas'}',
                   style: const TextStyle(
-                    color: Color(0xFFEDE4FB),
+                    color: ColoresUnivoz.moradoTenue,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),

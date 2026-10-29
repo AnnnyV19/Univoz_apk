@@ -249,3 +249,77 @@ export const SeparadorManos = (() => {
   return Object.freeze({resolverPar, mejorT, restricciones, topeHorizontal,
     MAX_DESPL, TASA});
 })();
+
+// ---------------------------------------------------------------------
+// Flexion de los dedos largos CON SIGNO (2026-10-28).
+//
+// El visor medía cada falange como el angulo SIN signo entre dos
+// segmentos. Eso sumaba como "doblez hacia la palma" dos cosas que no lo
+// son: la abertura lateral de los dedos (el indice sale ~20° de la linea
+// del metacarpo) y la hiperextension (la punta que el detector deja un poco
+// hacia atras). Con la palma hacia la camara, los dedos que en el video van
+// derechos quedaban apuntando hacia quien mira. Medido en las 541 señas: la
+// articulacion de la punta salia 6-17° doblada de mas y el nudillo del
+// indice ~10°.
+//
+// Ahora la flexion es la componente del giro sobre la normal de la palma:
+// positiva hacia la palma, la abertura lateral no cuenta y lo que va hacia
+// atras se queda en 0 (recto). La normal sale de la quiralidad de cada mano
+// (sign_norm: x,y de imagen sin espejo, z de MediaPipe): derecha =
+// indice x meñique, izquierda = al reves. Si una toma viene espejada la
+// quiralidad se invierte; se detecta porque nudillos y falanges medias
+// quedarian casi todos "hacia atras", y entonces se usa la normal opuesta.
+// Devuelve [[mcp, pip, dip] x indice, medio, anular, meñique] en radianes,
+// o null si la mano es degenerada.
+// ---------------------------------------------------------------------
+export function flexionesConSigno(puntos, lado) {
+  if (!Array.isArray(puntos) || puntos.length < 20) return null;
+  const resta = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const pto = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const largo = (a) => Math.sqrt(pto(a, a));
+  const cruz = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]];
+  for (const p of puntos) {
+    if (!Array.isArray(p) || p.length < 3 || !p.every(Number.isFinite)) return null;
+  }
+  let n = cruz(puntos[4], puntos[16]);
+  if (lado === 'left') n = n.map((x) => -x);
+  const ln = largo(n);
+  if (!(ln > 1e-9)) return null;
+  n = n.map((x) => x / ln);
+  const dedos = [[4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15], [16, 17, 18, 19]];
+  const medir = (normal) => {
+    const out = [];
+    for (const idx of dedos) {
+      const pts = [[0, 0, 0], ...idx.map((i) => puntos[i])];
+      const seg = [];
+      for (let k = 0; k < 4; k++) seg.push(resta(pts[k + 1], pts[k]));
+      if (seg.some((s) => !(largo(s) > 1e-9))) return null;
+      const f = [];
+      for (let k = 0; k < 3; k++) {
+        const la = largo(seg[k]);
+        const a = seg[k].map((x) => x / la);
+        const b = seg[k + 1];
+        // normal de la palma sin la parte paralela al segmento anterior
+        const d = pto(normal, a);
+        let np = normal.map((x, c) => x - d * a[c]);
+        const lnp = largo(np);
+        if (!(lnp > 1e-9)) return null;
+        np = np.map((x) => x / lnp);
+        f.push(Math.atan2(pto(b, np), pto(b, a)));
+      }
+      out.push(f);
+    }
+    return out;
+  };
+  let f = medir(n);
+  if (!f) return null;
+  // Quiralidad: nudillos + falanges medias casi todos hacia atras = toma
+  // espejada (una mano real no se hiperextiende asi en los cuatro dedos).
+  const suma = f.reduce((s, d) => s + d[0] + d[1], 0);
+  if (suma < -0.6) {
+    const g = medir(n.map((x) => -x));
+    if (g) f = g;
+  }
+  return f.map((d) => d.map((x) => Math.max(0, x)));
+}

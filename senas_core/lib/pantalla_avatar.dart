@@ -1,5 +1,5 @@
 /// Pantalla del avatar 3D y del diccionario: escribes, eliges de una lista, o
-/// dices una palabra, y el avatar (assets/avatar/univozM.vrm) hace la
+/// dices una palabra, y el avatar (assets/avatar/MODELO_UNIVOZ_v0.vrm) hace la
 /// seña correspondiente. Es el sentido inverso de PantallaDeTranslacion: en
 /// vez de camara -> texto, es texto/voz -> avatar.
 ///

@@ -73,7 +73,9 @@ void main() {
     expect(html, contains('window.configurarVista'));
     expect(html, contains('espejo ? mirrorMotionFrame(frameVivo) : frameVivo'));
     // la reproduccion de biblioteca no se espeja
-    expect(html, contains('interpolarFramePlantilla(colaFrames[i], colaFrames[i + 1], f), {'));
+    expect(html, contains('interpolarFramePlantilla(colaFrames[i], colaFrames[i + 1], f);'));
+    expect(html, contains('RigBodyEngine.aplicarFrame(frameRepro, {'));
+    expect(html, isNot(contains('mirrorMotionFrame(frameRepro)')));
   });
 
   test('captura unificada Holistic y cara al avatar tras flag', () {

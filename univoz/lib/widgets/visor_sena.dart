@@ -6,6 +6,7 @@ import 'package:senas_core/avatar_vista.dart';
 import 'package:senas_core/avatar_toma.dart';
 import 'package:senas_core/muestras_locales.dart';
 import 'package:senas_core/plantillas.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Las últimas secuencias que pidió el visor, con tope: guardar la primera de
 /// CADA glosa (~21 MB) las mantenía vivas en toda la sesión aunque el
@@ -262,7 +263,10 @@ class ControladorVisor extends ChangeNotifier {
 /// olvidarla.
 class VisorSena extends StatelessWidget {
   final ControladorVisor controlador;
-  final double alto;
+
+  /// Alto del recuadro del avatar. null: el que quede (va dentro de un
+  /// Expanded), para pantallas que no se desplazan.
+  final double? alto;
 
   /// Texto chiquito arriba a la izquierda ("Letra 3 de 4").
   final String? etiqueta;
@@ -279,14 +283,11 @@ class VisorSena extends StatelessWidget {
     return AnimatedBuilder(
       animation: controlador,
       builder: (context, _) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
+        final recuadro = Container(
               height: alto,
               width: double.infinity,
               decoration: BoxDecoration(
-                color: const Color(0xFFEDE4FB),
+                color: ColoresUnivoz.moradoTenue,
                 borderRadius: BorderRadius.circular(22),
               ),
               child: ClipRRect(
@@ -300,7 +301,7 @@ class VisorSena extends StatelessWidget {
                       const Positioned.fill(
                         child: Center(
                           child: CircularProgressIndicator(
-                            color: Color(0xFF6C63FF),
+                            color: ColoresUnivoz.morado,
                           ),
                         ),
                       ),
@@ -318,7 +319,7 @@ class VisorSena extends StatelessWidget {
                           child: Text(
                             etiqueta!,
                             style: const TextStyle(
-                              color: Color(0xFF4F46C9),
+                              color: ColoresUnivoz.moradoOscuro,
                               fontSize: 12,
                               fontWeight: FontWeight.w800,
                             ),
@@ -348,7 +349,7 @@ class VisorSena extends StatelessWidget {
                               ],
                             ),
                             child: const Icon(Icons.replay,
-                                color: Color(0xFF6C63FF), size: 22),
+                                color: ColoresUnivoz.morado, size: 22),
                           ),
                         ),
                       ),
@@ -356,7 +357,11 @@ class VisorSena extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
+            );
+        return Column(
+          mainAxisSize: alto == null ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            if (alto == null) Expanded(child: recuadro) else recuadro,
             const SizedBox(height: 6),
             BarraVelocidadSenas(controlador: controlador),
           ],
@@ -386,12 +391,12 @@ class BarraVelocidadSenas extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.speed, size: 20, color: Color(0xFF5B5470)),
+        const Icon(Icons.speed, size: 20, color: ColoresUnivoz.tintaSuave),
         const SizedBox(width: 6),
         const Text(
           'Velocidad',
           style: TextStyle(
-            color: Color(0xFF1A1A2E),
+            color: ColoresUnivoz.tinta,
             fontSize: 13,
             fontWeight: FontWeight.w700,
           ),
@@ -403,7 +408,7 @@ class BarraVelocidadSenas extends StatelessWidget {
             max: ControladorVisor.velocidadMax,
             divisions: 6, // 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2
             label: _texto(controlador.velocidad),
-            activeColor: const Color(0xFF8B5CF6),
+            activeColor: ColoresUnivoz.morado,
             onChanged: controlador.cambiarVelocidad,
             onChangeEnd: (_) {
               if (controlador.listo) controlador.repetir();
@@ -416,7 +421,7 @@ class BarraVelocidadSenas extends StatelessWidget {
             _texto(controlador.velocidad),
             textAlign: TextAlign.right,
             style: const TextStyle(
-              color: Color(0xFF4F46C9),
+              color: ColoresUnivoz.moradoOscuro,
               fontSize: 13,
               fontWeight: FontWeight.w800,
             ),

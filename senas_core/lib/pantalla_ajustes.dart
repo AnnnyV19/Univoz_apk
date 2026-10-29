@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'componentes_univoz.dart';
 import 'diagnostico_latencia.dart';
 import 'modo_desarrollador.dart';
 import 'dtw.dart' show kMaxDistanceDefault, kMinMarginDefault;
@@ -139,308 +140,374 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
     return Scaffold(
       appBar: AppBar(title: const Text('Ajustes')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          _titulo('Umbrales de reconocimiento'),
-          _explicacion(
-            'Una seña se acepta solo si la distancia está POR DEBAJO del máximo '
-            'y el margen POR ENCIMA del mínimo. Si te reconoce cosas que no hiciste, '
-            'baja la distancia máxima o sube el margen. Si no te reconoce nada, al revés.',
+          TarjetaUnivoz(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const EncabezadoSeccion(
+                  icono: Icons.tune_rounded,
+                  titulo: 'Umbrales de reconocimiento',
+                  descripcion:
+                      'Una seña se acepta solo si la distancia está POR DEBAJO del máximo '
+                      'y el margen POR ENCIMA del mínimo. Si te reconoce cosas que no hiciste, '
+                      'baja la distancia máxima o sube el margen. Si no te reconoce nada, al revés.',
+                ),
+                AjusteDeslizador(
+                  etiqueta: 'Distancia máxima',
+                  valor: _a.maxDistance,
+                  min: 0.10,
+                  max: 1.50,
+                  divisiones: 28,
+                  ayuda: 'más bajo = más estricto',
+                  onChanged: (v) => setState(() => _a.maxDistance = v),
+                ),
+                AjusteDeslizador(
+                  etiqueta: 'Margen mínimo',
+                  valor: _a.minMargin,
+                  min: 0.0,
+                  max: 0.50,
+                  divisiones: 25,
+                  ayuda:
+                      'cuánto tiene que ganarle a la segunda candidata; más alto = más estricto',
+                  onChanged: (v) => setState(() => _a.minMargin = v),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.restart_alt_rounded, size: 16),
+                    label: Text(
+                      'Volver a los valores por defecto (${kMaxDistanceDefault.toStringAsFixed(2)} / ${kMinMarginDefault.toStringAsFixed(2)})',
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                    onPressed: () => setState(() {
+                      _a.maxDistance = kMaxDistanceDefault;
+                      _a.minMargin = kMinMarginDefault;
+                    }),
+                  ),
+                ),
+              ],
+            ),
           ),
-          _slider(
-            etiqueta: 'Distancia máxima',
-            valor: _a.maxDistance,
-            min: 0.10,
-            max: 1.50,
-            divisiones: 28,
-            ayuda: 'más bajo = más estricto',
-            onChanged: (v) => setState(() => _a.maxDistance = v),
+          TarjetaUnivoz(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const EncabezadoSeccion(
+                  icono: Icons.camera_alt_outlined,
+                  titulo: 'Cámara',
+                ),
+                AjusteInterruptor(
+                  titulo: 'Usar cámara frontal',
+                  subtitulo:
+                      'La trasera evita la ambigüedad del espejo, pero necesitas que alguien sostenga el teléfono.',
+                  valor: _a.camaraFrontal,
+                  onChanged: (v) => setState(() => _a.camaraFrontal = v),
+                ),
+              ],
+            ),
           ),
-          _slider(
-            etiqueta: 'Margen mínimo',
-            valor: _a.minMargin,
-            min: 0.0,
-            max: 0.50,
-            divisiones: 25,
-            ayuda:
-                'cuánto tiene que ganarle a la segunda candidata; más alto = más estricto',
-            onChanged: (v) => setState(() => _a.minMargin = v),
+          TarjetaUnivoz(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const EncabezadoSeccion(
+                  icono: Icons.volume_up_outlined,
+                  titulo: 'Voz',
+                ),
+                AjusteInterruptor(
+                  titulo: 'Decir el resultado en voz alta',
+                  subtitulo:
+                      'Apenas se reconoce una seña con confianza, el teléfono dice la palabra. '
+                      'Apágalo para que quede solo en pantalla.',
+                  valor: _a.hablarResultado,
+                  onChanged: (v) => setState(() => _a.hablarResultado = v),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                  label: const Text('Probar voz ("Hola, gracias")'),
+                  onPressed: () async {
+                    final err =
+                        await LectorVoz.instancia.decir('Hola, gracias');
+                    if (!mounted) return;
+                    if (err != null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error de voz: $err')),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
-          TextButton(
-            onPressed: () => setState(() {
-              _a.maxDistance = kMaxDistanceDefault;
-              _a.minMargin = kMinMarginDefault;
-            }),
-            child: Text(
-                'Volver a los valores por defecto (${kMaxDistanceDefault.toStringAsFixed(2)} / ${kMinMarginDefault.toStringAsFixed(2)})'),
+          TarjetaUnivoz(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const EncabezadoSeccion(
+                  icono: Icons.front_hand_outlined,
+                  titulo: 'Diccionario',
+                ),
+                AjusteInterruptor(
+                  titulo: 'Agregar versión espejada de cada plantilla',
+                  subtitulo:
+                      'Cubre a quien seña con la otra mano sin grabar de nuevo '
+                      '(muestras, paquete y diccionario sincronizado). '
+                      'Desactívalo solo si alguna seña usa izquierda/derecha como parte del significado.',
+                  valor: _a.espejoAutomatico,
+                  onChanged: (v) => setState(() => _a.espejoAutomatico = v),
+                ),
+              ],
+            ),
           ),
-          const Divider(height: 32),
+          TarjetaUnivoz(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                EncabezadoSeccion(
+                  icono: Icons.shield_outlined,
+                  titulo: 'Sesiones y perfil corporal',
+                  descripcion: _a.consentimientoSesion
+                      ? 'Cada sesión de cámara se mide y se registra en este teléfono '
+                          '(puntos, nunca video).'
+                      : 'Sin consentimiento: no se registra ni se mide nada.',
+                ),
+                AjusteInterruptor(
+                  titulo: 'Guardar sesiones para mejorar el reconocimiento',
+                  valor: _a.consentimientoSesion,
+                  onChanged: _cambiarConsentimiento,
+                ),
+                if (ModoDesarrollador.activo)
+                  AccionFila(
+                    icono: Icons.ios_share,
+                    titulo: 'Compartir última sesión',
+                    onTap: _compartirUltimaSesion,
+                  ),
+                if (ModoDesarrollador.activo)
+                  AccionFila(
+                    icono: Icons.bug_report_outlined,
+                    titulo: 'Compartir registro de errores',
+                    onTap: _compartirErrores,
+                  ),
+                AccionFila(
+                  icono: Icons.delete_outline,
+                  titulo: 'Borrar mis datos',
+                  detalle: 'Consentimiento, perfil y sesiones guardadas',
+                  peligro: true,
+                  onTap: _borrarMisDatos,
+                ),
+              ],
+            ),
+          ),
           // Calibración del avatar: solo para quien desarrolla (modo
           // desarrollador, ver modo_desarrollador.dart).
-          if (ModoDesarrollador.activo) ...[
-            _titulo('RigBody / avatar 3D'),
-            _explicacion(
-              'Ajusta cómo el espacio 3D normalizado mueve el avatar. Estos '
-              'valores no cambian vectores ni entrenamiento; solo calibran el rig.',
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Invertir profundidad Z'),
-              subtitle:
-                  const Text('Úsalo si el avatar mueve manos hacia atrás.'),
-              value: _a.rigCalibration.invertZ,
-              onChanged: (v) => setState(() =>
-                  _a.rigCalibration = _a.rigCalibration.copyWith(invertZ: v)),
-            ),
-            _slider(
-              etiqueta: 'Escala del avatar',
-              valor: _a.rigCalibration.avatarScale,
-              min: 0.70,
-              max: 1.30,
-              divisiones: 60,
-              ayuda: 'ajusta tamaño visual, no datos IA',
-              onChanged: (v) => setState(() => _a.rigCalibration =
-                  _a.rigCalibration.copyWith(avatarScale: v)),
-            ),
-            _slider(
-              etiqueta: 'Ganancia brazo izquierdo',
-              valor: _a.rigCalibration.leftArmGain,
-              min: 0.50,
-              max: 1.50,
-              divisiones: 50,
-              ayuda: 'respuesta del IK izquierdo',
-              onChanged: (v) => setState(() => _a.rigCalibration =
-                  _a.rigCalibration.copyWith(leftArmGain: v)),
-            ),
-            _slider(
-              etiqueta: 'Ganancia brazo derecho',
-              valor: _a.rigCalibration.rightArmGain,
-              min: 0.50,
-              max: 1.50,
-              divisiones: 50,
-              ayuda: 'respuesta del IK derecho',
-              onChanged: (v) => setState(() => _a.rigCalibration =
-                  _a.rigCalibration.copyWith(rightArmGain: v)),
-            ),
-            _slider(
-              etiqueta: 'Sensibilidad de dedos',
-              valor: _a.rigCalibration.fingerSensitivity,
-              min: 0.50,
-              max: 1.50,
-              divisiones: 50,
-              ayuda: 'amplitud de flexión de falanges',
-              onChanged: (v) => setState(() => _a.rigCalibration =
-                  _a.rigCalibration.copyWith(fingerSensitivity: v)),
-            ),
-            _slider(
-              etiqueta: 'Límite mínimo de codo',
-              valor: _a.rigCalibration.ikMin,
-              min: 0.0,
-              max: 1.50,
-              divisiones: 30,
-              ayuda: 'evita soluciones IK demasiado cerradas',
-              onChanged: (v) => setState(() {
-                final max =
-                    _a.rigCalibration.ikMax < v ? v : _a.rigCalibration.ikMax;
-                _a.rigCalibration =
-                    _a.rigCalibration.copyWith(ikMin: v, ikMax: max);
-              }),
-            ),
-            _slider(
-              etiqueta: 'Límite máximo de codo',
-              valor: _a.rigCalibration.ikMax,
-              min: _a.rigCalibration.ikMin,
-              max: 3.14,
-              divisiones: 62,
-              ayuda: 'evita soluciones IK imposibles',
-              onChanged: (v) => setState(() =>
-                  _a.rigCalibration = _a.rigCalibration.copyWith(ikMax: v)),
-            ),
-            _slider(
-              etiqueta: 'Compensación de muñeca',
-              valor: _a.rigCalibration.wristCompensation,
-              min: -1.0,
-              max: 1.0,
-              divisiones: 40,
-              ayuda: 'corrección angular de palma',
-              onChanged: (v) => setState(() => _a.rigCalibration =
-                  _a.rigCalibration.copyWith(wristCompensation: v)),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Restablecer mano si se pierde'),
-              subtitle: const Text(
-                  'Tras un margen breve, devuelve dedos y muñeca a reposo; '
-                  'evita dejar una mano congelada o deformada.'),
-              value: _a.rigCalibration.resetHandOnLoss,
-              onChanged: (v) => setState(() => _a.rigCalibration =
-                  _a.rigCalibration.copyWith(resetHandOnLoss: v)),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Modo diagnóstico RigBody'),
-              subtitle: const Text(
-                  'Muestra FPS, skew, tracks, contacto y errores. Apagado por defecto; '
-                  'guarda hasta 300 frames sin video.'),
-              value: _a.rigDiagnosticMode,
-              onChanged: (v) => setState(() => _a.rigDiagnosticMode = v),
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.pan_tool_alt_outlined, size: 18),
-                label: const Text('Calibrar pulgares con cámara'),
-                onPressed: _calibrarPulgares,
+          if (ModoDesarrollador.activo)
+            TarjetaUnivoz(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const EncabezadoSeccion(
+                    icono: Icons.accessibility_new_rounded,
+                    titulo: 'RigBody / avatar 3D',
+                    descripcion:
+                        'Ajusta cómo el espacio 3D normalizado mueve el avatar. Estos '
+                        'valores no cambian vectores ni entrenamiento; solo calibran el rig.',
+                  ),
+                  AjusteInterruptor(
+                    titulo: 'Invertir profundidad Z',
+                    subtitulo: 'Úsalo si el avatar mueve manos hacia atrás.',
+                    valor: _a.rigCalibration.invertZ,
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(invertZ: v)),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Escala del avatar',
+                    valor: _a.rigCalibration.avatarScale,
+                    min: 0.70,
+                    max: 1.30,
+                    divisiones: 60,
+                    ayuda: 'ajusta tamaño visual, no datos IA',
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(avatarScale: v)),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Ganancia brazo izquierdo',
+                    valor: _a.rigCalibration.leftArmGain,
+                    min: 0.50,
+                    max: 1.50,
+                    divisiones: 50,
+                    ayuda: 'respuesta del IK izquierdo',
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(leftArmGain: v)),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Ganancia brazo derecho',
+                    valor: _a.rigCalibration.rightArmGain,
+                    min: 0.50,
+                    max: 1.50,
+                    divisiones: 50,
+                    ayuda: 'respuesta del IK derecho',
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(rightArmGain: v)),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Sensibilidad de dedos',
+                    valor: _a.rigCalibration.fingerSensitivity,
+                    min: 0.50,
+                    max: 1.50,
+                    divisiones: 50,
+                    ayuda: 'amplitud de flexión de falanges',
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(fingerSensitivity: v)),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Límite mínimo de codo',
+                    valor: _a.rigCalibration.ikMin,
+                    min: 0.0,
+                    max: 1.50,
+                    divisiones: 30,
+                    ayuda: 'evita soluciones IK demasiado cerradas',
+                    onChanged: (v) => setState(() {
+                      final max = _a.rigCalibration.ikMax < v
+                          ? v
+                          : _a.rigCalibration.ikMax;
+                      _a.rigCalibration =
+                          _a.rigCalibration.copyWith(ikMin: v, ikMax: max);
+                    }),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Límite máximo de codo',
+                    valor: _a.rigCalibration.ikMax,
+                    min: _a.rigCalibration.ikMin,
+                    max: 3.14,
+                    divisiones: 62,
+                    ayuda: 'evita soluciones IK imposibles',
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(ikMax: v)),
+                  ),
+                  AjusteDeslizador(
+                    etiqueta: 'Compensación de muñeca',
+                    valor: _a.rigCalibration.wristCompensation,
+                    min: -1.0,
+                    max: 1.0,
+                    divisiones: 40,
+                    ayuda: 'corrección angular de palma',
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(wristCompensation: v)),
+                  ),
+                  AjusteInterruptor(
+                    titulo: 'Restablecer mano si se pierde',
+                    subtitulo:
+                        'Tras un margen breve, devuelve dedos y muñeca a reposo; '
+                        'evita dejar una mano congelada o deformada.',
+                    valor: _a.rigCalibration.resetHandOnLoss,
+                    onChanged: (v) => setState(() => _a.rigCalibration =
+                        _a.rigCalibration.copyWith(resetHandOnLoss: v)),
+                  ),
+                  AjusteInterruptor(
+                    titulo: 'Modo diagnóstico RigBody',
+                    subtitulo:
+                        'Muestra FPS, skew, tracks, contacto y errores. Apagado por defecto; '
+                        'guarda hasta 300 frames sin video.',
+                    valor: _a.rigDiagnosticMode,
+                    onChanged: (v) => setState(() => _a.rigDiagnosticMode = v),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.pan_tool_alt_outlined, size: 16),
+                        label: const Text('Calibrar pulgares con cámara'),
+                        onPressed: _calibrarPulgares,
+                      ),
+                      TextButton(
+                        onPressed: () => setState(
+                            () => _a.rigCalibration = const RigCalibration()),
+                        child: const Text('Restablecer calibración RigBody'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-            TextButton(
-              onPressed: () =>
-                  setState(() => _a.rigCalibration = const RigCalibration()),
-              child: const Text('Restablecer calibración RigBody'),
-            ),
-            const Divider(height: 32),
-            _titulo('Latencia del avatar (pruebas)'),
-            _explicacion(
-              'Solo en memoria: se pierde al cerrar la app. Con el modo '
-              'desarrollador activo, la app escribe un resumen por segundo en '
-              'logcat con la etiqueta UnivozLat.',
-            ),
-            _selector<SuavizadoAvatar>(
-              etiqueta: 'Suavizado del avatar',
-              ayuda: 'Normal es el de siempre. Apagado: sin suavizado, para ver '
-                  'el retraso crudo.',
-              valores: SuavizadoAvatar.values,
-              notificador: DiagnosticoLatencia.suavizado,
-              texto: (v) => v.etiqueta,
-            ),
-            _selector<DelegadoMediaPipe>(
-              etiqueta: 'Delegado MediaPipe',
-              ayuda: 'GPU es el de siempre. Aplica la próxima vez que se abra '
-                  'la cámara.',
-              valores: DelegadoMediaPipe.values,
-              notificador: DiagnosticoLatencia.delegado,
-              texto: (v) => v.etiqueta,
-            ),
-            _selector<ModeloMediaPipe>(
-              etiqueta: 'Modelo',
-              ayuda: 'Holistic es el del producto. Separado usa Pose lite + '
-                  'Hand (sin cara): para comparar inferencia y FPS. Aplica '
-                  'la próxima vez que se abra la cámara.',
-              valores: ModeloMediaPipe.values,
-              notificador: DiagnosticoLatencia.modelo,
-              texto: (v) => v.etiqueta,
-            ),
-            _selector<FpsCamara>(
-              etiqueta: 'FPS de la cámara',
-              ayuda: 'Máx fijo: el rango fijo más alto (hasta 60) para acortar '
-                  'exposición y cola de la cámara. Auto: lo que decida '
-                  'Android. Aplica al abrir la cámara.',
-              valores: FpsCamara.values,
-              notificador: DiagnosticoLatencia.fps,
-              texto: (v) => v.etiqueta,
-            ),
-            _selector<VistaPreviaCamara>(
-              etiqueta: 'Vista previa de la cámara',
-              ayuda: 'Chica limita la imagen de la cámara a 640×480 (menos '
-                  'carga); Auto deja la que elija CameraX. Aplica al abrir '
-                  'la cámara.',
-              valores: VistaPreviaCamara.values,
-              notificador: DiagnosticoLatencia.vistaPrevia,
-              texto: (v) => v.etiqueta,
-            ),
-            const Divider(height: 32),
-          ],
-          _titulo('Cámara'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Usar cámara frontal'),
-            subtitle: const Text(
-                'La trasera evita la ambigüedad del espejo, pero necesitas que alguien sostenga el teléfono.'),
-            value: _a.camaraFrontal,
-            onChanged: (v) => setState(() => _a.camaraFrontal = v),
-          ),
-          const Divider(height: 32),
-          _titulo('Voz'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Decir el resultado en voz alta'),
-            subtitle: const Text(
-                'Apenas se reconoce una seña con confianza, el teléfono dice la palabra. '
-                'Apágalo para que quede solo en pantalla.'),
-            value: _a.hablarResultado,
-            onChanged: (v) => setState(() => _a.hablarResultado = v),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.volume_up, size: 18),
-              label: const Text('Probar voz ("Hola, gracias")'),
-              onPressed: () async {
-                final err = await LectorVoz.instancia.decir('Hola, gracias');
-                if (!mounted) return;
-                if (err != null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error de voz: $err')),
-                  );
-                }
-              },
-            ),
-          ),
-          const Divider(height: 32),
-          _titulo('Diccionario'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Agregar versión espejada de cada plantilla'),
-            subtitle: const Text(
-                'Cubre a quien seña con la otra mano sin grabar de nuevo '
-                '(muestras, paquete y diccionario sincronizado). '
-                'Desactívalo solo si alguna seña usa izquierda/derecha como parte del significado.'),
-            value: _a.espejoAutomatico,
-            onChanged: (v) => setState(() => _a.espejoAutomatico = v),
-          ),
-          const Divider(height: 32),
-          _titulo('Sesiones y perfil corporal'),
-          _explicacion(_a.consentimientoSesion
-              ? 'Cada sesión de cámara se mide y se registra en este teléfono '
-                  '(puntos, nunca video).'
-              : 'Sin consentimiento: no se registra ni se mide nada.'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title:
-                const Text('Guardar sesiones para mejorar el reconocimiento'),
-            value: _a.consentimientoSesion,
-            onChanged: _cambiarConsentimiento,
-          ),
           if (ModoDesarrollador.activo)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.ios_share),
-              title: const Text('Compartir última sesión'),
-              onTap: _compartirUltimaSesion,
+            TarjetaUnivoz(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const EncabezadoSeccion(
+                    icono: Icons.speed_rounded,
+                    titulo: 'Latencia del avatar (pruebas)',
+                    descripcion:
+                        'Solo en memoria: se pierde al cerrar la app. Con el modo '
+                        'desarrollador activo, la app escribe un resumen por segundo en '
+                        'logcat con la etiqueta UnivozLat.',
+                  ),
+                  _selector<SuavizadoAvatar>(
+                    etiqueta: 'Suavizado del avatar',
+                    ayuda:
+                        'Normal es el de siempre. Apagado: sin suavizado, para ver '
+                        'el retraso crudo.',
+                    valores: SuavizadoAvatar.values,
+                    notificador: DiagnosticoLatencia.suavizado,
+                    texto: (v) => v.etiqueta,
+                  ),
+                  _selector<DelegadoMediaPipe>(
+                    etiqueta: 'Delegado MediaPipe',
+                    ayuda:
+                        'GPU es el de siempre. Aplica la próxima vez que se abra '
+                        'la cámara.',
+                    valores: DelegadoMediaPipe.values,
+                    notificador: DiagnosticoLatencia.delegado,
+                    texto: (v) => v.etiqueta,
+                  ),
+                  _selector<ModeloMediaPipe>(
+                    etiqueta: 'Modelo',
+                    ayuda:
+                        'Holistic es el del producto. Separado usa Pose lite + '
+                        'Hand (sin cara): para comparar inferencia y FPS. Aplica '
+                        'la próxima vez que se abra la cámara.',
+                    valores: ModeloMediaPipe.values,
+                    notificador: DiagnosticoLatencia.modelo,
+                    texto: (v) => v.etiqueta,
+                  ),
+                  _selector<FpsCamara>(
+                    etiqueta: 'FPS de la cámara',
+                    ayuda:
+                        'Máx fijo: el rango fijo más alto (hasta 60) para acortar '
+                        'exposición y cola de la cámara. Auto: lo que decida '
+                        'Android. Aplica al abrir la cámara.',
+                    valores: FpsCamara.values,
+                    notificador: DiagnosticoLatencia.fps,
+                    texto: (v) => v.etiqueta,
+                  ),
+                  _selector<VistaPreviaCamara>(
+                    etiqueta: 'Vista previa de la cámara',
+                    ayuda:
+                        'Chica limita la imagen de la cámara a 640×480 (menos '
+                        'carga); Auto deja la que elija CameraX. Aplica al abrir '
+                        'la cámara.',
+                    valores: VistaPreviaCamara.values,
+                    notificador: DiagnosticoLatencia.vistaPrevia,
+                    texto: (v) => v.etiqueta,
+                  ),
+                ],
+              ),
             ),
-          if (ModoDesarrollador.activo)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.bug_report_outlined),
-              title: const Text('Compartir registro de errores'),
-              onTap: _compartirErrores,
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _guardar,
+              icon: const Icon(Icons.check_rounded, size: 20),
+              label: const Text('Guardar ajustes'),
             ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.delete_outline),
-            title: const Text('Borrar mis datos'),
-            subtitle: const Text('Consentimiento, perfil y sesiones guardadas'),
-            onTap: _borrarMisDatos,
           ),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _guardar,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('Guardar ajustes'),
-            ),
-          ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 20),
         ],
       ),
     );
@@ -453,13 +520,18 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
     required ValueNotifier<T> notificador,
     required String Function(T) texto,
   }) {
+    final colores = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(etiqueta),
-          _explicacion(ayuda),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(ayuda,
+                style: TextStyle(fontSize: 13, color: colores.onSurfaceVariant)),
+          ),
           ValueListenableBuilder<T>(
             valueListenable: notificador,
             builder: (_, actual, __) => SegmentedButton<T>(
@@ -473,59 +545,6 @@ class _PantallaAjustesState extends State<PantallaAjustes> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _titulo(String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(t,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-      );
-
-  Widget _explicacion(String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Text(t,
-            style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      );
-
-  Widget _slider({
-    required String etiqueta,
-    required double valor,
-    required double min,
-    required double max,
-    required int divisiones,
-    required String ayuda,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            // Expanded: la etiqueta puede ser larga y en pantalla angosta
-            // un Text suelto en un Row se sale del cuadro.
-            Expanded(child: Text(etiqueta)),
-            const SizedBox(width: 8),
-            Text(valor.toStringAsFixed(2),
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-        Slider(
-          value: valor.clamp(min, max),
-          min: min,
-          max: max,
-          divisions: divisiones,
-          onChanged: onChanged,
-        ),
-        Text(ayuda,
-            style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        const SizedBox(height: 12),
-      ],
     );
   }
 }

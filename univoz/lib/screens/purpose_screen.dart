@@ -10,6 +10,7 @@ import 'acerca_screen.dart';
 import '../services/blind_narrator.dart';
 import '../services/conversation_profile.dart';
 import '../services/perfil_guardado.dart';
+import 'package:senas_core/tema_univoz.dart';
 
 /// Primera pregunta después de la bienvenida: ¿para qué quieres usar
 /// UNIVOZ? Si el usuario quiere comunicarse con alguien, lo mandamos a
@@ -38,12 +39,11 @@ import '../services/perfil_guardado.dart';
 /// justamente lo que hace esta opción) y "Avatar 3D" (que ahora vive en
 /// "Quiero aprender LSM", ver MainShellScreen). Lo que le quedó a ese
 /// menú (agregar muestras, espejo, ajustes de reconocimiento) se alcanza
-/// ahora desde la cuarta opción de aquí, "Configuración".
+/// ahora desde la tuerca de arriba de esta pantalla ("Configuración").
 enum CommunicationPurpose {
   comunicarse,
   aprenderLsm,
   traducirSenas,
-  configuracion,
 }
 
 class PurposeScreen extends StatefulWidget {
@@ -57,8 +57,8 @@ class _PurposeScreenState extends State<PurposeScreen> {
   CommunicationPurpose? _selected;
   bool _pidiendoPermisoCamara = false;
 
-  static const Color _grayText = Color(0xFF6B6478);
-  static const Color _comenzarColor = Color(0xFF8F84A6);
+  static const Color _grayText = ColoresUnivoz.tintaSuave;
+  static const Color _comenzarColor = ColoresUnivoz.morado;
 
   @override
   void initState() {
@@ -154,11 +154,6 @@ class _PurposeScreenState extends State<PurposeScreen> {
         case CommunicationPurpose.traducirSenas:
           _abrirCamaraTraductora();
           break;
-        case CommunicationPurpose.configuracion:
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const TraducirSenasScreen()),
-          );
-          break;
       }
     });
   }
@@ -185,6 +180,10 @@ class _PurposeScreenState extends State<PurposeScreen> {
     // voz justo a quien lo necesita.
     if (PerfilGuardado.tipo == ProfileType.ciego) {
       BlindNarrator.activateManualBlindMode();
+    } else if (BlindNarrator.talkBackFlow) {
+      // El perfil guardado no es "ciego": la voz para ciegos no aplica
+      // (aunque el teléfono reporte un servicio de accesibilidad).
+      BlindNarrator.disable();
     }
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const OtherPersonProfileScreen()),
@@ -197,7 +196,8 @@ class _PurposeScreenState extends State<PurposeScreen> {
     if (mounted) setState(() => _pidiendoPermisoCamara = false);
     if (!permitido || !mounted) return;
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const PantallaDeTranslacion()),
+      MaterialPageRoute(
+          builder: (_) => const PantallaDeTranslacion(conAvatar: false)),
     );
   }
 
@@ -225,8 +225,20 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   // preguntarlo. Sin esto no habría forma de saber con
                   // qué perfil va a arrancar la conversación.
                   Flexible(child: MenuPerfil(onCambio: () => setState(() {}))),
-                  const ExcludeSemantics(
-                    child: Icon(Icons.favorite, color: Color(0xFFB84FCE)),
+                  // Configuración (agregar muestras, espejo y ajustes de
+                  // reconocimiento) va en la tuerca, fuera de las opciones.
+                  IconButton(
+                    key: const ValueKey('purpose-configuracion'),
+                    icon: Icon(Icons.settings_outlined,
+                        size: 28,
+                        color: Theme.of(context).colorScheme.primary),
+                    tooltip: 'Configuración',
+                    onPressed: () => _avanzarPorToque(() {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const TraducirSenasScreen()),
+                      );
+                    }),
                   ),
                 ],
               ),
@@ -240,73 +252,43 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   height: 1.2,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Elige una opción para personalizar tu experiencia',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: _grayText,
-                ),
-              ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 16),
+              // Sin desplazar: las tres opciones se reparten el alto que
+              // hay, con un dibujo grande y pocas palabras (no todos leen
+              // el español con soltura). La descripción va para TalkBack.
               Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    children: [
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-comunicarse'),
-                        purpose: CommunicationPurpose.comunicarse,
-                        icon: Icons.chat_bubble_outline,
-                        iconBgColor: const Color(0xFFA8C5F0),
-                        cardColor: const Color(0xFFA8C5F0),
-                        title: 'Comunicarme con alguien',
-                        subtitle:
-                            'Elige tu perfil y el de la persona con la que quieres hablar',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-aprender-lsm'),
-                        purpose: CommunicationPurpose.aprenderLsm,
-                        icon: Icons.pan_tool,
-                        iconBgColor: const Color(0xFFE88BC2),
-                        cardColor: const Color(0xFFF0C869),
-                        title: 'Quiero aprender LSM',
-                        subtitle: 'Aprender con avatar 3D a mi propio ritmo',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-traducir-senas'),
-                        purpose: CommunicationPurpose.traducirSenas,
-                        icon: Icons.camera_alt,
-                        iconBgColor: Theme.of(context).colorScheme.primary,
-                        cardColor: const Color(0xFFB8B2E8),
-                        title: 'Traducir una seña',
-                        subtitle:
-                            'Abre la cámara y traduce lengua de señas a texto, sin armar una conversación',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildOptionCard(
-                        key: const ValueKey('purpose-configuracion'),
-                        purpose: CommunicationPurpose.configuracion,
-                        icon: Icons.settings,
-                        iconBgColor: const Color(0xFF3FBF8F),
-                        cardColor: const Color(0xFFCDEEDF),
-                        title: 'Configuración',
-                        subtitle: 'Agregar muestras, espejo y ajustes de '
-                            'reconocimiento',
-                        textColor: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      if (_pidiendoPermisoCamara)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 14),
-                          child: Center(child: CircularProgressIndicator()),
-                        ),
-                    ],
-                  ),
+                child: Column(
+                  children: [
+                    _buildOptionCard(
+                      key: const ValueKey('purpose-comunicarse'),
+                      purpose: CommunicationPurpose.comunicarse,
+                      ilustracion: 'comunicarse',
+                      cardColor: const Color(0xFFA8C5F0),
+                      title: 'Comunicarme',
+                      subtitle: 'Elige tu perfil y el de la persona con la '
+                          'que quieres hablar',
+                    ),
+                    const SizedBox(height: 12),
+                    _buildOptionCard(
+                      key: const ValueKey('purpose-traducir-senas'),
+                      purpose: CommunicationPurpose.traducirSenas,
+                      ilustracion: 'traducir',
+                      cardColor: const Color(0xFFB8B2E8),
+                      title: 'Traducir una seña',
+                      subtitle: 'Abre la cámara y traduce lengua de señas a '
+                          'texto, sin armar una conversación',
+                      ocupado: _pidiendoPermisoCamara,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildOptionCard(
+                      key: const ValueKey('purpose-aprender-lsm'),
+                      purpose: CommunicationPurpose.aprenderLsm,
+                      ilustracion: 'aprender',
+                      cardColor: const Color(0xFFF0C869),
+                      title: 'Aprender LSM',
+                      subtitle: 'Aprender con avatar 3D a mi propio ritmo',
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 12),
@@ -317,7 +299,7 @@ class _PurposeScreenState extends State<PurposeScreen> {
                   onPressed: _selected != null ? _onContinue : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _comenzarColor,
-                    disabledBackgroundColor: _comenzarColor.withOpacity(0.4),
+                    disabledBackgroundColor: _comenzarColor.withValues(alpha: 0.4),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -351,62 +333,70 @@ class _PurposeScreenState extends State<PurposeScreen> {
     );
   }
 
+  /// Opción del menú: dibujo grande y su nombre. Ocupa el alto que le
+  /// toque (Expanded) para que nada se tenga que desplazar.
   Widget _buildOptionCard({
     Key? key,
     required CommunicationPurpose purpose,
-    required IconData icon,
-    required Color iconBgColor,
+    required String ilustracion,
     required Color cardColor,
     required String title,
     required String subtitle,
-    required Color textColor,
+    bool ocupado = false,
   }) {
     final bool isSelected = _selected == purpose;
-    return GestureDetector(
-      key: key,
-      onTap: () => setState(() => _selected = purpose),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: cardColor,
-          borderRadius: BorderRadius.circular(18),
-          border:
-              isSelected ? Border.all(color: Colors.black87, width: 3) : null,
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: iconBgColor,
-              child: Icon(icon, size: 20, color: Colors.white),
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: isSelected,
+        label: '$title. $subtitle',
+        excludeSemantics: true,
+        child: GestureDetector(
+          key: key,
+          onTap: () => setState(() => _selected = purpose),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(18),
+              border: isSelected
+                  ? Border.all(color: Colors.black87, width: 3)
+                  : null,
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
+            child: Row(
+              children: [
+                AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Image.asset(
+                    'assets/ilustraciones/$ilustracion.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
                     title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: textColor,
+                      color: Theme.of(context).colorScheme.onSurface,
                       fontWeight: FontWeight.w800,
-                      fontSize: 16,
+                      fontSize: 19,
+                      height: 1.15,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.85),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
+                ),
+                if (ocupado)
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 3),
                   ),
-                ],
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

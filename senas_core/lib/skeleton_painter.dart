@@ -14,6 +14,7 @@ import 'backend_api.dart';
 import 'camera_bridge.dart';
 import 'controlador_captura.dart';
 import 'dtw.dart';
+import 'frame_derivados.dart';
 import 'modo_desarrollador.dart';
 import 'muestras_locales.dart';
 import 'plantillas.dart';
@@ -328,7 +329,29 @@ const int kPreRollMs = 200;
 const int kColaMs = 100;
 
 class PantallaDeTranslacion extends StatefulWidget {
-  const PantallaDeTranslacion({Key? key}) : super(key: key);
+  const PantallaDeTranslacion(
+      {Key? key,
+      this.conAvatar = true,
+      this.embebida = false,
+      this.hablarResultado,
+      this.onReconocido})
+      : super(key: key);
+
+  /// Se llama con el texto de cada seña reconocida y aceptada.
+  final void Function(String texto)? onReconocido;
+
+  /// Si se dice en voz alta la seña reconocida. null: lo que diga Ajustes.
+  /// Comunicarse lo fija según quién escucha del otro lado.
+  final bool? hablarResultado;
+
+  /// true: va dentro de otra pantalla (la mitad de Comunicarse), sin su
+  /// barra de título; el resto (modo, cámara, resultado) es igual.
+  final bool embebida;
+
+  /// false: solo cámara y resultado, sin el avatar que copia a la persona.
+  /// Así la usa "Traducir una seña" de univoz (el avatar solo hace falta
+  /// para pasar de texto a seña).
+  final bool conAvatar;
 
   @override
   State<PantallaDeTranslacion> createState() => _PantallaDeTranslacionState();
@@ -340,7 +363,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   final _almacen = AlmacenMuestras.instancia;
   final _voz = LectorVoz.instancia;
   final _backend = BackendApi();
-  final _bridge = AvatarBridge();
+  late final AvatarBridge _bridge =
+      widget.conAvatar ? AvatarBridge() : AvatarBridge.apagado();
   late final _alimentador = AlimentadorAvatar(
     enviar: _bridge.mostrarFrame,
   );
@@ -387,7 +411,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   final _guia = ControladorGuiaInicial();
 
   // ── Modo automático ──────────────────────────────────────────────────────
-  bool _modoAuto = false;
+  // Embebida (Comunicarse) siempre en automático: no hay botón de grabar.
+  late bool _modoAuto = widget.embebida;
   EstadoAuto _estadoAuto = EstadoAuto.quieto;
 
   // ── Volteo de cámara ─────────────────────────────────────────────────────
@@ -440,7 +465,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       await _iniciarAvatar(sesionActiva);
       if (!mounted) return;
       // Despues del consentimiento: nunca dos capas a la vez.
-      await _guia.mostrarSiPrimeraVez();
+      if (!widget.embebida) await _guia.mostrarSiPrimeraVez();
       if (!mounted) return;
     }
     // Si ya estábamos en modo auto antes de que la cámara terminara de iniciar,
@@ -518,7 +543,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   /// Avatar en vista espejo (eres tú), con los frames fusionados como en
   /// Espejo, sin modo diagnóstico.
   Future<void> _iniciarAvatar(bool sesionActiva) async {
-    if (!_bridge.disponible) return;
+    if (!_usarAvatar) return _iniciarMovimientoPropio();
     try {
       await _bridge.configurarSesion(sesionActiva);
       await _bridge.configurarRig(_almacen.ajustes.rigCalibration);
@@ -541,14 +566,41 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     }, onError: _errorStream);
   }
 
+  /// Sin avatar (Traducir de univoz, la mitad de Comunicarse): el mismo
+  /// quieto/movimiento que mandaba el visor, medido aquí sobre los frames
+  /// fusionados, para que el modo automático corte las señas igual que
+  /// cuando el avatar estaba en pantalla.
+  final _medidor = MovimientoTipoVisor();
+
+  Future<void> _iniciarMovimientoPropio() async {
+    _medidor.reiniciar();
+    await _subAvatar?.cancel();
+    _subAvatar = _ctrl.camara.frames.listen((f) {
+      if (!_modoAuto) return;
+      final v = normalizarRenderCacheado(f) ?? normalizarCacheado(f);
+      if (v == null) return;
+      final hay = _medidor.alFrame(v, f.timestampMs);
+      if (hay == null) return;
+      _fuente.alMovimientoVisor(hayMovimiento: hay, timestampMs: f.timestampMs);
+    }, onError: _errorStream);
+    await _subSinMano?.cancel();
+    _subSinMano = _ctrl.camara.framesPreview.listen((f) {
+      if (_modoAuto) _fuente.alPreviewSinMano(f);
+    }, onError: _errorStream);
+  }
+
   /// Error del stream nativo. El controlador lo clasifica, lo registra en la
   /// sesion y, si es grave, deja la camara en error (texto amable +
   /// Reintentar en [_contenido]); aqui solo se evita que llegue sin manejar.
   void _errorStream(Object error, StackTrace _) =>
       debugPrint('stream de landmarks: $error');
 
-  bool get _visorListo =>
-      _bridge.disponible && _bridge.estado.value == EstadoAvatar.listo;
+  bool get _usarAvatar => widget.conAvatar && _bridge.disponible;
+
+  /// Fuente de quieto/movimiento lista: el visor cuando hay avatar; sin
+  /// avatar, el medidor propio ([MovimientoTipoVisor]) siempre lo está.
+  bool get _visorListo => !_usarAvatar ||
+      _bridge.estado.value == EstadoAvatar.listo;
 
   /// Con el avatar listo, el inicio y fin de la seña salen de su quieto/
   /// movimiento adaptativo (llega por onMovimiento); sin el (sin visor,
@@ -651,9 +703,10 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
         pred: pred, candidatas: unicas, dtwMs: dtwMs);
     _consultarBackend(seq);
 
-    if (pred.aceptada && _almacen.ajustes.hablarResultado) {
+    if (pred.aceptada && _hablarResultado) {
       _hablar(pred.textoHablado);
     }
+    if (pred.aceptada) widget.onReconocido?.call(pred.textoHablado);
   }
 
   /// Evento de sesion por intento (tools/analizar_sesion.py lo resume).
@@ -759,7 +812,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       'original': original.gloss,
       'aceptada_original': original.aceptada,
     });
-    if (_almacen.ajustes.hablarResultado) _hablar(textoDePlantilla(t));
+    if (_hablarResultado) _hablar(textoDePlantilla(t));
   }
 
   /// Plantilla de lo que se muestra: la elegida o la ganadora aceptada (la
@@ -797,6 +850,9 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     _alimentador.iniciar();
   }
 
+  bool get _hablarResultado =>
+      widget.hablarResultado ?? _almacen.ajustes.hablarResultado;
+
   void _hablar(String texto) {
     _voz.decir(texto).then((error) {
       if (error == null || !mounted) return;
@@ -824,22 +880,25 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   Widget build(BuildContext context) {
     // Los numeros de diagnostico aparecen y se van al cambiar el modo
     // desarrollador sin salir de la pantalla.
+    if (widget.embebida) return _embebida();
     return ValueListenableBuilder<bool>(
       valueListenable: ModoDesarrollador.notificador,
       builder: (context, dev, _) => Scaffold(
-        appBar: AppBar(
-          title: EncabezadoReconocer(
-              resumen: _dicc?.resumen, desarrollador: dev),
-          centerTitle: true,
-          toolbarHeight: dev ? 92 : 64,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.info_outline),
-              tooltip: 'Cómo funciona',
-              onPressed: _guia.abrir,
-            ),
-          ],
-        ),
+        appBar: widget.embebida
+            ? null
+            : AppBar(
+                title: EncabezadoReconocer(
+                    resumen: _dicc?.resumen, desarrollador: dev),
+                centerTitle: true,
+                toolbarHeight: dev ? 92 : 64,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.info_outline),
+                    tooltip: 'Cómo funciona',
+                    onPressed: _guia.abrir,
+                  ),
+                ],
+              ),
         body: CapaGuiaInicial(
           controlador: _guia,
           child: Column(
@@ -847,6 +906,109 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
               _franjaControles(),
               Expanded(child: _contenido(dev)),
               _barraAccion(dev),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Versión dentro de Comunicarse: la cámara llena todo su espacio (es el
+  /// fondo de los controles de esa pantalla) y arriba, chiquito, lo último
+  /// que se reconoció. Sin barras ni botones propios; siempre automática.
+  Widget _embebida() {
+    final pred = _prediccion;
+    // Siempre se ve en qué va: esperando, leyendo la seña, reconociendo, o
+    // el resultado (también cuando no la reconoció).
+    final String texto;
+    if (_ctrl.error != null) {
+      texto = 'Cámara no disponible';
+    } else if (_estadoAuto == EstadoAuto.grabando || _ctrl.grabando) {
+      texto = 'Leyendo la seña...';
+    } else if (_estadoAuto == EstadoAuto.reconociendo) {
+      texto = 'Reconociendo...';
+    } else if (pred != null && pred.aceptada) {
+      texto = pred.textoHablado;
+    } else if (pred != null) {
+      texto = 'No la reconocí. Repite la seña';
+    } else if (_pista.texto != null) {
+      texto = _pista.texto!;
+    } else if (_dicc == null) {
+      texto = 'Cargando señas...';
+    } else {
+      texto = 'Haz tu seña';
+    }
+    return ColoredBox(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _camaraDeFondo(),
+          Positioned(
+            top: 10,
+            left: 10,
+            right: 10,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Semantics(
+                liveRegion: true,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    texto,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: pred != null &&
+                              pred.aceptada &&
+                              texto == pred.textoHablado
+                          ? 22
+                          : 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// La imagen de la cámara recortada para llenar el espacio (como fondo).
+  Widget _camaraDeFondo() {
+    final camara = _ctrl.iniciada;
+    if (camara == null) return const CargaCamara(compacta: true);
+    const alto = 1000.0;
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: alto * camara.relacionAspecto,
+          height: alto,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Espejo con la frontal, como la vista normal de Traducir.
+              Transform.flip(
+                flipX: camara.frontal,
+                child: Texture(textureId: camara.textureId),
+              ),
+              ValueListenableBuilder<LandmarkFrame?>(
+                valueListenable: _ctrl.frame,
+                builder: (_, frame, __) => CustomPaint(
+                  painter: SkeletonPainter(frame: frame, espejo: camara.frontal),
+                  size: Size.infinite,
+                ),
+              ),
             ],
           ),
         ),
@@ -911,7 +1073,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   Widget _contenido(bool dev) {
     if (_ctrl.error != null) return _errorCamara();
     return DisposicionReconocer(
-      avatar: _bridge.disponible ? VistaAvatar(bridge: _bridge) : null,
+      avatar: _usarAvatar ? VistaAvatar(bridge: _bridge) : null,
       camara: (compacta) => _vistaCamara(dev, compacta: compacta),
       panel: _panelResultado(dev),
       aspectoCamara: _ctrl.iniciada?.relacionAspecto ?? 3 / 4,
@@ -958,7 +1120,8 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
         children: [
           // Camara frontal = vista de espejo: se voltea la imagen y, con ella,
           // los puntos del esqueleto (solo presentacion; el reconocimiento
-          // y el avatar siguen sin voltear).
+          // y el avatar siguen sin voltear). Sin esto, al mover el brazo
+          // derecho se ve moverse uno del lado izquierdo.
           Transform.flip(
             flipX: camara.frontal,
             child: Texture(textureId: camara.textureId),
@@ -1028,7 +1191,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
             onHablar: () => _hablar(elegida != null
                 ? textoDePlantilla(elegida)
                 : pred.textoHablado),
-            onVerEnAvatar: _bridge.disponible ? _verEnAvatar : null,
+            onVerEnAvatar: _usarAvatar ? _verEnAvatar : null,
           ),
         // Línea del clasificador remoto: solo con el modo desarrollador.
         if (dev && _prediccionBackend?.label != null)

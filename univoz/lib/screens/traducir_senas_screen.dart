@@ -21,7 +21,7 @@ const String kVersionApp = 'Univoz 0.9.0 beta';
 /// ya no viven acá — el primero se abre directo desde "Traducir una seña"
 /// en el menú principal (ver PurposeScreen._abrirCamaraTraductora) y el
 /// segundo es la pestaña "Aprender" de MainShellScreen — así que esta
-/// pantalla se llega solo como la 4ta opción "Configuración" del menú
+/// pantalla se llega solo desde la tuerca ("Configuración") del menú
 /// principal.
 ///
 /// "Sincronizar" (PantallaSync, de senas_core) no vivía en ningún menú de
