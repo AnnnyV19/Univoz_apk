@@ -147,7 +147,9 @@ class _PantallaEspejoState extends State<PantallaEspejo> {
         }
         return;
       }
-      await _ctrl.iniciar(frontal: _almacen.ajustes.camaraFrontal);
+      await _ctrl.iniciar(
+          frontal: _almacen.ajustes.camaraFrontal,
+          separado: widget.modoProducto);
       if (!_ctrl.lista) return;
       if (!mounted) return;
       final sesionActiva = await activarSesionConConsentimiento(

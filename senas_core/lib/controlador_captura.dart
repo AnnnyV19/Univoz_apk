@@ -275,7 +275,10 @@ class ControladorCaptura extends ChangeNotifier {
   bool get lista => iniciada != null;
   bool get primerFrameRecibido => _primerFrameRecibido;
 
-  Future<void> iniciar({bool frontal = true, bool cruzarManos = false}) async {
+  Future<void> iniciar(
+      {bool frontal = true,
+      bool cruzarManos = false,
+      bool separado = false}) async {
     // Parámetro legado para no romper llamadas existentes. El motor resuelve
     // lado anatómico por cadena hombro-codo-muñeca y nunca cruza frames.
     camara.cruzarManos = false;
@@ -325,7 +328,7 @@ class ControladorCaptura extends ChangeNotifier {
     _anillo.clear();
     _escucharFusion();
     try {
-      final c = await camara.iniciar(frontal: frontal);
+      final c = await camara.iniciar(frontal: frontal, separado: separado);
       if (_apagado || inicio != _inicioActual) {
         await camara.detener();
         return;
@@ -606,7 +609,15 @@ class ControladorCaptura extends ChangeNotifier {
 /// antes, sin el visor, se caía al detector por pixeles del preview, que
 /// casi nunca arrancaba ni cortaba bien.
 class MovimientoTipoVisor {
-  MovimientoTipoVisor({this.intervaloMs = 33});
+  MovimientoTipoVisor({this.intervaloMs = 33, this.usarCuerpo = true});
+
+  /// Si el cuerpo (pose, vector 0-23) cuenta como movimiento. Con los brazos
+  /// fuera de cuadro la pose salta sola (visibilidad de muñecas 0.2-0.7,
+  /// `bone_length_*`/`wrist_teleport` en la sesion del 2026-10-29) y, con
+  /// cualquier mano presente, eso arrancaba capturas falsas. En Traducir se
+  /// apaga: la seña se mide por muñeca (ubicacion) y dedos, que ya salen
+  /// de las manos y no de la pose.
+  final bool usarCuerpo;
 
   /// Igual que kIntervaloEnvio: el visor medía entre frames recibidos a
   /// este ritmo, no entre todos los de la cámara.
@@ -682,7 +693,9 @@ class MovimientoTipoVisor {
     if (ant == null) return false;
     double c(double x) => x < 0 ? 0 : (x > 1 ? 1 : x);
     // Umbrales "intentional" del filtro: cuerpo .08, muñeca .06, dedos .08.
-    final puntaje = math.max(c(math.sqrt(cuerpo) / 0.08), c(math.sqrt(muneca) / 0.06));
+    final puntaje = math.max(
+        usarCuerpo ? c(math.sqrt(cuerpo) / 0.08) : 0.0,
+        c(math.sqrt(muneca) / 0.06));
     final dedos = c(math.sqrt(forma) / 0.08);
     return conMano && (puntaje >= .8 || dedos >= .8);
   }
@@ -798,11 +811,23 @@ class DetectorAutomatico {
   /// Frames minimos grabados para que valga la pena reconocer.
   final int minFramesParaReconocer;
 
+  /// Tiempo que el movimiento debe sostenerse, sin un solo frame quieto, para
+  /// arrancar la captura. Un frame suelto (una mano que parpadea, un salto de
+  /// pose) ya no abre una captura: en la sesion del 2026-10-29, 9 de 22
+  /// capturas salieron de 1 o 2 frames. 0 = arranca al primer frame. Se mide
+  /// por tiempo, no por frames, para no depender de los FPS del telefono.
+  final int msMovimientoParaIniciar;
+
   DetectorAutomatico({
     this.umbralMovimiento = 0.015,
     this.framesQuietosParaCortar = 20,
     this.minFramesParaReconocer = 8,
+    this.msMovimientoParaIniciar = 0,
   });
+
+  /// Instante del primer frame de la racha de movimiento que aun no basta
+  /// para arrancar; null si el ultimo frame estuvo quieto.
+  int? _inicioRachaMs;
 
   EstadoAuto _estado = EstadoAuto.quieto;
   EstadoAuto get estado => _estado;
@@ -923,10 +948,16 @@ class DetectorAutomatico {
       _ultimoMovimientoMs = timestampMs;
     }
     if (_estado == EstadoAuto.quieto) {
-      if (hayMovimiento) {
-        _msQuietos = 0;
-        _cambiarEstado(EstadoAuto.grabando);
-        onInicioDetectado?.call();
+      if (!hayMovimiento) {
+        _inicioRachaMs = null;
+      } else {
+        final inicio = _inicioRachaMs ??= timestampMs;
+        if (timestampMs - inicio >= msMovimientoParaIniciar) {
+          _inicioRachaMs = null;
+          _msQuietos = 0;
+          _cambiarEstado(EstadoAuto.grabando);
+          onInicioDetectado?.call();
+        }
       }
     } else if (_estado == EstadoAuto.grabando) {
       if (!hayMovimiento) {
@@ -974,5 +1005,6 @@ class DetectorAutomatico {
     _derMs = null;
     _ultimoAlimentadoMs = null;
     _msQuietos = 0;
+    _inicioRachaMs = null;
   }
 }

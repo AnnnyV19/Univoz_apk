@@ -12,6 +12,7 @@ import 'avatar_vista.dart';
 import 'avatar_vivo.dart';
 import 'backend_api.dart';
 import 'camera_bridge.dart';
+import 'continuidad_deteccion.dart';
 import 'controlador_captura.dart';
 import 'dtw.dart';
 import 'frame_derivados.dart';
@@ -321,8 +322,11 @@ class SkeletonPainter extends CustomPainter {
 /// automatico. El reconocimiento sigue sobre el vector crudo: las plantillas
 /// se grabaron crudas.
 /// Pre-roll de la grabacion automatica: el detector avisa el inicio cuando
-/// la sena ya arranco (primer frame con movimiento).
-const int kPreRollMs = 200;
+/// la sena ya arranco. 200 ms del primer frame con movimiento + 100 ms que el
+/// detector espera ahora para confirmarlo (msMovimientoParaIniciar); sin esa
+/// suma la captura empezaria ~100 ms mas tarde que antes. Debe ser <=
+/// ControladorCaptura.kAnilloMs.
+const int kPreRollMs = 300;
 
 /// Cola que se conserva despues del ultimo movimiento: el detector necesita
 /// ~0.33 s quieto para declarar el fin y esa quietud no es parte de la sena.
@@ -371,10 +375,16 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   StreamSubscription<LandmarkFrame>? _subAvatar;
   StreamSubscription<LandmarkFrame>? _subSinMano;
   final _detector = DetectorAutomatico(
-    // Menos frames quietos para cortar = reconoce mas rapido despues de
-    // terminar la sena, a costa de ser un poco mas sensible a una micro
-    // pausa en medio de un movimiento largo. 10 frames a ~30fps son ~0.33s.
-    framesQuietosParaCortar: 10,
+    // Quietud para cortar, en frames de referencia a 30 FPS (20 = ~0.63 s).
+    // Con 10 (~0.33 s) y la camara a ~10 FPS bastaban 3 frames sin mano o sin
+    // movimiento (MediaPipe parpadea) para partir una sena en dos: en la
+    // sesion del 2026-10-29 el replay con 10 daba 16 capturas, 4 muy cortas;
+    // con 20, 13 capturas y 12 con prediccion. Con 30 ya fusiona senas.
+    framesQuietosParaCortar: 20,
+    // Un frame suelto con "movimiento" (mano que parpadea, salto de pose) no
+    // abre una captura: hace falta ~100 ms seguidos. El pre-roll (kPreRollMs)
+    // recupera lo que esa espera se come del inicio de la seña.
+    msMovimientoParaIniciar: 100,
   );
 
   /// De donde sale el movimiento del modo automatico: el visor cuando el
@@ -455,6 +465,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     await _ctrl.iniciar(
       frontal: _almacen.ajustes.camaraFrontal,
       cruzarManos: _almacen.ajustes.cruzarManos,
+      separado: !widget.conAvatar,
     );
     if (!mounted) return;
     if (_ctrl.lista) {
@@ -562,6 +573,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     // como quieto para que la seña se corte como antes.
     await _subSinMano?.cancel();
     _subSinMano = _ctrl.camara.framesPreview.listen((f) {
+      _vigilarContinuidad(f);
       if (_modoAuto) _fuente.alPreviewSinMano(f);
     }, onError: _errorStream);
   }
@@ -570,7 +582,7 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
   /// quieto/movimiento que mandaba el visor, medido aquí sobre los frames
   /// fusionados, para que el modo automático corte las señas igual que
   /// cuando el avatar estaba en pantalla.
-  final _medidor = MovimientoTipoVisor();
+  final _medidor = MovimientoTipoVisor(usarCuerpo: false);
 
   Future<void> _iniciarMovimientoPropio() async {
     _medidor.reiniciar();
@@ -585,8 +597,20 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
     }, onError: _errorStream);
     await _subSinMano?.cancel();
     _subSinMano = _ctrl.camara.framesPreview.listen((f) {
+      _vigilarContinuidad(f);
       if (_modoAuto) _fuente.alPreviewSinMano(f);
     }, onError: _errorStream);
+  }
+
+  final _continuidad = ResumenContinuidad();
+
+  /// Una linea cada ~2 s en logcat (UNIVOZ_TRK) con la continuidad de la
+  /// deteccion; solo con el modo desarrollador.
+  void _vigilarContinuidad(LandmarkFrame f) {
+    if (!ModoDesarrollador.activo) return;
+    final linea = _continuidad.alFrame(f);
+    // ignore: avoid_print
+    if (linea != null) print(linea);
   }
 
   /// Error del stream nativo. El controlador lo clasifica, lo registra en la
@@ -716,6 +740,19 @@ class _PantallaDeTranslacionState extends State<PantallaDeTranslacion>
       String? motivo,
       double? dtwMs}) {
     double? finito(double v) => v.isFinite ? v : null;
+    if (ModoDesarrollador.activo) {
+      // Una linea por intento en logcat (tag UNIVOZ_REC) para vigilar las
+      // pruebas en vivo con `adb logcat -s flutter`; print llega en release.
+      final top = candidatas
+          .take(3)
+          .map((e) => '${e.value.gloss}:${e.key.toStringAsFixed(2)}')
+          .join(',');
+      // ignore: avoid_print
+      print('UNIVOZ_REC modo=$modo frames=$frames '
+          '${motivo != null ? 'motivo=$motivo' : 'gloss=${pred?.gloss} '
+              'aceptada=${pred?.aceptada} d=${pred?.distance.toStringAsFixed(2)} '
+              'm=${pred?.margin.toStringAsFixed(2)} top=$top'}');
+    }
     _ctrl.sesion?.evento('reconocimiento', {
       'modo': modo,
       'frames': frames,

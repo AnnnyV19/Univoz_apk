@@ -36,6 +36,68 @@ LandmarkFrame _mano(int t, double x) => LandmarkFrame.fromMap({
 }
 
 void main() {
+
+  group('arranque con movimiento sostenido', () {
+    DetectorAutomatico detector(int ms) =>
+        DetectorAutomatico(msMovimientoParaIniciar: ms);
+
+    test('un solo frame con movimiento no arranca la captura', () {
+      final d = detector(100);
+      var inicios = 0;
+      d.onInicioDetectado = () => inicios++;
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 0);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 100);
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 200);
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 300);
+      expect(inicios, 0);
+      expect(d.estado, EstadoAuto.quieto);
+    });
+
+    test('movimiento que dura el tiempo pedido sí arranca (10 fps)', () {
+      final d = detector(100);
+      var inicios = 0;
+      d.onInicioDetectado = () => inicios++;
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 0);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 100);
+      expect(inicios, 0);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 200);
+      expect(inicios, 1);
+      expect(d.estado, EstadoAuto.grabando);
+    });
+
+    test('un frame quieto en medio reinicia la cuenta', () {
+      final d = detector(100);
+      var inicios = 0;
+      d.onInicioDetectado = () => inicios++;
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 0);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 100);
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 200);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 300);
+      expect(inicios, 0);
+    });
+
+    test('a 30 fps pide el mismo tiempo, no el mismo número de frames', () {
+      final d = detector(100);
+      var inicios = 0;
+      d.onInicioDetectado = () => inicios++;
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 0);
+      for (final t in [33, 67, 100]) {
+        d.alimentarMovimiento(hayMovimiento: true, timestampMs: t);
+      }
+      expect(inicios, 0);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 133);
+      expect(inicios, 1);
+    });
+
+    test('con 0 ms arranca al primer frame (comportamiento anterior)', () {
+      final d = detector(0);
+      var inicios = 0;
+      d.onInicioDetectado = () => inicios++;
+      d.alimentarMovimiento(hayMovimiento: false, timestampMs: 0);
+      d.alimentarMovimiento(hayMovimiento: true, timestampMs: 100);
+      expect(inicios, 1);
+    });
+  });
   test('el corte tras quedarse quieto dura lo mismo a 15, 24 y 30 FPS', () {
     // Nivel por dispositivo (DeviceTier.kt): la camara entrega 15/24/30 FPS.
     for (final fps in [15, 24, 30]) {
@@ -202,6 +264,24 @@ void main() {
       m.alFrame(frame(), 0);
       // .1 en 100 ms equivale a .033 por frame: por debajo de .06.
       expect(m.alFrame(frame(muneca: .1), 100), isFalse);
+    });
+
+
+    test('con usarCuerpo:false, el cuerpo solo no es movimiento aunque haya mano', () {
+      // Brazos fuera de cuadro: los puntos del cuerpo saltan solos y, con una
+      // mano presente (aunque sea fantasma), contaban como seña.
+      final m = MovimientoTipoVisor(usarCuerpo: false);
+      m.alFrame(frame(), 0);
+      final v = frame()..[0] = .5;
+      expect(m.alFrame(v, 40), isFalse);
+      expect(m.alFrame(frame(muneca: .1), 80), isTrue);
+    });
+
+    test('por omisión el cuerpo sigue contando (visor del laboratorio)', () {
+      final m = MovimientoTipoVisor();
+      m.alFrame(frame(), 0);
+      final v = frame()..[0] = .5;
+      expect(m.alFrame(v, 40), isTrue);
     });
 
     test('respeta el ritmo del visor (33 ms)', () {

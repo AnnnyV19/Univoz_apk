@@ -27,6 +27,10 @@ const String kPistaAlejate = 'Aléjate un poco';
 const String kPistaSinHombros = 'No veo tus hombros';
 const String kPistaAcercate = 'Acércate un poco';
 const String kPistaManoFuera = 'Mano fuera de cuadro';
+const String kPistaMunecaOculta = 'Brazos a la altura del pecho, muñecas a la vista';
+
+const int _kMunecaIzq = 15;
+const int _kMunecaDer = 16;
 
 /// Ancho de hombros, medido contra el lado corto de la imagen, por debajo
 /// del cual la persona esta lejos (las manos quedan de pocos pixeles).
@@ -99,6 +103,21 @@ String? pistaEncuadre(LandmarkFrame? f) {
     final v = manoUtilizable(mano);
     if (v.code == 'wrist_out_of_frame' || v.code == 'hand_out_of_frame') {
       return kPistaManoFuera;
+    }
+  }
+  // Muneca dentro de la imagen pero con visibilidad baja y sin mano
+  // detectada de ese lado: brazo tapado o muy bajo. Es la causa nº 1 de manos
+  // perdidas durante la seña (vis_mun <= 0.4). Los brazos que descansan
+  // abajo salen del cuadro y no entran aqui.
+  if (pose.length > _kMunecaDer) {
+    final lados = [(_kMunecaIzq, f.left), (_kMunecaDer, f.right)];
+    for (final (i, mano) in lados) {
+      final m = pose[i];
+      if (mano == null && _finito(m) && m.length >= 4 && !_visible(m)) {
+        if (m[0] >= 0 && m[0] <= 1 && m[1] >= 0 && m[1] <= 1) {
+          return kPistaMunecaOculta;
+        }
+      }
     }
   }
   return null;

@@ -547,7 +547,8 @@ class CameraBridge {
 
   /// Pide permiso de camara antes de llamar esto (por ejemplo con
   /// permission_handler). El lado nativo no lo solicita.
-  Future<CamaraIniciada> iniciar({bool frontal = true}) async {
+  Future<CamaraIniciada> iniciar(
+      {bool frontal = true, bool separado = false}) async {
     if (kIsWeb) throw const UnsupportedFeatureException.camara();
     final session = ++_session;
     final Map<String, Object?>? r;
@@ -561,7 +562,10 @@ class CameraBridge {
           // modo, los valores por defecto del producto.
           'diagnostico': DiagnosticoLatencia.activo,
           'delegado': DiagnosticoLatencia.delegadoEfectivo.wire,
-          'modelo': DiagnosticoLatencia.modeloEfectivo.wire,
+          // Pantallas sin avatar no necesitan cara: Separado da mas fps y mano.
+          'modelo': separado
+              ? ModeloMediaPipe.separado.wire
+              : DiagnosticoLatencia.modeloEfectivo.wire,
           'fps': DiagnosticoLatencia.fpsEfectivo.wire,
           'preview': DiagnosticoLatencia.vistaPreviaEfectiva.wire,
         },

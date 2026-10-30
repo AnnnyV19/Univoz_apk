@@ -239,9 +239,9 @@ class LandmarkEngine(
                     .setBaseOptions(base("hand_landmarker.task", delegate))
                     .setRunningMode(RunningMode.LIVE_STREAM)
                     .setNumHands(2)
-                    .setMinHandDetectionConfidence(0.4f)
+                    .setMinHandDetectionConfidence(0.3f)
                     .setMinTrackingConfidence(0.3f)
-                    .setMinHandPresenceConfidence(0.4f)
+                    .setMinHandPresenceConfidence(0.3f)
                     .setResultListener { result, _ -> onManos(result) }
                     .setErrorListener { e ->
                         manosVuelo.liberar()
@@ -255,9 +255,9 @@ class LandmarkEngine(
                     .setBaseOptions(base("pose_landmarker_lite.task", delegate))
                     .setRunningMode(RunningMode.LIVE_STREAM)
                     .setNumPoses(1)
-                    .setMinPoseDetectionConfidence(0.4f)
+                    .setMinPoseDetectionConfidence(0.3f)
                     .setMinTrackingConfidence(0.3f)
-                    .setMinPosePresenceConfidence(0.4f)
+                    .setMinPosePresenceConfidence(0.3f)
                     .setResultListener { result, _ -> onPose(result) }
                     .setErrorListener { e ->
                         poseVuelo.liberar()
